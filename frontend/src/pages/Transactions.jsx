@@ -2,9 +2,9 @@ import React, { useEffect, useState, useRef } from "react";
 import {
   Table, Button, Space, Tag, Modal, Form, Input, Select,
   InputNumber, DatePicker, message, Typography,
-  Row, Col, Alert,
+  Row, Col, Alert, Upload, Divider, Progress,
 } from "antd";
-import { PlusOutlined, EditOutlined, DeleteOutlined, CloseOutlined, SaveOutlined, SearchOutlined, DownloadOutlined } from "@ant-design/icons";
+import { PlusOutlined, EditOutlined, DeleteOutlined, CloseOutlined, SaveOutlined, SearchOutlined, DownloadOutlined, FileExcelOutlined, UploadOutlined } from "@ant-design/icons";
 import dayjs from "dayjs";
 import { transactionsApi, feeTypesApi, membersApi } from "../api";
 import useHotkey from "../hooks/useHotkey";
@@ -35,6 +35,9 @@ export default function Transactions() {
   const [selectedFeeType, setSelectedFeeType] = useState(null);
   const [selectedRowKeys, setSelectedRowKeys] = useState([]);
   const [form] = Form.useForm();
+  const [importOpen, setImportOpen] = useState(false);
+  const [importLoading, setImportLoading] = useState(false);
+  const [importResult, setImportResult] = useState(null);
 
   const load = async () => {
     setLoading(true);
@@ -152,22 +155,37 @@ export default function Transactions() {
     load();
   };
 
-  const exportCSV = () => {
-    const headers = ["Ngày,Loại,Khoản,Thành viên,Số tiền,Phương thức,Ghi chú"];
-    const rows = data.map(r => [
-      dayjs(r.transaction_date).format("DD/MM/YYYY"),
-      r.type === "income" ? "Thu" : "Chi",
-      r.fee_type?.name || "",
-      r.member?.full_name || "",
-      r.amount,
-      r.payment_method || "",
-      `"${(r.description || "").replace(/"/g, '""')}"`,
-    ].join(","));
-    const blob = new Blob(["﻿" + [headers, ...rows].join("\n")], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a"); a.href = url;
-    a.download = `giao-dich-${filters.month ? `T${filters.month}-` : ""}${filters.year || dayjs().year()}.csv`;
-    a.click(); URL.revokeObjectURL(url);
+  const handleExportExcel = async () => {
+    try {
+      const params = {};
+      if (filters.month) params.month = filters.month;
+      if (filters.year) params.year = filters.year;
+      const res = await transactionsApi.exportExcel(params);
+      const url = URL.createObjectURL(new Blob([res.data]));
+      const a = document.createElement("a"); a.href = url;
+      a.download = `giao-dich-${filters.month ? `T${filters.month}-` : ""}${filters.year || dayjs().year()}.xlsx`;
+      a.click(); URL.revokeObjectURL(url);
+    } catch { message.error("Không thể xuất file Excel"); }
+  };
+
+  const handleDownloadTemplate = async () => {
+    try {
+      const res = await transactionsApi.downloadTemplate();
+      const url = URL.createObjectURL(new Blob([res.data]));
+      const a = document.createElement("a"); a.href = url;
+      a.download = "mau_giao_dich.xlsx"; a.click(); URL.revokeObjectURL(url);
+    } catch { message.error("Không thể tải file mẫu"); }
+  };
+
+  const handleImportFile = async (file) => {
+    setImportLoading(true); setImportResult(null);
+    try {
+      const res = await transactionsApi.importExcel(file);
+      setImportResult(res.data);
+      if (res.data.imported > 0) load();
+    } catch (err) { message.error(err.response?.data?.detail || "Import thất bại"); }
+    finally { setImportLoading(false); }
+    return false;
   };
 
   useHotkey({
@@ -213,7 +231,9 @@ export default function Transactions() {
       <Row justify="space-between" align="middle" style={{ marginBottom: 16 }}>
         <Title level={3} style={{ margin: 0 }}>Giao dịch thu/chi</Title>
         <Space>
-          <Button icon={<DownloadOutlined />} onClick={exportCSV}>Xuất CSV</Button>
+          <Button icon={<DownloadOutlined />} onClick={handleDownloadTemplate}>File mẫu</Button>
+          <Button icon={<FileExcelOutlined />} onClick={handleExportExcel}>Xuất Excel</Button>
+          <Button icon={<UploadOutlined />} style={{ background: "#52c41a", borderColor: "#52c41a", color: "#fff" }} onClick={() => { setImportOpen(true); setImportResult(null); }}>Nhập từ Excel</Button>
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>Ghi nhận giao dịch (N)</Button>
         </Space>
       </Row>
@@ -353,6 +373,30 @@ export default function Transactions() {
             <TextArea rows={2} />
           </Form.Item>
         </Form>
+      </Modal>
+      <Modal title="Nhập giao dịch từ Excel" open={importOpen} onCancel={() => setImportOpen(false)} footer={null} width={600}>
+        <Space direction="vertical" style={{ width: "100%" }}>
+          <Alert message='File Excel cần các cột: fee_type_name, amount, transaction_date (DD/MM/YYYY), member_code (tuỳ chọn), payment_method, description' type="info" showIcon />
+          <Button icon={<DownloadOutlined />} onClick={handleDownloadTemplate}>Tải file mẫu (có sheet danh mục + thành viên)</Button>
+          <Divider />
+          <Upload.Dragger beforeUpload={handleImportFile} showUploadList={false} accept=".xlsx,.xls" disabled={importLoading}>
+            <p className="ant-upload-drag-icon"><UploadOutlined /></p>
+            <p>Kéo thả hoặc click để chọn file Excel</p>
+          </Upload.Dragger>
+          {importLoading && <Progress percent={100} status="active" />}
+          {importResult && (
+            <Alert
+              type={importResult.errors?.length ? "warning" : "success"}
+              message={`Đã nhập ${importResult.imported} giao dịch, bỏ qua ${importResult.skipped}`}
+              description={importResult.errors?.length ? (
+                <ul style={{ paddingLeft: 16, margin: 0 }}>
+                  {importResult.errors.map((e, i) => <li key={i}>{e}</li>)}
+                </ul>
+              ) : null}
+              showIcon
+            />
+          )}
+        </Space>
       </Modal>
     </div>
   );

@@ -2,8 +2,13 @@ import React, { useEffect, useState } from "react";
 import {
   Table, Button, Space, Tag, Modal, Form, Input, Select,
   InputNumber, Switch, message, Typography, Row, Tabs, Statistic, Card, Col,
+  Upload, Alert, Divider, Progress,
 } from "antd";
-import { PlusOutlined, EditOutlined, DeleteOutlined, SaveOutlined, RiseOutlined, FallOutlined } from "@ant-design/icons";
+import {
+  PlusOutlined, EditOutlined, DeleteOutlined, SaveOutlined,
+  RiseOutlined, FallOutlined, FileExcelOutlined, DownloadOutlined,
+  UploadOutlined, CheckCircleOutlined, CloseCircleOutlined, WarningOutlined,
+} from "@ant-design/icons";
 import dayjs from "dayjs";
 import { feeTypesApi } from "../api";
 import useHotkey from "../hooks/useHotkey";
@@ -26,6 +31,9 @@ export default function FeeTypes() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [form] = Form.useForm();
+  const [importOpen, setImportOpen] = useState(false);
+  const [importLoading, setImportLoading] = useState(false);
+  const [importResult, setImportResult] = useState(null);
 
   useHotkey({
     "n": () => !modalOpen && openCreate(),
@@ -98,6 +106,36 @@ export default function FeeTypes() {
     load();
   };
 
+  const handleExportExcel = async () => {
+    try {
+      const res = await feeTypesApi.exportExcel();
+      const url = URL.createObjectURL(new Blob([res.data]));
+      const a = document.createElement("a"); a.href = url;
+      a.download = `danh-muc-khoan-${dayjs().format("YYYY-MM-DD")}.xlsx`;
+      a.click(); URL.revokeObjectURL(url);
+    } catch { message.error("Không thể xuất file Excel"); }
+  };
+
+  const handleDownloadTemplate = async () => {
+    try {
+      const res = await feeTypesApi.downloadTemplate();
+      const url = URL.createObjectURL(new Blob([res.data]));
+      const a = document.createElement("a"); a.href = url;
+      a.download = "mau_danh_muc_khoan.xlsx"; a.click(); URL.revokeObjectURL(url);
+    } catch { message.error("Không thể tải file mẫu"); }
+  };
+
+  const handleImportFile = async (file) => {
+    setImportLoading(true); setImportResult(null);
+    try {
+      const res = await feeTypesApi.importExcel(file);
+      setImportResult(res.data);
+      if (res.data.imported > 0) load();
+    } catch (err) { message.error(err.response?.data?.detail || "Import thất bại"); }
+    finally { setImportLoading(false); }
+    return false;
+  };
+
   const columns = [
     { title: "Tên khoản", dataIndex: "name" },
     {
@@ -129,7 +167,12 @@ export default function FeeTypes() {
     <div>
       <Row justify="space-between" align="middle" style={{ marginBottom: 16 }}>
         <Title level={3} style={{ margin: 0 }}>Danh mục khoản thu/chi</Title>
-        <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>Thêm khoản mới (N)</Button>
+        <Space>
+          <Button icon={<DownloadOutlined />} onClick={handleDownloadTemplate}>File mẫu</Button>
+          <Button icon={<FileExcelOutlined />} onClick={handleExportExcel}>Xuất Excel</Button>
+          <Button icon={<UploadOutlined />} style={{ background: "#52c41a", borderColor: "#52c41a", color: "#fff" }} onClick={() => { setImportOpen(true); setImportResult(null); }}>Nhập từ Excel</Button>
+          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>Thêm khoản mới (N)</Button>
+        </Space>
       </Row>
 
       <Row gutter={16} style={{ marginBottom: 16 }}>
@@ -199,6 +242,30 @@ export default function FeeTypes() {
             <TextArea rows={3} />
           </Form.Item>
         </Form>
+      </Modal>
+      <Modal title="Nhập danh mục khoản từ Excel" open={importOpen} onCancel={() => setImportOpen(false)} footer={null} width={600}>
+        <Space direction="vertical" style={{ width: "100%" }}>
+          <Alert message='File Excel phải có cột: name, type (income/expense), default_amount, is_recurring (TRUE/FALSE), description' type="info" showIcon />
+          <Button icon={<DownloadOutlined />} onClick={handleDownloadTemplate}>Tải file mẫu</Button>
+          <Divider />
+          <Upload.Dragger beforeUpload={handleImportFile} showUploadList={false} accept=".xlsx,.xls" disabled={importLoading}>
+            <p className="ant-upload-drag-icon"><UploadOutlined /></p>
+            <p>Kéo thả hoặc click để chọn file Excel</p>
+          </Upload.Dragger>
+          {importLoading && <Progress percent={100} status="active" />}
+          {importResult && (
+            <Alert
+              type={importResult.errors?.length ? "warning" : "success"}
+              message={`Đã nhập ${importResult.imported} khoản, bỏ qua ${importResult.skipped}`}
+              description={importResult.errors?.length ? (
+                <ul style={{ paddingLeft: 16, margin: 0 }}>
+                  {importResult.errors.map((e, i) => <li key={i}>{e}</li>)}
+                </ul>
+              ) : null}
+              showIcon
+            />
+          )}
+        </Space>
       </Modal>
     </div>
   );
