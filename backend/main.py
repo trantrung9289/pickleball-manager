@@ -69,6 +69,71 @@ def _run_migration():
 
 _run_migration()
 
+
+def _setup_bot_user():
+    """Tự động tạo tài khoản bot nếu BOT_USERNAME + BOT_PASSWORD được set."""
+    import os
+    bot_username = os.environ.get("BOT_USERNAME")
+    bot_password = os.environ.get("BOT_PASSWORD")
+    if not bot_username or not bot_password:
+        return
+
+    from database import SessionLocal
+    db = SessionLocal()
+    try:
+        # Kiểm tra user đã tồn tại chưa
+        existing = db.query(models.User).filter(models.User.username == bot_username).first()
+        if not existing:
+            bot_user = models.User(
+                username=bot_username,
+                hashed_password=hash_password(bot_password),
+                full_name="Telegram Bot",
+                role=models.UserRole.admin,
+                is_superuser=False,
+            )
+            db.add(bot_user)
+            db.flush()
+
+            # Gán vào tất cả CLB hiện có
+            clubs = db.query(models.Club).all()
+            for club in clubs:
+                membership = models.ClubMembership(
+                    user_id=bot_user.id,
+                    club_id=club.id,
+                    role=models.UserRole.admin,
+                    can_view=True, can_create=True, can_edit=True, can_delete=True,
+                )
+                db.add(membership)
+
+            db.commit()
+            print(f"[bot] Đã tạo tài khoản bot '{bot_username}'")
+        else:
+            # Cập nhật password nếu đổi
+            existing.hashed_password = hash_password(bot_password)
+            # Đảm bảo có membership trong tất cả CLB
+            clubs = db.query(models.Club).all()
+            for club in clubs:
+                ms = db.query(models.ClubMembership).filter(
+                    models.ClubMembership.user_id == existing.id,
+                    models.ClubMembership.club_id == club.id,
+                ).first()
+                if not ms:
+                    db.add(models.ClubMembership(
+                        user_id=existing.id, club_id=club.id,
+                        role=models.UserRole.admin,
+                        can_view=True, can_create=True, can_edit=True, can_delete=True,
+                    ))
+            db.commit()
+            print(f"[bot] Tài khoản bot '{bot_username}' đã được cập nhật")
+    except Exception as e:
+        db.rollback()
+        print(f"[bot] Lỗi setup bot user: {e}")
+    finally:
+        db.close()
+
+
+_setup_bot_user()
+
 app = FastAPI(title="Quản lý CLB Thể thao", version="1.0.0")
 
 app.add_middleware(
@@ -661,6 +726,132 @@ def delete_member(
     db.commit()
 
 # ── FEE TYPES ─────────────────────────────────────────────
+@app.get("/api/fee-types/template")
+def download_fee_type_template(perms: ClubPermissions = Depends(get_club_permission)):
+    perms.require_view()
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Danh mục khoản"
+    headers = ["Tên khoản (*)", "Loại (*)", "Số tiền mặc định", "Định kỳ", "Mô tả"]
+    col_widths = [30, 12, 20, 10, 40]
+    notes_row = ["Phí hội viên tháng", "income", "200000", "Có", "Phí đóng hàng tháng"]
+    thin = Side(style="thin", color="CCCCCC")
+    cb = Border(left=thin, right=thin, top=thin, bottom=thin)
+    hf = PatternFill("solid", fgColor="1677FF")
+    nf = PatternFill("solid", fgColor="E6F0FF")
+    for col, (h, w) in enumerate(zip(headers, col_widths), start=1):
+        c = ws.cell(row=1, column=col, value=h)
+        c.font = Font(bold=True, color="FFFFFF", name="Arial", size=11)
+        c.fill = hf; c.border = cb
+        c.alignment = Alignment(horizontal="center", vertical="center")
+        ws.column_dimensions[c.column_letter].width = w
+    for col, val in enumerate(notes_row, start=1):
+        c = ws.cell(row=2, column=col, value=val)
+        c.fill = nf; c.border = cb
+        c.font = Font(color="595959", name="Arial", size=10, italic=True)
+    ws.row_dimensions[1].height = 28
+    # Sheet hướng dẫn
+    ws2 = wb.create_sheet("Hướng dẫn")
+    ws2.column_dimensions["A"].width = 45
+    ws2.column_dimensions["B"].width = 40
+    guide = [
+        ("HƯỚNG DẪN NHẬP DANH MỤC KHOẢN", None),
+        ("", None),
+        ("Cột bắt buộc:", None),
+        ("  - Tên khoản (*)", "Không được để trống"),
+        ("  - Loại (*)", "Nhập: income (thu) hoặc expense (chi)"),
+        ("", None),
+        ("Cột tùy chọn:", None),
+        ("  - Số tiền mặc định", "Số nguyên, không dấu phẩy. VD: 200000"),
+        ("  - Định kỳ", "Nhập: Có hoặc Không (mặc định: Không)"),
+        ("  - Mô tả", "Ghi chú thêm về khoản"),
+    ]
+    for r, (a, b) in enumerate(guide, start=1):
+        ca = ws2.cell(row=r, column=1, value=a)
+        if r == 1: ca.font = Font(bold=True, size=13, color="1677FF")
+        elif a.endswith(":"): ca.font = Font(bold=True, size=11)
+        if b: ws2.cell(row=r, column=2, value=b)
+    buf = io.BytesIO(); wb.save(buf); buf.seek(0)
+    return StreamingResponse(buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=mau_danh_muc_khoan.xlsx"})
+
+
+@app.get("/api/fee-types/export")
+def export_fee_types_excel(db: Session = Depends(get_db), perms: ClubPermissions = Depends(get_club_permission)):
+    perms.require_view()
+    items = db.query(models.FeeType).filter(models.FeeType.club_id == perms.club_id).order_by(models.FeeType.id).all()
+    wb = openpyxl.Workbook(); ws = wb.active; ws.title = "Danh mục khoản"
+    headers = ["Tên khoản", "Loại", "Số tiền mặc định", "Định kỳ", "Mô tả"]
+    col_widths = [30, 12, 20, 10, 40]
+    thin = Side(style="thin", color="CCCCCC")
+    cb = Border(left=thin, right=thin, top=thin, bottom=thin)
+    for col, (h, w) in enumerate(zip(headers, col_widths), start=1):
+        c = ws.cell(row=1, column=col, value=h)
+        c.font = Font(bold=True, color="FFFFFF", name="Arial", size=11)
+        c.fill = PatternFill("solid", fgColor="1677FF"); c.border = cb
+        c.alignment = Alignment(horizontal="center", vertical="center")
+        ws.column_dimensions[c.column_letter].width = w
+    ws.row_dimensions[1].height = 28
+    ef = PatternFill("solid", fgColor="F5F9FF")
+    for ri, item in enumerate(items, start=2):
+        fill = ef if ri % 2 == 0 else None
+        row_data = [item.name, "Thu" if item.type == models.FeeTypeCategory.income else "Chi",
+                    float(item.default_amount or 0), "Có" if item.is_recurring else "Không", item.description or ""]
+        for col, val in enumerate(row_data, start=1):
+            c = ws.cell(row=ri, column=col, value=val)
+            c.font = Font(name="Arial", size=10); c.border = cb
+            c.alignment = Alignment(vertical="center")
+            if fill: c.fill = fill
+    ws.freeze_panes = "A2"
+    buf = io.BytesIO(); wb.save(buf); buf.seek(0)
+    from datetime import date as _d
+    return StreamingResponse(buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename=danh-muc-khoan-{_d.today()}.xlsx"})
+
+
+@app.post("/api/fee-types/import")
+def import_fee_types_excel(file: UploadFile = File(...), db: Session = Depends(get_db),
+                           perms: ClubPermissions = Depends(get_club_permission)):
+    perms.require_create()
+    if not file.filename.endswith((".xlsx", ".xls")):
+        raise HTTPException(400, "Chỉ chấp nhận file .xlsx hoặc .xls")
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(file.file.read()), data_only=True)
+    except Exception:
+        raise HTTPException(400, "File Excel không hợp lệ")
+    ws = wb.active
+    rows = list(ws.iter_rows(min_row=2, values_only=True))
+    def clean(v): return str(v).strip() if v is not None else None
+    imported, skipped, errors = [], [], []
+    for i, row in enumerate(rows, start=2):
+        if not any(row): continue
+        name = clean(row[0]); type_raw = clean(row[1]); amount_raw = row[2]
+        recurring_raw = clean(row[3]); desc = clean(row[4]) if len(row) > 4 else None
+        if not name:
+            errors.append({"row": i, "reason": "Thiếu tên khoản"}); continue
+        type_raw_lower = (type_raw or "").lower()
+        if type_raw_lower in ("income", "thu"): fee_type = models.FeeTypeCategory.income
+        elif type_raw_lower in ("expense", "chi"): fee_type = models.FeeTypeCategory.expense
+        else:
+            errors.append({"row": i, "reason": f"Loại '{type_raw}' không hợp lệ (dùng income/expense hoặc Thu/Chi)"}); continue
+        exists = db.query(models.FeeType).filter(
+            models.FeeType.name == name, models.FeeType.club_id == perms.club_id).first()
+        if exists:
+            skipped.append({"row": i, "name": name, "reason": "Tên khoản đã tồn tại"}); continue
+        try: amount = float(str(amount_raw).replace(",", "").replace(".", "")) if amount_raw else 0
+        except: amount = 0
+        is_recurring = str(recurring_raw or "").strip().lower() in ("có", "co", "yes", "true", "1")
+        db.add(models.FeeType(club_id=perms.club_id, name=name, type=fee_type,
+                               default_amount=amount, is_recurring=is_recurring, description=desc))
+        imported.append({"row": i, "name": name})
+    db.commit()
+    return {"total_rows": len([r for r in rows if any(r)]), "imported": len(imported),
+            "skipped": len(skipped), "errors": len(errors),
+            "imported_list": imported, "skipped_list": skipped, "error_list": errors}
+
+
 @app.get("/api/fee-types", response_model=List[schemas.FeeTypeOut])
 def list_fee_types(
     type: Optional[schemas.FeeTypeCategory] = None,
@@ -721,6 +912,190 @@ def delete_fee_type(
 
 
 # ── TRANSACTIONS ──────────────────────────────────────────
+@app.get("/api/transactions/template")
+def download_transaction_template(db: Session = Depends(get_db), perms: ClubPermissions = Depends(get_club_permission)):
+    perms.require_view()
+    fee_types = db.query(models.FeeType).filter(models.FeeType.club_id == perms.club_id).all()
+    members = db.query(models.Member).filter(models.Member.club_id == perms.club_id).all()
+    wb = openpyxl.Workbook(); ws = wb.active; ws.title = "Giao dịch"
+    headers = ["Tên khoản (*)", "Mã thành viên", "Số tiền (*)", "Ngày giao dịch (*)", "Loại (*)", "Phương thức", "Mô tả"]
+    col_widths = [30, 16, 15, 18, 12, 18, 40]
+    notes_row = ["Phí hội viên tháng", "HN001", "200000",
+                 date.today().strftime("%d/%m/%Y"), "income", "Tiền mặt", "Tháng 1/2025"]
+    thin = Side(style="thin", color="CCCCCC")
+    cb = Border(left=thin, right=thin, top=thin, bottom=thin)
+    for col, (h, w) in enumerate(zip(headers, col_widths), start=1):
+        c = ws.cell(row=1, column=col, value=h)
+        c.font = Font(bold=True, color="FFFFFF", name="Arial", size=11)
+        c.fill = PatternFill("solid", fgColor="1677FF"); c.border = cb
+        c.alignment = Alignment(horizontal="center", vertical="center")
+        ws.column_dimensions[c.column_letter].width = w
+    for col, val in enumerate(notes_row, start=1):
+        c = ws.cell(row=2, column=col, value=val)
+        c.fill = PatternFill("solid", fgColor="E6F0FF"); c.border = cb
+        c.font = Font(color="595959", name="Arial", size=10, italic=True)
+    ws.row_dimensions[1].height = 28
+    # Sheet danh mục khoản để tham khảo
+    ws2 = wb.create_sheet("Danh mục khoản")
+    ws2.cell(row=1, column=1, value="Tên khoản").font = Font(bold=True)
+    ws2.cell(row=1, column=2, value="Loại").font = Font(bold=True)
+    ws2.column_dimensions["A"].width = 35; ws2.column_dimensions["B"].width = 12
+    for r, ft in enumerate(fee_types, start=2):
+        ws2.cell(row=r, column=1, value=ft.name)
+        ws2.cell(row=r, column=2, value="income" if ft.type == models.FeeTypeCategory.income else "expense")
+    # Sheet danh sách thành viên
+    ws3 = wb.create_sheet("Thành viên")
+    ws3.cell(row=1, column=1, value="Mã TV").font = Font(bold=True)
+    ws3.cell(row=1, column=2, value="Họ và tên").font = Font(bold=True)
+    ws3.column_dimensions["A"].width = 15; ws3.column_dimensions["B"].width = 30
+    for r, m in enumerate(members, start=2):
+        ws3.cell(row=r, column=1, value=m.member_code or "")
+        ws3.cell(row=r, column=2, value=m.full_name)
+    # Sheet hướng dẫn
+    ws4 = wb.create_sheet("Hướng dẫn")
+    ws4.column_dimensions["A"].width = 45; ws4.column_dimensions["B"].width = 40
+    guide = [
+        ("HƯỚNG DẪN NHẬP GIAO DỊCH", None),
+        ("", None),
+        ("Cột bắt buộc:", None),
+        ("  - Tên khoản (*)", "Phải khớp đúng tên trong sheet 'Danh mục khoản'"),
+        ("  - Số tiền (*)", "Số dương, không dấu phẩy. VD: 200000"),
+        ("  - Ngày giao dịch (*)", "Định dạng: DD/MM/YYYY hoặc YYYY-MM-DD"),
+        ("  - Loại (*)", "income (thu) hoặc expense (chi)"),
+        ("", None),
+        ("Cột tùy chọn:", None),
+        ("  - Mã thành viên", "Xem danh sách trong sheet 'Thành viên'"),
+        ("  - Phương thức", "Tiền mặt / Chuyển khoản / Thẻ (mặc định: Tiền mặt)"),
+        ("  - Mô tả", "Ghi chú thêm"),
+    ]
+    for r, (a, b) in enumerate(guide, start=1):
+        ca = ws4.cell(row=r, column=1, value=a)
+        if r == 1: ca.font = Font(bold=True, size=13, color="1677FF")
+        elif a.endswith(":"): ca.font = Font(bold=True, size=11)
+        if b: ws4.cell(row=r, column=2, value=b)
+    buf = io.BytesIO(); wb.save(buf); buf.seek(0)
+    return StreamingResponse(buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=mau_giao_dich.xlsx"})
+
+
+@app.get("/api/transactions/export")
+def export_transactions_excel(
+    month: Optional[int] = None, year: Optional[int] = None,
+    db: Session = Depends(get_db), perms: ClubPermissions = Depends(get_club_permission)
+):
+    perms.require_view()
+    q = db.query(models.Transaction).filter(models.Transaction.club_id == perms.club_id)
+    if month: q = q.filter(extract("month", models.Transaction.transaction_date) == month)
+    if year:  q = q.filter(extract("year",  models.Transaction.transaction_date) == year)
+    txs = q.order_by(models.Transaction.transaction_date.desc()).all()
+    wb = openpyxl.Workbook(); ws = wb.active; ws.title = "Giao dịch"
+    headers = ["Ngày", "Tên khoản", "Loại", "Thành viên", "Số tiền", "Phương thức", "Mô tả"]
+    col_widths = [14, 30, 10, 25, 15, 18, 40]
+    thin = Side(style="thin", color="CCCCCC")
+    cb = Border(left=thin, right=thin, top=thin, bottom=thin)
+    for col, (h, w) in enumerate(zip(headers, col_widths), start=1):
+        c = ws.cell(row=1, column=col, value=h)
+        c.font = Font(bold=True, color="FFFFFF", name="Arial", size=11)
+        c.fill = PatternFill("solid", fgColor="1677FF"); c.border = cb
+        c.alignment = Alignment(horizontal="center", vertical="center")
+        ws.column_dimensions[c.column_letter].width = w
+    ws.row_dimensions[1].height = 28
+    income_fill  = PatternFill("solid", fgColor="F6FFED")
+    expense_fill = PatternFill("solid", fgColor="FFF1F0")
+    for ri, tx in enumerate(txs, start=2):
+        is_income = tx.type == models.FeeTypeCategory.income
+        fill = income_fill if is_income else expense_fill
+        member_name = tx.member.full_name if tx.member else ""
+        row_data = [
+            tx.transaction_date.strftime("%d/%m/%Y") if tx.transaction_date else "",
+            tx.fee_type.name if tx.fee_type else "",
+            "Thu" if is_income else "Chi",
+            member_name,
+            float(tx.amount or 0),
+            tx.payment_method or "Tiền mặt",
+            tx.description or "",
+        ]
+        for col, val in enumerate(row_data, start=1):
+            c = ws.cell(row=ri, column=col, value=val)
+            c.font = Font(name="Arial", size=10); c.border = cb
+            c.alignment = Alignment(vertical="center"); c.fill = fill
+            if col == 5:  # Số tiền — format số
+                c.number_format = '#,##0'
+    ws.freeze_panes = "A2"
+    buf = io.BytesIO(); wb.save(buf); buf.seek(0)
+    from datetime import date as _d
+    suffix = f"{year}-{month:02d}" if year and month else str(_d.today())
+    return StreamingResponse(buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename=giao-dich-{suffix}.xlsx"})
+
+
+@app.post("/api/transactions/import")
+def import_transactions_excel(file: UploadFile = File(...), db: Session = Depends(get_db),
+                               perms: ClubPermissions = Depends(get_club_permission)):
+    perms.require_create()
+    if not file.filename.endswith((".xlsx", ".xls")):
+        raise HTTPException(400, "Chỉ chấp nhận file .xlsx hoặc .xls")
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(file.file.read()), data_only=True)
+    except Exception:
+        raise HTTPException(400, "File Excel không hợp lệ")
+    ws = wb.active
+    rows = list(ws.iter_rows(min_row=2, values_only=True))
+    def clean(v): return str(v).strip() if v is not None else None
+    def parse_date(val):
+        if not val: return None
+        if isinstance(val, (date, datetime)):
+            return val.date() if isinstance(val, datetime) else val
+        s = str(val).strip()
+        for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y"):
+            try: return datetime.strptime(s, fmt).date()
+            except: pass
+        return None
+    imported, skipped, errors = [], [], []
+    for i, row in enumerate(rows, start=2):
+        if not any(row): continue
+        fee_name = clean(row[0]); member_code = clean(row[1])
+        amount_raw = row[2]; tx_date_raw = row[3]
+        type_raw = clean(row[4]); method = clean(row[5]) or "Tiền mặt"
+        desc = clean(row[6]) if len(row) > 6 else None
+        if not fee_name:
+            errors.append({"row": i, "reason": "Thiếu tên khoản"}); continue
+        if not amount_raw:
+            errors.append({"row": i, "reason": "Thiếu số tiền"}); continue
+        tx_date = parse_date(tx_date_raw)
+        if not tx_date:
+            errors.append({"row": i, "reason": "Ngày giao dịch không hợp lệ"}); continue
+        type_lower = (type_raw or "").lower()
+        if type_lower in ("income", "thu"): tx_type = models.FeeTypeCategory.income
+        elif type_lower in ("expense", "chi"): tx_type = models.FeeTypeCategory.expense
+        else:
+            errors.append({"row": i, "reason": f"Loại '{type_raw}' không hợp lệ"}); continue
+        fee_type = db.query(models.FeeType).filter(
+            models.FeeType.name == fee_name, models.FeeType.club_id == perms.club_id).first()
+        if not fee_type:
+            errors.append({"row": i, "reason": f"Không tìm thấy khoản '{fee_name}'"}); continue
+        member_id = None
+        if member_code:
+            m = db.query(models.Member).filter(
+                models.Member.member_code == member_code,
+                models.Member.club_id == perms.club_id).first()
+            if not m:
+                errors.append({"row": i, "reason": f"Không tìm thấy mã TV '{member_code}'"}); continue
+            member_id = m.id
+        try: amount = float(str(amount_raw).replace(",", ""))
+        except: errors.append({"row": i, "reason": "Số tiền không hợp lệ"}); continue
+        db.add(models.Transaction(club_id=perms.club_id, fee_type_id=fee_type.id,
+            member_id=member_id, type=tx_type, amount=amount,
+            transaction_date=tx_date, description=desc, payment_method=method))
+        imported.append({"row": i, "name": f"{fee_name} - {amount:,.0f}đ"})
+    db.commit()
+    return {"total_rows": len([r for r in rows if any(r)]), "imported": len(imported),
+            "skipped": len(skipped), "errors": len(errors),
+            "imported_list": imported, "skipped_list": skipped, "error_list": errors}
+
+
 @app.get("/api/transactions", response_model=List[schemas.TransactionOut])
 def list_transactions(
     month: Optional[int] = None,
