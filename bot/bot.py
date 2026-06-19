@@ -1,11 +1,12 @@
 """
-Telegram Bot cho CLB Pickleball — hỗ trợ đa CLB.
-Mỗi user chọn CLB muốn làm việc, bot dùng club_id tương ứng.
+Telegram Bot cho CLB Pickleball — đa CLB, bảo mật bằng đăng nhập hệ thống.
+Mỗi Telegram user phải đăng nhập bằng tài khoản CLB của mình.
 """
 import asyncio
 import json
 import logging
 import os
+import time
 from datetime import datetime
 
 import httpx
@@ -13,7 +14,7 @@ from groq import Groq
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
-    CallbackQueryHandler, filters, ContextTypes,
+    CallbackQueryHandler, filters, ContextTypes, ConversationHandler,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -23,43 +24,62 @@ logger = logging.getLogger(__name__)
 TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 GROQ_API_KEY = os.environ["GROQ_API_KEY"]
 BACKEND_URL = os.environ.get("BACKEND_URL", "http://localhost:8000")
-BOT_USERNAME = os.environ["BOT_USERNAME"]
-BOT_PASSWORD = os.environ["BOT_PASSWORD"]
 
 groq_client = Groq(api_key=GROQ_API_KEY)
 
-# ── JWT tự động refresh ───────────────────────────────────────────────────────
-_jwt_token: str | None = None
-_jwt_expires_at: float = 0
+# ── ConversationHandler states ────────────────────────────────────────────────
+WAIT_USERNAME, WAIT_PASSWORD = range(2)
+
+# ── Trạng thái per-user ───────────────────────────────────────────────────────
+# user_id -> {"token": str, "expires_at": float, "username": str, "full_name": str}
+_sessions: dict[int, dict] = {}
+# user_id -> club_id đang chọn
+_user_club: dict[int, int] = {}
+# user_id -> tên CLB
+_user_club_name: dict[int, str] = {}
+# user_id -> conversation history
+_history: dict[int, list] = {}
+# user_id -> username đang nhập (tạm thời trong flow đăng nhập)
+_pending_username: dict[int, str] = {}
+
+MAX_HISTORY = 20
+SESSION_TTL = 7 * 24 * 3600  # session tự hết sau 7 ngày
 
 
-async def get_jwt_token() -> str:
-    import time
-    global _jwt_token, _jwt_expires_at
-    if _jwt_token and time.time() < _jwt_expires_at - 3600:
-        return _jwt_token
+# ── Auth helpers ──────────────────────────────────────────────────────────────
+def get_session(user_id: int) -> dict | None:
+    s = _sessions.get(user_id)
+    if s and time.time() < s["expires_at"]:
+        return s
+    _sessions.pop(user_id, None)
+    return None
+
+
+async def login(username: str, password: str) -> dict:
+    """Đăng nhập vào backend, trả về session dict hoặc raise."""
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.post(
             f"{BACKEND_URL}/api/auth/login",
-            json={"username": BOT_USERNAME, "password": BOT_PASSWORD},
+            json={"username": username, "password": password},
         )
         if resp.status_code != 200:
-            raise RuntimeError(f"Bot login thất bại: {resp.text}")
+            raise ValueError("Sai tên đăng nhập hoặc mật khẩu.")
         data = resp.json()
-        _jwt_token = data["access_token"]
-        _jwt_expires_at = time.time() + 6 * 24 * 3600
-        logger.info("Bot đăng nhập thành công")
-        return _jwt_token
+        return {
+            "token": data["access_token"],
+            "expires_at": time.time() + SESSION_TTL,
+            "username": data["user"]["username"],
+            "full_name": data["user"].get("full_name") or data["user"]["username"],
+            "is_superuser": data["user"].get("is_superuser", False),
+        }
 
 
-async def call_backend(method: str, path: str, club_id: int | None = None, **kwargs) -> dict:
-    token = await get_jwt_token()
+async def call_backend(method: str, path: str, token: str, club_id: int | None = None, **kwargs) -> dict:
     headers = {"Authorization": f"Bearer {token}"}
     if club_id:
         headers["X-Club-ID"] = str(club_id)
-    url = f"{BACKEND_URL}{path}"
     async with httpx.AsyncClient(timeout=15) as client:
-        resp = await getattr(client, method)(url, headers=headers, **kwargs)
+        resp = await getattr(client, method)(f"{BACKEND_URL}{path}", headers=headers, **kwargs)
         if resp.status_code >= 400:
             try:
                 detail = resp.json().get("detail", resp.text)
@@ -71,53 +91,180 @@ async def call_backend(method: str, path: str, club_id: int | None = None, **kwa
         return resp.json()
 
 
-# ── Trạng thái per-user ───────────────────────────────────────────────────────
-# user_id -> club_id đang chọn
-_user_club: dict[int, int] = {}
-# user_id -> tên CLB đang chọn
-_user_club_name: dict[int, str] = {}
-# user_id -> conversation history
-_history: dict[int, list] = {}
-MAX_HISTORY = 20
-
-
-async def get_clubs() -> list[dict]:
-    """Lấy danh sách tất cả CLB mà bot có quyền truy cập."""
-    memberships = await call_backend("get", "/api/my-memberships")
-    return memberships  # [{club_id, club_name, ...}]
-
-
-async def ensure_club_selected(update: Update, user_id: int) -> int | None:
-    """
-    Kiểm tra user đã chọn CLB chưa.
-    Nếu chưa: hiển thị menu chọn và trả về None.
-    Nếu rồi: trả về club_id.
-    """
-    if user_id in _user_club:
-        return _user_club[user_id]
-
-    memberships = await call_backend("get", "/api/my-memberships")
+# ── Club selection ────────────────────────────────────────────────────────────
+async def show_club_menu(update: Update, token: str, user_id: int, edit: bool = False):
+    memberships = await call_backend("get", "/api/my-memberships", token=token)
     if not memberships:
-        await update.message.reply_text("❌ Không tìm thấy CLB nào trong hệ thống.")
-        return None
+        text = "❌ Tài khoản chưa được thêm vào CLB nào. Liên hệ quản trị viên."
+        if edit:
+            await update.callback_query.edit_message_text(text)
+        else:
+            await update.message.reply_text(text)
+        return False
 
-    if len(memberships) == 1:
-        # Chỉ có 1 CLB → tự động chọn
-        club = memberships[0]
-        _user_club[user_id] = club["club_id"]
-        _user_club_name[user_id] = club["club"]["name"] if club.get("club") else f"CLB #{club['club_id']}"
-        return club["club_id"]
+    if len(memberships) == 1 and not edit:
+        m = memberships[0]
+        _user_club[user_id] = m["club_id"]
+        _user_club_name[user_id] = m["club"]["name"] if m.get("club") else f"CLB #{m['club_id']}"
+        return True
 
-    # Nhiều CLB → hiển thị nút chọn
+    current_id = _user_club.get(user_id)
     keyboard = [
-        [InlineKeyboardButton(f"🏸 {m['club']['name']}", callback_data=f"select_club:{m['club_id']}:{m['club']['name']}")]
+        [InlineKeyboardButton(
+            f"{'✅ ' if m['club_id'] == current_id else '🏸 '}{m['club']['name']}",
+            callback_data=f"sel_club:{m['club_id']}:{m['club']['name']}"
+        )]
         for m in memberships if m.get("club")
     ]
+    text = f"Đang làm việc: *{_user_club_name.get(user_id, 'Chưa chọn')}*\nChọn CLB:" if edit else "Chọn CLB muốn làm việc:"
+    if edit:
+        await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    else:
+        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    return False  # chờ user bấm
+
+
+# ── ConversationHandler: đăng nhập ───────────────────────────────────────────
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    session = get_session(user_id)
+    if session:
+        # Đã đăng nhập → vào thẳng
+        _user_club.pop(user_id, None)
+        _user_club_name.pop(user_id, None)
+        _history.pop(user_id, None)
+        ready = await show_club_menu(update, session["token"], user_id)
+        if ready:
+            await _send_welcome(update, session, _user_club_name.get(user_id, ""))
+        return ConversationHandler.END
+
     await update.message.reply_text(
-        "Bạn có quyền quản lý nhiều CLB. Chọn CLB muốn làm việc:",
-        reply_markup=InlineKeyboardMarkup(keyboard),
+        "👋 Xin chào! Đây là bot quản lý CLB Pickleball.\n\n"
+        "🔐 Vui lòng đăng nhập để tiếp tục.\n\n"
+        "Nhập *tên đăng nhập* của bạn:",
+        parse_mode="Markdown",
     )
-    return None
+    return WAIT_USERNAME
+
+
+async def receive_username(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    _pending_username[user_id] = update.message.text.strip()
+    await update.message.reply_text("Nhập *mật khẩu*:", parse_mode="Markdown")
+    return WAIT_PASSWORD
+
+
+async def receive_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    username = _pending_username.pop(user_id, "")
+    password = update.message.text.strip()
+
+    # Xóa tin nhắn mật khẩu để bảo mật
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+
+    try:
+        session = await login(username, password)
+        _sessions[user_id] = session
+        _user_club.pop(user_id, None)
+        _user_club_name.pop(user_id, None)
+        _history.pop(user_id, None)
+
+        # Kiểm tra superuser — bot không dành cho superuser
+        if session.get("is_superuser"):
+            await update.message.reply_text(
+                "⚠️ Tài khoản quản trị hệ thống không sử dụng bot này.\n"
+                "Vui lòng dùng tài khoản thành viên CLB."
+            )
+            _sessions.pop(user_id, None)
+            return ConversationHandler.END
+
+        ready = await show_club_menu(update, session["token"], user_id)
+        if ready:
+            await _send_welcome(update, session, _user_club_name.get(user_id, ""))
+
+    except ValueError as e:
+        await update.message.reply_text(
+            f"❌ {e}\n\nNhập lại *tên đăng nhập*:",
+            parse_mode="Markdown",
+        )
+        return WAIT_USERNAME
+
+    return ConversationHandler.END
+
+
+async def _send_welcome(update: Update, session: dict, club_name: str):
+    name = session.get("full_name") or session["username"]
+    await update.message.reply_text(
+        f"✅ Đăng nhập thành công!\n"
+        f"👤 Xin chào *{name}*\n"
+        f"🏸 CLB: *{club_name}*\n\n"
+        "Bạn có thể hỏi tôi:\n"
+        "• Xem danh sách thành viên\n"
+        "• Thêm thành viên mới\n"
+        "• Ghi nhận thu/chi\n"
+        "• Báo cáo thu chi theo tháng\n"
+        "• Kiểm tra ai chưa đóng phí\n\n"
+        "Gõ /club đổi CLB | /logout đăng xuất | /reset xóa lịch sử",
+        parse_mode="Markdown",
+    )
+
+
+async def cmd_logout(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    _sessions.pop(user_id, None)
+    _user_club.pop(user_id, None)
+    _user_club_name.pop(user_id, None)
+    _history.pop(user_id, None)
+    await update.message.reply_text("👋 Đã đăng xuất. Gõ /start để đăng nhập lại.")
+
+
+async def cmd_club(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    session = get_session(user_id)
+    if not session:
+        await update.message.reply_text("🔐 Bạn chưa đăng nhập. Gõ /start để đăng nhập.")
+        return
+    await show_club_menu(update, session["token"], user_id, edit=False)
+
+
+async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    session = get_session(user_id)
+    if not session:
+        await update.message.reply_text("🔐 Bạn chưa đăng nhập. Gõ /start để đăng nhập.")
+        return
+    _history.pop(user_id, None)
+    await update.message.reply_text(f"🔄 Đã xóa lịch sử. CLB: {_user_club_name.get(user_id, '—')}")
+
+
+async def handle_club_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+
+    session = get_session(user_id)
+    if not session:
+        await query.edit_message_text("🔐 Phiên đã hết hạn. Gõ /start để đăng nhập lại.")
+        return
+
+    parts = query.data.split(":", 2)
+    club_id = int(parts[1])
+    club_name = parts[2]
+
+    _user_club[user_id] = club_id
+    _user_club_name[user_id] = club_name
+    _history.pop(user_id, None)
+
+    name = session.get("full_name") or session["username"]
+    await query.edit_message_text(
+        f"✅ CLB: *{club_name}*\n👤 {name}\n\n"
+        "Bạn có thể hỏi tôi bất cứ điều gì về CLB này.\n"
+        "Gõ /club đổi CLB | /logout đăng xuất",
+        parse_mode="Markdown",
+    )
 
 
 # ── Tool definitions ──────────────────────────────────────────────────────────
@@ -134,7 +281,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "list_members",
-            "description": "Xem danh sách thành viên. Có thể lọc theo trạng thái hoặc tìm kiếm.",
+            "description": "Xem danh sách thành viên.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -155,7 +302,7 @@ TOOLS = [
                     "full_name": {"type": "string"},
                     "phone": {"type": "string"},
                     "email": {"type": "string"},
-                    "rank": {"type": "string", "description": "beginner/intermediate/advanced/pro"},
+                    "rank": {"type": "string"},
                     "join_date": {"type": "string", "description": "YYYY-MM-DD"},
                 },
                 "required": ["full_name"],
@@ -223,7 +370,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "list_transactions",
-            "description": "Xem danh sách giao dịch, có thể lọc theo tháng/năm/loại.",
+            "description": "Xem danh sách giao dịch.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -237,7 +384,6 @@ TOOLS = [
 ]
 
 
-# ── Tool executor ─────────────────────────────────────────────────────────────
 def fmt_money(amount) -> str:
     try:
         return f"{int(float(amount)):,}đ".replace(",", ".")
@@ -245,11 +391,10 @@ def fmt_money(amount) -> str:
         return str(amount)
 
 
-async def execute_tool(name: str, inputs: dict, club_id: int) -> str:
-    """Thực thi tool với club_id của user đang dùng."""
+async def execute_tool(name: str, inputs: dict, token: str, club_id: int) -> str:
     try:
         if name == "get_overview":
-            data = await call_backend("get", "/api/reports/overview", club_id=club_id)
+            data = await call_backend("get", "/api/reports/overview", token=token, club_id=club_id)
             return (
                 f"📊 Tổng quan CLB:\n"
                 f"• Thành viên: {data['total_members']} (hoạt động: {data['active_members']})\n"
@@ -260,7 +405,7 @@ async def execute_tool(name: str, inputs: dict, club_id: int) -> str:
 
         elif name == "list_members":
             params = {k: v for k, v in inputs.items() if v}
-            members = await call_backend("get", "/api/members", club_id=club_id, params=params)
+            members = await call_backend("get", "/api/members", token=token, club_id=club_id, params=params)
             if not members:
                 return "Không có thành viên nào."
             lines = [f"👥 Danh sách thành viên ({len(members)} người):"]
@@ -281,7 +426,7 @@ async def execute_tool(name: str, inputs: dict, club_id: int) -> str:
             for f in ["phone", "email", "rank"]:
                 if inputs.get(f):
                     payload[f] = inputs[f]
-            member = await call_backend("post", "/api/members", club_id=club_id, json=payload)
+            member = await call_backend("post", "/api/members", token=token, club_id=club_id, json=payload)
             return (
                 f"✅ Đã thêm thành viên:\n"
                 f"• Mã: {member['member_code']}\n"
@@ -291,7 +436,7 @@ async def execute_tool(name: str, inputs: dict, club_id: int) -> str:
             )
 
         elif name == "list_fee_types":
-            fee_types = await call_backend("get", "/api/fee-types", club_id=club_id)
+            fee_types = await call_backend("get", "/api/fee-types", token=token, club_id=club_id)
             if not fee_types:
                 return "Chưa có danh mục khoản nào."
             income = [f for f in fee_types if f["type"] == "income"]
@@ -310,7 +455,7 @@ async def execute_tool(name: str, inputs: dict, club_id: int) -> str:
             return "\n".join(lines)
 
         elif name == "record_transaction":
-            fee_types = await call_backend("get", "/api/fee-types", club_id=club_id)
+            fee_types = await call_backend("get", "/api/fee-types", token=token, club_id=club_id)
             fee_type = next(
                 (f for f in fee_types if inputs["fee_type_name"].lower() in f["name"].lower()), None
             )
@@ -327,12 +472,12 @@ async def execute_tool(name: str, inputs: dict, club_id: int) -> str:
                 "description": inputs.get("description", ""),
             }
             if inputs.get("member_name"):
-                members = await call_backend("get", "/api/members", club_id=club_id,
+                members = await call_backend("get", "/api/members", token=token, club_id=club_id,
                                              params={"search": inputs["member_name"]})
                 if members:
                     payload["member_id"] = members[0]["id"]
 
-            tx = await call_backend("post", "/api/transactions", club_id=club_id, json=payload)
+            tx = await call_backend("post", "/api/transactions", token=token, club_id=club_id, json=payload)
             type_label = "THU" if tx["type"] == "income" else "CHI"
             return (
                 f"✅ Đã ghi nhận giao dịch:\n"
@@ -343,7 +488,7 @@ async def execute_tool(name: str, inputs: dict, club_id: int) -> str:
             )
 
         elif name == "get_monthly_report":
-            data = await call_backend("get", "/api/reports/monthly-detail", club_id=club_id,
+            data = await call_backend("get", "/api/reports/monthly-detail", token=token, club_id=club_id,
                                       params={"month": inputs["month"], "year": inputs["year"]})
             lines = [
                 f"📅 Báo cáo tháng {inputs['month']}/{inputs['year']}:",
@@ -363,7 +508,7 @@ async def execute_tool(name: str, inputs: dict, club_id: int) -> str:
             return "\n".join(lines)
 
         elif name == "get_fee_status":
-            data = await call_backend("get", "/api/reports/fee-status", club_id=club_id,
+            data = await call_backend("get", "/api/reports/fee-status", token=token, club_id=club_id,
                                       params={"month": inputs["month"], "year": inputs["year"]})
             paid = [m for m in data if m.get("paid")]
             unpaid = [m for m in data if not m.get("paid")]
@@ -382,7 +527,7 @@ async def execute_tool(name: str, inputs: dict, club_id: int) -> str:
 
         elif name == "list_transactions":
             params = {k: v for k, v in inputs.items() if v is not None}
-            txs = await call_backend("get", "/api/transactions", club_id=club_id, params=params)
+            txs = await call_backend("get", "/api/transactions", token=token, club_id=club_id, params=params)
             if not txs:
                 return "Không có giao dịch nào."
             total_income = sum(float(t["amount"]) for t in txs if t["type"] == "income")
@@ -410,178 +555,106 @@ async def execute_tool(name: str, inputs: dict, club_id: int) -> str:
         return f"❌ Lỗi hệ thống: {e}"
 
 
-# ── Conversation processing ───────────────────────────────────────────────────
-async def process_message(user_id: int, user_text: str, club_id: int, club_name: str) -> str:
-    history = _history.setdefault(user_id, [])
-    history.append({"role": "user", "content": user_text})
-
-    system_prompt = (
-        f"Bạn là trợ lý quản lý CLB Pickleball. Hôm nay: {datetime.now().strftime('%d/%m/%Y')}.\n"
-        f"CLB đang làm việc: {club_name} (ID: {club_id}).\n"
-        "Trả lời bằng tiếng Việt, ngắn gọn, rõ ràng.\n"
-        "Khi cần thông tin từ hệ thống, dùng tool được cung cấp.\n"
-        "Định dạng số tiền bằng VNĐ (ví dụ: 500.000đ)."
-    )
-
-    messages = [{"role": "system", "content": system_prompt}] + history[-MAX_HISTORY:]
-
-    for _ in range(10):
-        response = groq_client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=messages,
-            tools=TOOLS,
-            tool_choice="auto",
-            max_tokens=1024,
-        )
-
-        msg = response.choices[0].message
-
-        if msg.tool_calls:
-            messages.append({
-                "role": "assistant",
-                "content": msg.content or "",
-                "tool_calls": [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {"name": tc.function.name, "arguments": tc.function.arguments},
-                    }
-                    for tc in msg.tool_calls
-                ],
-            })
-
-            results = await asyncio.gather(*[
-                execute_tool(tc.function.name, json.loads(tc.function.arguments), club_id)
-                for tc in msg.tool_calls
-            ])
-
-            for tc, result in zip(msg.tool_calls, results):
-                messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
-        else:
-            final_text = msg.content or "Xin lỗi, tôi không hiểu yêu cầu này."
-            history.append({"role": "assistant", "content": final_text})
-            if len(history) > MAX_HISTORY:
-                _history[user_id] = history[-MAX_HISTORY:]
-            return final_text
-
-    return "❌ Quá nhiều bước xử lý, vui lòng thử lại."
-
-
-# ── Telegram handlers ─────────────────────────────────────────────────────────
-async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    # Reset club selection để cho phép chọn lại
-    _user_club.pop(user_id, None)
-    _user_club_name.pop(user_id, None)
-    _history.pop(user_id, None)
-
-    club_id = await ensure_club_selected(update, user_id)
-    if club_id:
-        club_name = _user_club_name.get(user_id, "")
-        await update.message.reply_text(
-            f"👋 Xin chào! Đang quản lý CLB: *{club_name}*\n\n"
-            "Bạn có thể hỏi tôi:\n"
-            "• Xem danh sách thành viên\n"
-            "• Thêm thành viên mới\n"
-            "• Ghi nhận thu/chi\n"
-            "• Báo cáo thu chi theo tháng\n"
-            "• Kiểm tra ai chưa đóng phí\n\n"
-            "Gõ /club để đổi CLB | /reset để xóa lịch sử",
-            parse_mode="Markdown",
-        )
-
-
-async def cmd_club(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Hiển thị menu chọn CLB."""
-    user_id = update.effective_user.id
-    try:
-        memberships = await call_backend("get", "/api/my-memberships")
-        if not memberships:
-            await update.message.reply_text("❌ Không tìm thấy CLB nào.")
-            return
-
-        current = _user_club_name.get(user_id, "Chưa chọn")
-        keyboard = [
-            [InlineKeyboardButton(
-                f"{'✅ ' if m['club_id'] == _user_club.get(user_id) else '🏸 '}{m['club']['name']}",
-                callback_data=f"select_club:{m['club_id']}:{m['club']['name']}"
-            )]
-            for m in memberships if m.get("club")
-        ]
-        await update.message.reply_text(
-            f"Đang làm việc với: *{current}*\nChọn CLB:",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode="Markdown",
-        )
-    except Exception as e:
-        await update.message.reply_text(f"❌ Lỗi: {e}")
-
-
-async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    _history.pop(user_id, None)
-    club_name = _user_club_name.get(user_id, "")
-    await update.message.reply_text(f"🔄 Đã xóa lịch sử hội thoại. CLB hiện tại: {club_name}")
-
-
-async def handle_club_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Xử lý khi user bấm nút chọn CLB."""
-    query = update.callback_query
-    await query.answer()
-
-    parts = query.data.split(":", 2)  # "select_club:123:Tên CLB"
-    club_id = int(parts[1])
-    club_name = parts[2]
-
-    user_id = query.from_user.id
-    _user_club[user_id] = club_id
-    _user_club_name[user_id] = club_name
-    _history.pop(user_id, None)  # Reset history khi đổi CLB
-
-    await query.edit_message_text(
-        f"✅ Đã chuyển sang CLB: *{club_name}*\n\n"
-        "Bạn có thể hỏi tôi:\n"
-        "• Xem danh sách thành viên\n"
-        "• Thêm thành viên mới\n"
-        "• Ghi nhận thu/chi\n"
-        "• Báo cáo thu chi theo tháng\n"
-        "• Kiểm tra ai chưa đóng phí\n\n"
-        "Gõ /club để đổi CLB | /reset để xóa lịch sử",
-        parse_mode="Markdown",
-    )
-
-
+# ── Message handler ───────────────────────────────────────────────────────────
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+
+    # Kiểm tra đăng nhập
+    session = get_session(user_id)
+    if not session:
+        await update.message.reply_text("🔐 Bạn chưa đăng nhập. Gõ /start để đăng nhập.")
+        return
+
+    # Kiểm tra đã chọn CLB
+    club_id = _user_club.get(user_id)
+    if not club_id:
+        await show_club_menu(update, session["token"], user_id)
+        return
+
     text = update.message.text.strip()
     if not text:
         return
 
-    # Đảm bảo đã chọn CLB
-    club_id = await ensure_club_selected(update, user_id)
-    if not club_id:
-        return  # Đang hiển thị menu chọn CLB
-
     club_name = _user_club_name.get(user_id, "")
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
 
+    history = _history.setdefault(user_id, [])
+    history.append({"role": "user", "content": text})
+
+    name = session.get("full_name") or session["username"]
+    system_prompt = (
+        f"Bạn là trợ lý quản lý CLB Pickleball. Hôm nay: {datetime.now().strftime('%d/%m/%Y')}.\n"
+        f"Người dùng: {name}. CLB đang làm việc: {club_name} (ID: {club_id}).\n"
+        "Trả lời bằng tiếng Việt, ngắn gọn, rõ ràng.\n"
+        "Dùng tool khi cần lấy/ghi dữ liệu. Định dạng tiền: 500.000đ."
+    )
+    messages = [{"role": "system", "content": system_prompt}] + history[-MAX_HISTORY:]
+
     try:
-        reply = await process_message(user_id, text, club_id, club_name)
+        for _ in range(10):
+            response = groq_client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=messages,
+                tools=TOOLS,
+                tool_choice="auto",
+                max_tokens=1024,
+            )
+            msg = response.choices[0].message
+
+            if msg.tool_calls:
+                messages.append({
+                    "role": "assistant",
+                    "content": msg.content or "",
+                    "tool_calls": [
+                        {"id": tc.id, "type": "function",
+                         "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
+                        for tc in msg.tool_calls
+                    ],
+                })
+                results = await asyncio.gather(*[
+                    execute_tool(tc.function.name, json.loads(tc.function.arguments),
+                                 session["token"], club_id)
+                    for tc in msg.tool_calls
+                ])
+                for tc, result in zip(msg.tool_calls, results):
+                    messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
+            else:
+                reply = msg.content or "Xin lỗi, tôi không hiểu yêu cầu này."
+                history.append({"role": "assistant", "content": reply})
+                if len(history) > MAX_HISTORY:
+                    _history[user_id] = history[-MAX_HISTORY:]
+                await update.message.reply_text(reply)
+                return
+
+        await update.message.reply_text("❌ Quá nhiều bước xử lý, vui lòng thử lại.")
+
     except Exception as e:
-        logger.error(f"process_message error: {e}")
-        reply = "❌ Đã xảy ra lỗi, vui lòng thử lại."
-
-    await update.message.reply_text(reply)
+        logger.error(f"handle_message error: {e}")
+        await update.message.reply_text("❌ Đã xảy ra lỗi, vui lòng thử lại.")
 
 
+# ── Main ──────────────────────────────────────────────────────────────────────
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
-    app.add_handler(CommandHandler("start", cmd_start))
+
+    # ConversationHandler cho luồng đăng nhập
+    login_handler = ConversationHandler(
+        entry_points=[CommandHandler("start", cmd_start)],
+        states={
+            WAIT_USERNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_username)],
+            WAIT_PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_password)],
+        },
+        fallbacks=[CommandHandler("start", cmd_start)],
+    )
+
+    app.add_handler(login_handler)
+    app.add_handler(CommandHandler("logout", cmd_logout))
     app.add_handler(CommandHandler("club", cmd_club))
     app.add_handler(CommandHandler("reset", cmd_reset))
-    app.add_handler(CallbackQueryHandler(handle_club_selection, pattern=r"^select_club:"))
+    app.add_handler(CallbackQueryHandler(handle_club_selection, pattern=r"^sel_club:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    logger.info("Bot đang chạy (Groq / Llama 3.3 70B — đa CLB)...")
+
+    logger.info("Bot đang chạy (Groq / Llama 3.3 70B — đa CLB + auth)...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
