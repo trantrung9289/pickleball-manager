@@ -107,6 +107,7 @@ def club_setup(payload: schemas.ClubSetup, db: Session = Depends(get_db)):
         full_name=payload.admin_full_name,
         password_hash=hash_password(payload.admin_password),
         role=models.UserRole.admin,
+        is_superuser=True,
     )
     db.add(admin)
     db.commit()
