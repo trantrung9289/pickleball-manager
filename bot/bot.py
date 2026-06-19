@@ -661,22 +661,39 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     system_prompt = (
         f"Bạn là trợ lý quản lý CLB Pickleball. Hôm nay: {datetime.now().strftime('%d/%m/%Y')}.\n"
         f"Người dùng: {name}. CLB đang làm việc: {club_name} (ID: {club_id}).\n"
-        "Trả lời bằng tiếng Việt, ngắn gọn, rõ ràng. Định dạng tiền: 500.000đ.\n"
-        "QUY TẮC BẮT BUỘC:\n"
-        "- Khi user yêu cầu XÓA: gọi list_transactions hoặc list_members để tìm ID, sau đó gọi delete_transaction hoặc delete_member. KHÔNG được gọi record_transaction hay add_member khi user muốn xóa.\n"
-        "- Khi user nói 'xóa khoản vừa nhập', 'xóa cái đó', 'xóa giao dịch vừa rồi': tìm giao dịch gần nhất trong lịch sử hội thoại để lấy ID, rồi xóa.\n"
-        "- Chỉ gọi record_transaction khi user rõ ràng muốn THÊM giao dịch mới.\n"
-        "- Nếu không chắc ID, hãy list trước rồi hỏi user xác nhận."
+        "Trả lời bằng tiếng Việt, ngắn gọn, rõ ràng. Định dạng tiền: 500.000đ.\n\n"
+        "LUẬT TUYỆT ĐỐI — VI PHẠM LÀ SAI:\n"
+        "1. KHÔNG BAO GIỜ tự bịa ra dữ liệu. Mọi thông tin về thành viên, giao dịch, báo cáo PHẢI lấy từ tool.\n"
+        "2. Khi user hỏi/tra cứu bất kỳ dữ liệu nào → BẮT BUỘC gọi tool tương ứng trước khi trả lời.\n"
+        "3. Khi user yêu cầu XÓA giao dịch:\n"
+        "   - Bước 1: Gọi list_transactions để lấy danh sách + ID thực tế.\n"
+        "   - Bước 2: Tìm đúng giao dịch theo mô tả của user (tên, ngày, số tiền).\n"
+        "   - Bước 3: Gọi delete_transaction với ID tìm được.\n"
+        "   - TUYỆT ĐỐI không nói 'không tồn tại' mà chưa gọi list_transactions.\n"
+        "4. Khi user yêu cầu XÓA thành viên: gọi list_members trước để lấy ID, rồi delete_member.\n"
+        "5. KHÔNG gọi record_transaction hay add_member khi user muốn xóa hoặc tra cứu.\n"
+        "6. Nếu tool trả về lỗi → báo lỗi thực tế, không tự đoán kết quả."
     )
     messages = [{"role": "system", "content": system_prompt}] + history[-MAX_HISTORY:]
 
+    # Từ khoá cho thấy cần truy vấn/thao tác dữ liệu → bắt buộc dùng tool
+    DATA_KEYWORDS = (
+        "xóa", "xoá", "xem", "tra cứu", "tìm", "kiểm tra", "báo cáo",
+        "danh sách", "thêm", "ghi nhận", "thu", "chi", "thành viên",
+        "giao dịch", "phí", "tháng", "năm", "tổng quan", "số dư",
+        "đóng phí", "chưa đóng", "sửa", "cập nhật",
+    )
+    needs_tool = any(kw in text.lower() for kw in DATA_KEYWORDS)
+
     try:
-        for _ in range(10):
+        for turn in range(10):
+            # Lần đầu: nếu tin nhắn liên quan dữ liệu → bắt buộc gọi tool
+            force_tool = (turn == 0 and needs_tool)
             response = groq_client.chat.completions.create(
                 model="llama-3.3-70b-versatile",
                 messages=messages,
                 tools=TOOLS,
-                tool_choice="auto",
+                tool_choice="required" if force_tool else "auto",
                 max_tokens=1024,
             )
             msg = response.choices[0].message
