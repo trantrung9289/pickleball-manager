@@ -60,6 +60,14 @@ export const membersApi = {
   create: (data) => api.post("/api/members", data),
   update: (id, data) => api.put(`/api/members/${id}`, data),
   delete: (id) => api.delete(`/api/members/${id}`),
+  downloadTemplate: () => api.get("/api/members/template", { responseType: "blob" }),
+  importExcel: (file) => {
+    const form = new FormData();
+    form.append("file", file);
+    return api.post("/api/members/import", form, {
+      headers: { "Content-Type": "multipart/form-data" },
+    });
+  },
 };
 
 export const feeTypesApi = {

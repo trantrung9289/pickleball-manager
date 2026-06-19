@@ -1,9 +1,15 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import {
   Table, Button, Space, Input, Select, Tag, Modal, Form,
-  DatePicker, message, Typography, Row, Col, Tooltip, Popover,
+  DatePicker, message, Typography, Row, Col, Popover,
+  Upload, Alert, Divider, Progress,
 } from "antd";
-import { PlusOutlined, EditOutlined, DeleteOutlined, SearchOutlined, SaveOutlined, InfoCircleOutlined, DownloadOutlined } from "@ant-design/icons";
+import {
+  PlusOutlined, EditOutlined, DeleteOutlined, SearchOutlined,
+  SaveOutlined, InfoCircleOutlined, DownloadOutlined,
+  FileExcelOutlined, UploadOutlined, CheckCircleOutlined,
+  CloseCircleOutlined, WarningOutlined,
+} from "@ant-design/icons";
 import dayjs from "dayjs";
 import { membersApi } from "../api";
 import useHotkey from "../hooks/useHotkey";
@@ -33,7 +39,13 @@ export default function Members() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [form] = Form.useForm();
-  const searchRef = React.useRef(null);
+  const searchRef = useRef(null);
+
+  // Excel import state
+  const [importOpen, setImportOpen] = useState(false);
+  const [importLoading, setImportLoading] = useState(false);
+  const [importResult, setImportResult] = useState(null);
+  const fileInputRef = useRef(null);
 
   useHotkey({
     "n": () => !modalOpen && openCreate(),
@@ -122,6 +134,35 @@ export default function Members() {
     load();
   };
 
+  const handleDownloadTemplate = async () => {
+    try {
+      const res = await membersApi.downloadTemplate();
+      const url = URL.createObjectURL(new Blob([res.data]));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "mau_nhap_thanh_vien.xlsx";
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      message.error("Không thể tải file mẫu");
+    }
+  };
+
+  const handleImportFile = async (file) => {
+    setImportLoading(true);
+    setImportResult(null);
+    try {
+      const res = await membersApi.importExcel(file);
+      setImportResult(res.data);
+      if (res.data.imported > 0) load();
+    } catch (err) {
+      message.error(err.response?.data?.detail || "Import thất bại");
+    } finally {
+      setImportLoading(false);
+    }
+    return false; // ngăn Upload tự upload
+  };
+
   const exportCSV = () => {
     const headers = ["Mã TV,Họ tên,Điện thoại,Email,Hạng,Ngày tham gia,Trạng thái,Địa chỉ,Ghi chú"];
     const rows = data.map(r => [
@@ -194,6 +235,9 @@ export default function Members() {
         <Title level={3} style={{ margin: 0 }}>Quản lý thành viên</Title>
         <Space>
           <Button icon={<DownloadOutlined />} onClick={exportCSV}>Xuất CSV</Button>
+          <Button icon={<FileExcelOutlined />} style={{ color: "#52c41a", borderColor: "#52c41a" }} onClick={() => { setImportResult(null); setImportOpen(true); }}>
+            Nhập từ Excel
+          </Button>
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>Thêm thành viên (N)</Button>
         </Space>
       </Row>
@@ -218,6 +262,86 @@ export default function Members() {
       </Row>
 
       <Table columns={columns} dataSource={data} rowKey="id" loading={loading} pagination={{ pageSize: 15 }} size="small" />
+
+      {/* Modal Import Excel */}
+      <Modal
+        title={<Space><FileExcelOutlined style={{ color: "#52c41a" }} />Nhập thành viên từ Excel</Space>}
+        open={importOpen}
+        onCancel={() => setImportOpen(false)}
+        footer={<Button onClick={() => setImportOpen(false)}>Đóng</Button>}
+        width={620}
+      >
+        <Space direction="vertical" style={{ width: "100%" }} size="middle">
+          <Alert
+            message="Hướng dẫn"
+            description={
+              <ol style={{ margin: 0, paddingLeft: 20 }}>
+                <li>Tải file Excel mẫu bên dưới</li>
+                <li>Điền dữ liệu vào file (xóa dòng ví dụ màu xanh trước khi nhập)</li>
+                <li>Upload file đã điền — hệ thống tự xử lý</li>
+              </ol>
+            }
+            type="info"
+            showIcon
+          />
+
+          <Button icon={<DownloadOutlined />} onClick={handleDownloadTemplate} style={{ borderColor: "#1677ff", color: "#1677ff" }}>
+            Tải file Excel mẫu
+          </Button>
+
+          <Divider style={{ margin: "8px 0" }} />
+
+          <Upload.Dragger
+            accept=".xlsx,.xls"
+            beforeUpload={handleImportFile}
+            showUploadList={false}
+            disabled={importLoading}
+          >
+            <p className="ant-upload-drag-icon">
+              <UploadOutlined style={{ fontSize: 32, color: "#52c41a" }} />
+            </p>
+            <p className="ant-upload-text">Kéo thả file Excel vào đây hoặc nhấn để chọn file</p>
+            <p className="ant-upload-hint">Chỉ chấp nhận file .xlsx hoặc .xls (tối đa 500 thành viên)</p>
+          </Upload.Dragger>
+
+          {importLoading && <Progress percent={99} status="active" showInfo={false} />}
+
+          {importResult && (
+            <div style={{ background: "#fafafa", borderRadius: 8, padding: 16, border: "1px solid #f0f0f0" }}>
+              <Space style={{ marginBottom: 8 }}>
+                <CheckCircleOutlined style={{ color: "#52c41a", fontSize: 16 }} />
+                <span><b style={{ color: "#52c41a" }}>{importResult.imported}</b> thành viên đã nhập thành công</span>
+              </Space>
+              {importResult.skipped > 0 && (
+                <div>
+                  <Space style={{ marginBottom: 4 }}>
+                    <WarningOutlined style={{ color: "#faad14" }} />
+                    <span><b>{importResult.skipped}</b> hàng bỏ qua (mã đã tồn tại):</span>
+                  </Space>
+                  <ul style={{ margin: "4px 0 8px 20px", color: "#595959", fontSize: 13 }}>
+                    {importResult.skipped_list.map((s, i) => (
+                      <li key={i}>Hàng {s.row}: {s.name} — {s.reason}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {importResult.errors > 0 && (
+                <div>
+                  <Space style={{ marginBottom: 4 }}>
+                    <CloseCircleOutlined style={{ color: "#f5222d" }} />
+                    <span><b>{importResult.errors}</b> hàng lỗi:</span>
+                  </Space>
+                  <ul style={{ margin: "4px 0 0 20px", color: "#595959", fontSize: 13 }}>
+                    {importResult.error_list.map((e, i) => (
+                      <li key={i}>Hàng {e.row}: {e.reason}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+        </Space>
+      </Modal>
 
       <Modal
         title={editing ? "Sửa thành viên" : "Thêm thành viên mới"}

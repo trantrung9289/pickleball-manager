@@ -1,13 +1,16 @@
-from fastapi import FastAPI, Depends, HTTPException, Query
+from fastapi import FastAPI, Depends, HTTPException, Query, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func, extract
 from typing import Optional, List
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
+import io
+import openpyxl
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 import models, schemas
 from database import engine, get_db, Base
 from tournament_engine import (
@@ -399,6 +402,190 @@ def delete_member(
         raise HTTPException(404, "Không tìm thấy thành viên")
     db.delete(m)
     db.commit()
+
+
+# ── EXCEL IMPORT / TEMPLATE ───────────────────────────────
+@app.get("/api/members/template")
+def download_member_template(perms: ClubPermissions = Depends(get_club_permission)):
+    """Tạo và trả về file Excel mẫu để nhập thành viên."""
+    perms.require_view()
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Danh sách thành viên"
+
+    headers = ["Mã thành viên", "Họ và tên (*)", "Ngày sinh", "Số điện thoại",
+               "Email", "Ngày vào CLB", "Trạng thái", "Hạng", "Địa chỉ", "Ghi chú"]
+    col_widths = [15, 25, 14, 16, 28, 14, 12, 15, 30, 30]
+    notes_row = ["VD: HN001", "Nguyễn Văn A", "1990-05-20", "0912345678",
+                 "vana@email.com", "2024-01-01", "active", "Chuyên nghiệp",
+                 "Hà Nội", "Ghi chú tùy chọn"]
+
+    header_fill = PatternFill("solid", fgColor="1677FF")
+    note_fill   = PatternFill("solid", fgColor="E6F0FF")
+    header_font = Font(bold=True, color="FFFFFF", name="Arial", size=11)
+    note_font   = Font(color="595959", name="Arial", size=10, italic=True)
+    thin = Side(style="thin", color="CCCCCC")
+    cell_border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    for col, (h, w) in enumerate(zip(headers, col_widths), start=1):
+        cell = ws.cell(row=1, column=col, value=h)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        cell.border = cell_border
+        ws.column_dimensions[cell.column_letter].width = w
+
+    for col, val in enumerate(notes_row, start=1):
+        cell = ws.cell(row=2, column=col, value=val)
+        cell.fill = note_fill
+        cell.font = note_font
+        cell.alignment = Alignment(vertical="center")
+        cell.border = cell_border
+
+    ws.row_dimensions[1].height = 30
+    ws.row_dimensions[2].height = 22
+
+    # Hướng dẫn ở sheet 2
+    ws2 = wb.create_sheet("Hướng dẫn")
+    guide = [
+        ("HƯỚNG DẪN NHẬP THÀNH VIÊN TỪ EXCEL", None),
+        ("", None),
+        ("Cột bắt buộc:", None),
+        ("  - Họ và tên (*)", "Không được để trống"),
+        ("", None),
+        ("Cột tùy chọn:", None),
+        ("  - Mã thành viên", "Nếu để trống, hệ thống tự tạo"),
+        ("  - Ngày sinh / Ngày vào CLB", "Định dạng: YYYY-MM-DD hoặc DD/MM/YYYY"),
+        ("  - Trạng thái", "Nhập: active (hoạt động) hoặc inactive (nghỉ). Mặc định: active"),
+        ("  - Hạng", "Mới bắt đầu / Nghiệp dư / Bán chuyên / Chuyên nghiệp"),
+        ("", None),
+        ("Lưu ý:", None),
+        ("  - Dòng 1 là tiêu đề, dòng 2 là ví dụ — xóa dòng 2 trước khi nhập thật", None),
+        ("  - Nếu Mã thành viên trùng trong CLB, hàng đó sẽ bị bỏ qua", None),
+        ("  - Có thể nhập nhiều dòng cùng lúc (tối đa 500 thành viên/lần)", None),
+    ]
+    ws2.column_dimensions["A"].width = 40
+    ws2.column_dimensions["B"].width = 50
+    for r, (a, b) in enumerate(guide, start=1):
+        ca = ws2.cell(row=r, column=1, value=a)
+        if r == 1:
+            ca.font = Font(bold=True, size=13, color="1677FF")
+        elif a.endswith(":"):
+            ca.font = Font(bold=True, size=11)
+        if b:
+            ws2.cell(row=r, column=2, value=b)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=mau_nhap_thanh_vien.xlsx"},
+    )
+
+
+@app.post("/api/members/import")
+def import_members_excel(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    """Import thành viên từ file Excel."""
+    perms.require_create()
+
+    if not file.filename.endswith((".xlsx", ".xls")):
+        raise HTTPException(400, "Chỉ chấp nhận file .xlsx hoặc .xls")
+
+    content = file.file.read()
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
+    except Exception:
+        raise HTTPException(400, "File Excel không hợp lệ hoặc bị lỗi")
+
+    ws = wb.active
+    rows = list(ws.iter_rows(min_row=2, values_only=True))  # bỏ header row 1
+
+    def parse_date(val):
+        if not val:
+            return None
+        if isinstance(val, (date, datetime)):
+            return val.date() if isinstance(val, datetime) else val
+        s = str(val).strip()
+        for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
+            try:
+                return datetime.strptime(s, fmt).date()
+            except ValueError:
+                continue
+        return None
+
+    def clean(val):
+        return str(val).strip() if val is not None else None
+
+    imported, skipped, errors = [], [], []
+
+    for i, row in enumerate(rows, start=2):
+        if not any(row):  # dòng trống
+            continue
+
+        member_code = clean(row[0])
+        full_name   = clean(row[1])
+        dob         = parse_date(row[2])
+        phone       = clean(row[3])
+        email       = clean(row[4])
+        join_date   = parse_date(row[5])
+        status_raw  = clean(row[6]) or "active"
+        rank        = clean(row[7])
+        address     = clean(row[8])
+        notes       = clean(row[9]) if len(row) > 9 else None
+
+        if not full_name:
+            errors.append({"row": i, "reason": "Thiếu Họ và tên"})
+            continue
+
+        # Kiểm tra trạng thái hợp lệ
+        try:
+            status = models.MemberStatus(status_raw.lower())
+        except ValueError:
+            status = models.MemberStatus.active
+
+        # Kiểm tra mã trùng trong CLB
+        if member_code:
+            exists = db.query(models.Member).filter(
+                models.Member.member_code == member_code,
+                models.Member.club_id == perms.club_id,
+            ).first()
+            if exists:
+                skipped.append({"row": i, "name": full_name, "reason": f"Mã '{member_code}' đã tồn tại"})
+                continue
+
+        member = models.Member(
+            club_id=perms.club_id,
+            member_code=member_code,
+            full_name=full_name,
+            dob=dob,
+            phone=phone,
+            email=email,
+            join_date=join_date,
+            status=status,
+            rank=rank,
+            address=address,
+            notes=notes,
+        )
+        db.add(member)
+        imported.append({"row": i, "name": full_name})
+
+    db.commit()
+
+    return {
+        "total_rows": len([r for r in rows if any(r)]),
+        "imported": len(imported),
+        "skipped": len(skipped),
+        "errors": len(errors),
+        "imported_list": imported,
+        "skipped_list": skipped,
+        "error_list": errors,
+    }
 
 
 # ── FEE TYPES ─────────────────────────────────────────────
