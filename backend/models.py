@@ -1,0 +1,215 @@
+from sqlalchemy import Column, Integer, String, Date, DateTime, Numeric, Boolean, Enum, ForeignKey, Text, JSON
+from sqlalchemy.orm import relationship
+from sqlalchemy.sql import func
+import enum
+from database import Base
+
+
+class MemberStatus(str, enum.Enum):
+    active = "active"
+    inactive = "inactive"
+    suspended = "suspended"
+
+
+class FeeTypeCategory(str, enum.Enum):
+    income = "income"
+    expense = "expense"
+
+
+class UserRole(str, enum.Enum):
+    admin = "admin"
+    treasurer = "treasurer"
+    member = "member"
+
+
+class TournamentFormat(str, enum.Enum):
+    round_robin = "round_robin"
+    knockout = "knockout"
+    combined = "combined"
+    individual = "individual"
+
+
+class TournamentStatus(str, enum.Enum):
+    draft = "draft"
+    active = "active"
+    completed = "completed"
+
+
+class MatchStatus(str, enum.Enum):
+    pending = "pending"
+    completed = "completed"
+
+
+class Member(Base):
+    __tablename__ = "members"
+
+    id = Column(Integer, primary_key=True, index=True)
+    club_id = Column(Integer, ForeignKey("clubs.id"), nullable=True, index=True)
+    member_code = Column(String(20), index=True)   # unique per-club, enforced at app level
+    full_name = Column(String(100), nullable=False)
+    dob = Column(Date, nullable=True)
+    phone = Column(String(15), nullable=True)
+    email = Column(String(100), nullable=True)
+    join_date = Column(Date, nullable=True)
+    status = Column(Enum(MemberStatus), default=MemberStatus.active)
+    rank = Column(String(30), nullable=True)
+    address = Column(String(200), nullable=True)
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    transactions = relationship("Transaction", back_populates="member")
+    tournament_participations = relationship(
+        "TournamentParticipant",
+        foreign_keys="TournamentParticipant.member_id",
+        back_populates="member",
+    )
+
+
+class FeeType(Base):
+    __tablename__ = "fee_types"
+
+    id = Column(Integer, primary_key=True, index=True)
+    club_id = Column(Integer, ForeignKey("clubs.id"), nullable=True, index=True)
+    name = Column(String(100), nullable=False)
+    type = Column(Enum(FeeTypeCategory), nullable=False)
+    description = Column(Text, nullable=True)
+    default_amount = Column(Numeric(15, 2), default=0)
+    is_recurring = Column(Boolean, default=False)
+    created_at = Column(DateTime, server_default=func.now())
+
+    transactions = relationship("Transaction", back_populates="fee_type")
+
+
+class Transaction(Base):
+    __tablename__ = "transactions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    club_id = Column(Integer, ForeignKey("clubs.id"), nullable=True, index=True)
+    fee_type_id = Column(Integer, ForeignKey("fee_types.id"), nullable=False)
+    member_id = Column(Integer, ForeignKey("members.id"), nullable=True)
+    type = Column(Enum(FeeTypeCategory), nullable=False)
+    amount = Column(Numeric(15, 2), nullable=False)
+    transaction_date = Column(Date, nullable=False)
+    description = Column(Text, nullable=True)
+    payment_method = Column(String(50), default="Tiền mặt")
+    created_by = Column(String(50), nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    fee_type = relationship("FeeType", back_populates="transactions")
+    member = relationship("Member", back_populates="transactions")
+
+
+class Club(Base):
+    __tablename__ = "clubs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(200), nullable=False)
+    sport = Column(String(100), default="Pickleball")
+    description = Column(Text, nullable=True)
+    logo_url = Column(String(500), nullable=True)
+    founded_year = Column(Integer, nullable=True)
+    address = Column(String(300), nullable=True)
+    phone = Column(String(20), nullable=True)
+    email = Column(String(100), nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String(50), unique=True, index=True)
+    full_name = Column(String(100), nullable=True)
+    password_hash = Column(String(255))
+    role = Column(Enum(UserRole), default=UserRole.member)
+    is_superuser = Column(Boolean, default=False)   # quản trị viên hệ thống
+    member_id = Column(Integer, ForeignKey("members.id"), nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+    club_memberships = relationship("ClubMembership", back_populates="user", cascade="all, delete-orphan")
+
+
+class ClubMembership(Base):
+    """Gán quyền tài khoản cho từng câu lạc bộ."""
+    __tablename__ = "club_memberships"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    club_id = Column(Integer, ForeignKey("clubs.id"), nullable=False)
+    role = Column(Enum(UserRole), default=UserRole.member)   # admin | treasurer | member
+    can_view = Column(Boolean, default=True)
+    can_create = Column(Boolean, default=False)
+    can_edit = Column(Boolean, default=False)
+    can_delete = Column(Boolean, default=False)
+    created_at = Column(DateTime, server_default=func.now())
+
+    user = relationship("User", back_populates="club_memberships")
+    club = relationship("Club")
+
+
+# ── TOURNAMENT MODELS ─────────────────────────────────────
+
+class Tournament(Base):
+    __tablename__ = "tournaments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    club_id = Column(Integer, ForeignKey("clubs.id"), nullable=True, index=True)
+    name = Column(String(200), nullable=False)
+    format = Column(Enum(TournamentFormat), nullable=False)
+    status = Column(Enum(TournamentStatus), default=TournamentStatus.draft)
+    team_type = Column(String(10), default="singles")     # singles | doubles
+    pairing_mode = Column(String(30), default="random")   # random | same_rank | cross_rank
+    rank_rules = Column(JSON, nullable=True)              # [{"rank1":"A","rank2":"C"}]
+    num_groups = Column(Integer, default=2)               # for group stage
+    description = Column(Text, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+    participants = relationship("TournamentParticipant", back_populates="tournament", cascade="all, delete-orphan")
+    matches = relationship("TournamentMatch", back_populates="tournament", cascade="all, delete-orphan")
+
+
+class TournamentParticipant(Base):
+    """Mỗi record = 1 đội thi đấu (đơn: 1 người, đôi: 2 người)."""
+    __tablename__ = "tournament_participants"
+
+    id = Column(Integer, primary_key=True, index=True)
+    tournament_id = Column(Integer, ForeignKey("tournaments.id"), nullable=False)
+    member_id = Column(Integer, ForeignKey("members.id"), nullable=False)          # người 1 (hoặc duy nhất)
+    partner_member_id = Column(Integer, ForeignKey("members.id"), nullable=True)   # người 2 (chỉ với đôi)
+    team_name = Column(String(200), nullable=True)    # tên đội (tự động hoặc tùy chỉnh)
+    seed = Column(Integer, nullable=True)
+    group_name = Column(String(10), nullable=True)    # A, B, C… bảng đấu
+
+    tournament = relationship("Tournament", back_populates="participants")
+    member = relationship("Member", foreign_keys=[member_id], back_populates="tournament_participations")
+    partner = relationship("Member", foreign_keys=[partner_member_id])
+
+
+class TournamentMatch(Base):
+    __tablename__ = "tournament_matches"
+
+    id = Column(Integer, primary_key=True, index=True)
+    tournament_id = Column(Integer, ForeignKey("tournaments.id"), nullable=False)
+    round_number = Column(Integer, nullable=False)
+    round_name = Column(String(50), nullable=True)
+    match_number = Column(Integer, nullable=False)
+    group_name = Column(String(10), nullable=True)
+    phase = Column(String(20), default="group")  # group | knockout
+
+    p1_id = Column(Integer, ForeignKey("tournament_participants.id"), nullable=True)
+    p2_id = Column(Integer, ForeignKey("tournament_participants.id"), nullable=True)
+    score1 = Column(Integer, nullable=True)
+    score2 = Column(Integer, nullable=True)
+    winner_id = Column(Integer, ForeignKey("tournament_participants.id"), nullable=True)
+    status = Column(Enum(MatchStatus), default=MatchStatus.pending)
+
+    # bracket linkage for knockout
+    next_match_id = Column(Integer, ForeignKey("tournament_matches.id"), nullable=True)
+    next_match_slot = Column(Integer, nullable=True)  # 1 or 2
+
+    tournament = relationship("Tournament", back_populates="matches")
+    p1 = relationship("TournamentParticipant", foreign_keys=[p1_id])
+    p2 = relationship("TournamentParticipant", foreign_keys=[p2_id])
+    winner = relationship("TournamentParticipant", foreign_keys=[winner_id])

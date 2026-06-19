@@ -1,0 +1,1042 @@
+import React, { useEffect, useState, useCallback } from "react";
+import {
+  Table, Button, Space, Tag, Modal, Form, Input, Select,
+  message, Typography, Row, Col, Card, Steps,
+  InputNumber, Tabs, Badge, Statistic, Empty,
+  Divider, Alert, Transfer,
+} from "antd";
+import {
+  PlusOutlined, ThunderboltOutlined, TrophyOutlined,
+  EditOutlined, DeleteOutlined, ReloadOutlined,
+  CheckCircleOutlined, SaveOutlined, ArrowRightOutlined,
+  UserOutlined, TeamOutlined,
+} from "@ant-design/icons";
+import { tournamentsApi, membersApi } from "../api";
+
+const { Title, Text } = Typography;
+
+const FORMAT_MAP = {
+  round_robin: { label: "Vòng tròn một lượt", color: "blue" },
+  knockout:    { label: "Đấu loại trực tiếp", color: "red" },
+  combined:    { label: "Vòng bảng + loại trực tiếp", color: "purple" },
+  individual:  { label: "Thi đấu riêng lẻ", color: "default" },
+};
+const STATUS_MAP = {
+  draft:     { label: "Nháp", color: "default" },
+  active:    { label: "Đang diễn ra", color: "processing" },
+  completed: { label: "Kết thúc", color: "success" },
+};
+const RANKS = ["A", "B", "C", "D", "Hạt giống 1", "Hạt giống 2", "Hạt giống 3"];
+
+const confirm = (opts) =>
+  new Promise((res) =>
+    Modal.confirm({ okText: "Xác nhận", cancelText: "Hủy", ...opts, onOk: () => res(true), onCancel: () => res(false) })
+  );
+
+const teamLabel = (p) => p?.team_name || p?.member?.full_name || "—";
+
+// ── Wizard tạo giải ──────────────────────────────────────
+function CreateWizard({ onCreated, onClose }) {
+  const [step, setStep] = useState(0);
+  const [form] = Form.useForm();
+  const [allMembers, setAllMembers] = useState([]);
+  const [format, setFormat] = useState(null);
+
+  // Bước 2: chọn người chơi
+  const [selectedIds, setSelectedIds] = useState([]);
+
+  // Bước 3: ghép đội
+  const [teamType, setTeamType] = useState("singles");
+  // doubles – method: "manual" | "by_rank"
+  const [doubleMethod, setDoubleMethod] = useState("manual");
+  // doubles – rank rules: [{rank1, rank2}] for auto-pairing
+  const [rankRules, setRankRules] = useState([{ rank1: "", rank2: "" }]);
+  // doubles – built teams
+  const [teams, setTeams] = useState([]);
+  const [pick1, setPick1] = useState(null);
+  const [pick2, setPick2] = useState(null);
+
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    membersApi.list({ status: "active" }).then((r) => setAllMembers(r.data));
+  }, []);
+
+  const selectedMembers = allMembers.filter(m => selectedIds.includes(m.id));
+  const usedIds = new Set(teams.flatMap(t => [t.member_id, t.partner_member_id]));
+  const availableForTeam = selectedMembers.filter(m => !usedIds.has(m.id));
+
+  // Thêm 1 đội thủ công
+  const addTeamManual = () => {
+    if (!pick1 || !pick2) { message.error("Chọn 2 người chơi để ghép đội"); return; }
+    const m1 = allMembers.find(m => m.id === pick1);
+    const m2 = allMembers.find(m => m.id === pick2);
+    setTeams(t => [...t, {
+      member_id: pick1, partner_member_id: pick2,
+      team_name: `${m1?.full_name} / ${m2?.full_name}`,
+    }]);
+    setPick1(null); setPick2(null);
+  };
+
+  // Tự động ghép đội theo rank rules
+  // Mỗi người chỉ được xuất hiện trong 1 đội (tracked bởi `used`)
+  const shuffle = (arr) => {
+    const a = [...arr];
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+  };
+
+  const autoTeamByRank = () => {
+    const newTeams = [];
+    const used = new Set();
+
+    for (const rule of rankRules) {
+      if (!rule.rank1 || !rule.rank2) continue;
+
+      if (rule.rank1 === rule.rank2) {
+        const pool = shuffle(selectedMembers.filter(m => m.rank === rule.rank1 && !used.has(m.id)));
+        for (let i = 0; i + 1 < pool.length; i += 2) {
+          const a = pool[i], b = pool[i + 1];
+          newTeams.push({ member_id: a.id, partner_member_id: b.id, team_name: `${a.full_name} / ${b.full_name}` });
+          used.add(a.id); used.add(b.id);
+        }
+      } else {
+        const p1s = shuffle(selectedMembers.filter(m => m.rank === rule.rank1 && !used.has(m.id)));
+        const p2s = shuffle(selectedMembers.filter(m => m.rank === rule.rank2 && !used.has(m.id)));
+        for (const a of p1s) {
+          const b = p2s.find(x => !used.has(x.id));
+          if (!b) break;
+          newTeams.push({ member_id: a.id, partner_member_id: b.id, team_name: `${a.full_name} / ${b.full_name}` });
+          used.add(a.id); used.add(b.id);
+        }
+      }
+    }
+
+    if (newTeams.length === 0) {
+      message.warning("Không tìm được cặp nào phù hợp với quy tắc đã đặt"); return;
+    }
+    setTeams(newTeams);
+    const unpairedCount = selectedMembers.filter(m => !used.has(m.id)).length;
+    message.success(`Đã ghép ${newTeams.length} đội${unpairedCount > 0 ? ` · ${unpairedCount} người chưa có đội` : ""}`);
+  };
+
+  const removeTeam = (i) => setTeams(t => t.filter((_, j) => j !== i));
+
+  const totalTeams = teamType === "singles" ? selectedIds.length : teams.length;
+
+  const handleNext = async () => {
+    if (step === 0) {
+      try { await form.validateFields(); setFormat(form.getFieldValue("format")); }
+      catch { return; }
+    }
+    if (step === 1 && selectedIds.length < 2) {
+      message.error("Cần chọn ít nhất 2 người chơi"); return;
+    }
+    if (step === 2 && totalTeams < 2) {
+      message.error("Cần có ít nhất 2 đội thi đấu"); return;
+    }
+    setStep(s => s + 1);
+  };
+
+  const handleCreate = async () => {
+    const vals = form.getFieldsValue();
+    if (!vals.name || !vals.format) { setStep(0); message.error("Thiếu thông tin giải"); return; }
+    if (totalTeams < 2) { message.error("Cần ít nhất 2 đội"); return; }
+
+    setSaving(true);
+    try {
+      const payload = {
+        name: vals.name,
+        format: vals.format,
+        team_type: teamType,
+        description: vals.description || null,
+        num_groups: vals.num_groups || 2,
+        pairing_mode: "random",
+      };
+      if (teamType === "doubles") {
+        payload.teams = teams;
+      } else {
+        payload.member_ids = selectedIds;
+      }
+      const res = await tournamentsApi.create(payload);
+      message.success("Đã tạo giải đấu!");
+      onCreated(res.data);
+    } finally { setSaving(false); }
+  };
+
+  const memberCols = [
+    { title: "Họ và tên", dataIndex: "full_name" },
+    { title: "Hạng", dataIndex: "rank", width: 90, render: v => v ? <Tag color="purple">{v}</Tag> : <Text type="secondary">—</Text> },
+    { title: "SĐT", dataIndex: "phone", width: 120 },
+  ];
+
+  const STEPS = [
+    { title: "Thông tin giải" },
+    { title: "Chọn người chơi" },
+    { title: "Ghép đội" },
+    { title: "Xác nhận" },
+  ];
+
+  return (
+    <div style={{ padding: "0 8px" }}>
+      <Steps current={step} style={{ marginBottom: 24 }} size="small" items={STEPS} />
+
+      {/* ── Bước 0: Thông tin giải ── */}
+      <div style={{ display: step === 0 ? "block" : "none" }}>
+        <Form form={form} layout="vertical">
+          <Form.Item name="name" label="Tên giải đấu" rules={[{ required: true, message: "Nhập tên giải đấu" }]}>
+            <Input placeholder="VD: Giải Pickleball CLB Tháng 7/2026" autoFocus />
+          </Form.Item>
+          <Form.Item name="format" label="Thể thức thi đấu" rules={[{ required: true, message: "Chọn thể thức" }]}>
+            <Select placeholder="Chọn thể thức" onChange={setFormat}>
+              {Object.entries(FORMAT_MAP).map(([k, v]) => (
+                <Select.Option key={k} value={k}><Tag color={v.color}>{v.label}</Tag></Select.Option>
+              ))}
+            </Select>
+          </Form.Item>
+          {format === "combined" && (
+            <Form.Item name="num_groups" label="Số bảng" initialValue={2}>
+              <InputNumber min={2} max={8} style={{ width: 120 }} />
+            </Form.Item>
+          )}
+          <Form.Item name="description" label="Mô tả (không bắt buộc)">
+            <Input.TextArea rows={2} />
+          </Form.Item>
+        </Form>
+      </div>
+
+      {/* ── Bước 1: Chọn người chơi ── */}
+      {step === 1 && (
+        <>
+          <Alert
+            message={selectedIds.length >= 2
+              ? `Đã chọn ${selectedIds.length} người chơi`
+              : "Chọn ít nhất 2 người chơi tham gia giải"}
+            type={selectedIds.length >= 2 ? "info" : "warning"}
+            showIcon style={{ marginBottom: 12 }}
+          />
+          <Table
+            rowSelection={{
+              selectedRowKeys: selectedIds,
+              onChange: keys => setSelectedIds(keys),
+            }}
+            columns={memberCols}
+            dataSource={allMembers}
+            rowKey="id"
+            size="small"
+            pagination={{ pageSize: 12 }}
+          />
+        </>
+      )}
+
+      {/* ── Bước 2: Ghép đội ── */}
+      {step === 2 && (
+        <div>
+          {/* Chọn loại đội */}
+          <Row gutter={12} style={{ marginBottom: 16 }}>
+            <Col span={12}>
+              <Card
+                size="small"
+                hoverable
+                onClick={() => setTeamType("singles")}
+                style={{ borderColor: teamType === "singles" ? "#1677ff" : "#d9d9d9", cursor: "pointer" }}
+              >
+                <Space>
+                  <UserOutlined style={{ fontSize: 20, color: teamType === "singles" ? "#1677ff" : "#999" }} />
+                  <div>
+                    <div style={{ fontWeight: 600 }}>Đấu đơn</div>
+                    <Text type="secondary" style={{ fontSize: 12 }}>Mỗi người là 1 đội ({selectedIds.length} đội)</Text>
+                  </div>
+                </Space>
+              </Card>
+            </Col>
+            <Col span={12}>
+              <Card
+                size="small"
+                hoverable
+                onClick={() => setTeamType("doubles")}
+                style={{ borderColor: teamType === "doubles" ? "#1677ff" : "#d9d9d9", cursor: "pointer" }}
+              >
+                <Space>
+                  <TeamOutlined style={{ fontSize: 20, color: teamType === "doubles" ? "#1677ff" : "#999" }} />
+                  <div>
+                    <div style={{ fontWeight: 600 }}>Đấu đôi</div>
+                    <Text type="secondary" style={{ fontSize: 12 }}>2 người ghép thành 1 đội</Text>
+                  </div>
+                </Space>
+              </Card>
+            </Col>
+          </Row>
+
+          {teamType === "singles" && (
+            <Alert
+              type="success" showIcon
+              message={`${selectedIds.length} người chơi → ${selectedIds.length} đội thi đấu`}
+              description="Mỗi người chơi được xem là 1 đội. Lịch thi đấu sẽ được ghép ngẫu nhiên khi bấm 'Sinh lịch'."
+            />
+          )}
+
+          {teamType === "doubles" && (
+            <>
+              <Divider orientation="left" style={{ marginTop: 0 }}>Cách ghép đội đôi</Divider>
+              <Row gutter={8} style={{ marginBottom: 16 }}>
+                <Col span={12}>
+                  <Card
+                    size="small" hoverable
+                    onClick={() => setDoubleMethod("manual")}
+                    style={{ borderColor: doubleMethod === "manual" ? "#1677ff" : "#d9d9d9", cursor: "pointer" }}
+                  >
+                    <div style={{ fontWeight: doubleMethod === "manual" ? 600 : 400 }}>✋ Ghép tay</div>
+                    <Text type="secondary" style={{ fontSize: 12 }}>Tự chọn từng cặp</Text>
+                  </Card>
+                </Col>
+                <Col span={12}>
+                  <Card
+                    size="small" hoverable
+                    onClick={() => setDoubleMethod("by_rank")}
+                    style={{ borderColor: doubleMethod === "by_rank" ? "#1677ff" : "#d9d9d9", cursor: "pointer" }}
+                  >
+                    <div style={{ fontWeight: doubleMethod === "by_rank" ? 600 : 400 }}>⚡ Ghép theo hạng</div>
+                    <Text type="secondary" style={{ fontSize: 12 }}>Quy tắc hạng A + hạng B</Text>
+                  </Card>
+                </Col>
+              </Row>
+
+              {/* Ghép tay */}
+              {doubleMethod === "manual" && (
+                <Card size="small" style={{ marginBottom: 12 }}>
+                  <Row gutter={8} align="middle">
+                    <Col span={10}>
+                      <Select value={pick1} onChange={setPick1} placeholder="Người 1"
+                        style={{ width: "100%" }} allowClear showSearch
+                        filterOption={(inp, opt) => opt.label?.toLowerCase().includes(inp.toLowerCase())}
+                        options={availableForTeam.map(m => ({
+                          value: m.id, label: `${m.full_name}${m.rank ? ` (${m.rank})` : ""}`,
+                        }))}
+                      />
+                    </Col>
+                    <Col span={2} style={{ textAlign: "center" }}>
+                      <Tag color="blue" style={{ margin: 0 }}>+</Tag>
+                    </Col>
+                    <Col span={10}>
+                      <Select value={pick2} onChange={setPick2} placeholder="Người 2"
+                        style={{ width: "100%" }} allowClear showSearch
+                        filterOption={(inp, opt) => opt.label?.toLowerCase().includes(inp.toLowerCase())}
+                        options={availableForTeam.filter(m => m.id !== pick1).map(m => ({
+                          value: m.id, label: `${m.full_name}${m.rank ? ` (${m.rank})` : ""}`,
+                        }))}
+                      />
+                    </Col>
+                    <Col span={2}>
+                      <Button type="primary" onClick={addTeamManual} disabled={!pick1 || !pick2}>Ghép</Button>
+                    </Col>
+                  </Row>
+                </Card>
+              )}
+
+              {/* Ghép theo rank */}
+              {doubleMethod === "by_rank" && (
+                <Card size="small" style={{ marginBottom: 12 }}
+                  title="Quy tắc ghép đội theo hạng"
+                  extra={
+                    <Button type="primary" size="small" onClick={autoTeamByRank}>
+                      ⚡ Tự động ghép đội
+                    </Button>
+                  }
+                >
+                  <Text type="secondary" style={{ display: "block", marginBottom: 8, fontSize: 12 }}>
+                    Mỗi dòng = 1 quy tắc: Hạng A + Hạng B → ghép thành 1 đội đôi.
+                  </Text>
+                  {rankRules.map((rule, i) => (
+                    <Row gutter={8} key={i} align="middle" style={{ marginBottom: 8 }}>
+                      <Col span={10}>
+                        <Select value={rule.rank1} placeholder="Hạng 1" style={{ width: "100%" }}
+                          onChange={v => setRankRules(r => { const n=[...r]; n[i]={...n[i], rank1:v}; return n; })}>
+                          {RANKS.map(r => <Select.Option key={r} value={r}>{r}</Select.Option>)}
+                        </Select>
+                      </Col>
+                      <Col span={2} style={{ textAlign: "center" }}><Tag color="blue">+</Tag></Col>
+                      <Col span={10}>
+                        <Select value={rule.rank2} placeholder="Hạng 2" style={{ width: "100%" }}
+                          onChange={v => setRankRules(r => { const n=[...r]; n[i]={...n[i], rank2:v}; return n; })}>
+                          {RANKS.map(r => <Select.Option key={r} value={r}>{r}</Select.Option>)}
+                        </Select>
+                      </Col>
+                      <Col span={2} style={{ textAlign: "center" }}>
+                        <Button danger size="small" disabled={rankRules.length === 1}
+                          onClick={() => setRankRules(r => r.filter((_, j) => j !== i))}>×</Button>
+                      </Col>
+                    </Row>
+                  ))}
+                  <Button type="dashed" size="small"
+                    onClick={() => setRankRules(r => [...r, { rank1: "", rank2: "" }])}>
+                    + Thêm quy tắc
+                  </Button>
+                </Card>
+              )}
+
+              {/* Danh sách đội đã ghép */}
+              {teams.length > 0 && (
+                <>
+                  <Divider orientation="left" style={{ marginTop: 8 }}>Danh sách đội ({teams.length})</Divider>
+                  <Table
+                    size="small" pagination={false}
+                    dataSource={teams.map((t, i) => ({ ...t, key: i }))}
+                    columns={[
+                      { title: "#", render: (_, __, i) => i + 1, width: 40, align: "center" },
+                      { title: "Tên đội", dataIndex: "team_name" },
+                      { title: "", width: 60, align: "center",
+                        render: (_, __, i) => <Button danger size="small" onClick={() => removeTeam(i)}>Xóa</Button> },
+                    ]}
+                  />
+                </>
+              )}
+
+              {/* Trạng thái ghép đội của từng người */}
+              <Divider orientation="left" style={{ marginTop: 12, fontSize: 12 }}>
+                Trạng thái ({selectedMembers.length} người)
+              </Divider>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {selectedMembers.map(m => {
+                  const paired = usedIds.has(m.id);
+                  const partner = paired
+                    ? teams.find(t => t.member_id === m.id || t.partner_member_id === m.id)
+                    : null;
+                  const partnerName = partner
+                    ? (partner.member_id === m.id
+                        ? selectedMembers.find(x => x.id === partner.partner_member_id)?.full_name
+                        : selectedMembers.find(x => x.id === partner.member_id)?.full_name)
+                    : null;
+                  return (
+                    <Tag
+                      key={m.id}
+                      color={paired ? "green" : "orange"}
+                      style={{ marginBottom: 4 }}
+                      title={paired ? `Đã ghép với: ${partnerName}` : "Chưa có đội"}
+                    >
+                      {paired ? "✓ " : ""}{m.full_name}{m.rank ? ` (${m.rank})` : ""}
+                      {paired && partnerName && <Text style={{ color: "inherit", fontSize: 11 }}> + {partnerName}</Text>}
+                    </Tag>
+                  );
+                })}
+              </div>
+              {availableForTeam.length > 0 && (
+                <Alert
+                  type="warning" showIcon style={{ marginTop: 8 }}
+                  message={`${availableForTeam.length} người chưa có đội — mỗi người chỉ được ghép với 1 người khác`}
+                />
+              )}
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ── Bước 3: Xác nhận ── */}
+      {step === 3 && (
+        <div>
+          {(() => {
+            const vals = form.getFieldsValue();
+            return (
+              <Card style={{ marginBottom: 16 }}>
+                <Row gutter={16}>
+                  <Col span={12}>
+                    <div style={{ marginBottom: 8 }}><Text type="secondary">Tên giải đấu</Text></div>
+                    <div style={{ fontWeight: 600, fontSize: 15 }}>{vals.name}</div>
+                  </Col>
+                  <Col span={12}>
+                    <div style={{ marginBottom: 8 }}><Text type="secondary">Thể thức</Text></div>
+                    <Tag color={FORMAT_MAP[vals.format]?.color}>{FORMAT_MAP[vals.format]?.label}</Tag>
+                  </Col>
+                  <Col span={12} style={{ marginTop: 12 }}>
+                    <div style={{ marginBottom: 8 }}><Text type="secondary">Loại đội</Text></div>
+                    <Tag color={teamType === "doubles" ? "geekblue" : "default"}>
+                      {teamType === "doubles" ? "Đấu đôi" : "Đấu đơn"}
+                    </Tag>
+                  </Col>
+                  <Col span={12} style={{ marginTop: 12 }}>
+                    <div style={{ marginBottom: 8 }}><Text type="secondary">Số đội tham gia</Text></div>
+                    <div style={{ fontWeight: 600, fontSize: 15, color: "#1677ff" }}>{totalTeams} đội</div>
+                  </Col>
+                  {vals.format === "combined" && (
+                    <Col span={12} style={{ marginTop: 12 }}>
+                      <div style={{ marginBottom: 8 }}><Text type="secondary">Số bảng</Text></div>
+                      <div style={{ fontWeight: 600 }}>{vals.num_groups || 2} bảng</div>
+                    </Col>
+                  )}
+                </Row>
+              </Card>
+            );
+          })()}
+          <Alert
+            type="info" showIcon
+            message="Lịch thi đấu sẽ được ghép ngẫu nhiên"
+            description='Sau khi tạo giải, vào chi tiết giải và bấm "Sinh lịch" để tự động xếp lịch thi đấu ngẫu nhiên.'
+          />
+        </div>
+      )}
+
+      <Divider style={{ margin: "16px 0" }} />
+      <Row justify="space-between" align="middle">
+        <Button onClick={onClose}>Hủy</Button>
+        <Space>
+          {step > 0 && <Button onClick={() => setStep(s => s - 1)}>← Quay lại</Button>}
+          {step < 3
+            ? <Button type="primary" onClick={handleNext}>Tiếp theo →</Button>
+            : <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={handleCreate}>
+                Tạo giải đấu
+              </Button>
+          }
+        </Space>
+      </Row>
+    </div>
+  );
+}
+
+// ── Nhập tỉ số ───────────────────────────────────────────
+function ScoreModal({ match, tournament, onSaved, onClose }) {
+  const [s1, setS1] = useState(match?.score1 ?? 0);
+  const [s2, setS2] = useState(match?.score2 ?? 0);
+  const [saving, setSaving] = useState(false);
+
+  const p1Name = teamLabel(match?.p1);
+  const p2Name = teamLabel(match?.p2);
+
+  const handleSave = async () => {
+    const ok = await confirm({
+      title: "Xác nhận nhập kết quả?",
+      content: <div><b>{p1Name}</b> {s1} – {s2} <b>{p2Name}</b></div>,
+    });
+    if (!ok) return;
+    setSaving(true);
+    try {
+      await tournamentsApi.score(tournament.id, match.id, { score1: s1, score2: s2 });
+      message.success("Đã lưu kết quả");
+      onSaved();
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <Modal title={`Nhập kết quả – ${match?.round_name}`} open onCancel={onClose}
+      footer={
+        <Space>
+          <Button onClick={onClose}>Hủy</Button>
+          <Button type="primary" loading={saving} icon={<SaveOutlined />} onClick={handleSave}>Lưu</Button>
+        </Space>
+      }>
+      <Row justify="center" align="middle" gutter={16} style={{ margin: "24px 0" }}>
+        <Col span={9} style={{ textAlign: "center" }}>
+          <Text strong style={{ fontSize: 15 }}>{p1Name}</Text>
+          {match?.p1?.member?.rank && <div><Tag color="purple">{match.p1.member.rank}</Tag></div>}
+        </Col>
+        <Col span={3} style={{ textAlign: "center" }}>
+          <InputNumber min={0} value={s1} onChange={setS1} size="large"
+            style={{ width: 60, textAlign: "center" }} />
+        </Col>
+        <Col span={2} style={{ textAlign: "center", fontSize: 20, color: "#999" }}>–</Col>
+        <Col span={3} style={{ textAlign: "center" }}>
+          <InputNumber min={0} value={s2} onChange={setS2} size="large"
+            style={{ width: 60, textAlign: "center" }} />
+        </Col>
+        <Col span={7} style={{ textAlign: "center" }}>
+          <Text strong style={{ fontSize: 15 }}>{p2Name}</Text>
+          {match?.p2?.member?.rank && <div><Tag color="purple">{match.p2.member.rank}</Tag></div>}
+        </Col>
+      </Row>
+    </Modal>
+  );
+}
+
+// ── Bracket knockout ─────────────────────────────────────
+function KnockoutBracket({ matches }) {
+  const rounds = [...new Set(matches.map(m => m.round_number))].sort((a, b) => a - b);
+
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <div style={{ display: "flex", gap: 24, minWidth: rounds.length * 220 }}>
+        {rounds.map(r => {
+          const rMatches = matches.filter(m => m.round_number === r);
+          const rName = rMatches[0]?.round_name || `Vòng ${r}`;
+          return (
+            <div key={r} style={{ flex: "0 0 200px" }}>
+              <Text strong style={{ display: "block", textAlign: "center", marginBottom: 8, color: "#1677ff" }}>
+                {rName}
+              </Text>
+              <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+                {rMatches.map(m => <BracketCard key={m.id} match={m} />)}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function BracketCard({ match }) {
+  const p1 = teamLabel(match?.p1) || (match?.p1_id ? "?" : "BYE");
+  const p2 = teamLabel(match?.p2) || (match?.p2_id ? "?" : "BYE");
+  const done = match.status === "completed";
+  const w = match.winner_id;
+
+  return (
+    <Card size="small" style={{ borderRadius: 8, borderColor: done ? "#52c41a" : "#d9d9d9" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+        <Text style={{ fontWeight: w === match.p1_id ? 700 : 400, color: w === match.p1_id ? "#52c41a" : "inherit", fontSize: 13 }}>
+          {p1}
+        </Text>
+        <Text style={{ minWidth: 24, textAlign: "center", fontWeight: 700 }}>
+          {done ? match.score1 : "–"}
+        </Text>
+      </div>
+      <Divider style={{ margin: "4px 0" }} />
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <Text style={{ fontWeight: w === match.p2_id ? 700 : 400, color: w === match.p2_id ? "#52c41a" : "inherit", fontSize: 13 }}>
+          {p2}
+        </Text>
+        <Text style={{ minWidth: 24, textAlign: "center", fontWeight: 700 }}>
+          {done ? match.score2 : "–"}
+        </Text>
+      </div>
+    </Card>
+  );
+}
+
+// ── Bảng xếp hạng (W=1, L=0) ────────────────────────────
+function StandingsTable({ tournament, group }) {
+  const [rows, setRows] = useState([]);
+  const doneCount = tournament.matches?.filter(m => m.status === "completed").length ?? 0;
+
+  useEffect(() => {
+    tournamentsApi.standings(tournament.id, group).then(r => setRows(r.data));
+  }, [tournament.id, group, doneCount]);
+
+  const cols = [
+    { title: "#", dataIndex: "rank", width: 40, align: "center",
+      render: v => v <= 2 ? <b style={{ color: v === 1 ? "#faad14" : "#1677ff" }}>{v}</b> : v },
+    { title: "Đội", dataIndex: "team_name", render: (v, r) => v || r.full_name },
+    { title: "T.đấu", dataIndex: "played", width: 55, align: "center" },
+    { title: "Thắng", dataIndex: "won", width: 55, align: "center",
+      render: v => <Text style={{ color: "#52c41a", fontWeight: 600 }}>{v}</Text> },
+    { title: "Thua", dataIndex: "lost", width: 55, align: "center",
+      render: v => <Text style={{ color: "#ff4d4f" }}>{v}</Text> },
+    { title: "BT", dataIndex: "goals_for", width: 45, align: "center" },
+    { title: "BB", dataIndex: "goals_against", width: 45, align: "center" },
+    { title: "Hiệu số", dataIndex: "goal_diff", width: 65, align: "center",
+      render: v => <Text style={{ color: v > 0 ? "#52c41a" : v < 0 ? "#ff4d4f" : "inherit" }}>{v > 0 ? `+${v}` : v}</Text> },
+    { title: "Điểm", dataIndex: "points", width: 55, align: "center",
+      render: v => <b style={{ color: "#1677ff", fontSize: 15 }}>{v}</b> },
+  ];
+
+  return (
+    <Table columns={cols} dataSource={rows} rowKey="participant_id" size="small"
+      pagination={false}
+      rowClassName={(_, i) => i < 2 ? "ant-table-row-selected" : ""}
+    />
+  );
+}
+
+// ── Chi tiết giải đấu ─────────────────────────────────────
+function TournamentDetail({ tournament: initData, onBack, onUpdated }) {
+  const [tournament, setTournament] = useState(initData);
+  const [scoreMatch, setScoreMatch] = useState(null);
+  const [generating, setGenerating] = useState(false);
+  const [startingKO, setStartingKO] = useState(false);
+  const [editNameModal, setEditNameModal] = useState(false);
+  const [editForm] = Form.useForm();
+
+  const reload = useCallback(async () => {
+    const r = await tournamentsApi.get(tournament.id);
+    setTournament(r.data);
+    onUpdated && onUpdated(r.data);
+  }, [tournament.id]);
+
+  const handleStatusChange = async (newStatus) => {
+    const labels = { active: "Đang diễn ra", completed: "Kết thúc", draft: "Nháp" };
+    const ok = await confirm({ title: `Chuyển sang "${labels[newStatus]}"?` });
+    if (!ok) return;
+    await tournamentsApi.update(tournament.id, { status: newStatus });
+    await reload();
+    message.success("Đã cập nhật trạng thái");
+  };
+
+  const handleGenerate = async (shuffle = true) => {
+    const label = shuffle ? "xáo ngẫu nhiên" : "giữ thứ tự";
+    const ok = await confirm({
+      title: "Sinh lịch vòng bảng?",
+      content: `Ghép cặp: ${label}. Lịch cũ (nếu có) sẽ bị thay thế.`,
+    });
+    if (!ok) return;
+    setGenerating(true);
+    try {
+      await tournamentsApi.generate(tournament.id, shuffle);
+      await reload();
+      message.success("Đã tạo lịch thi đấu!");
+    } finally { setGenerating(false); }
+  };
+
+  const handleStartKO = async () => {
+    const ok = await confirm({
+      title: "Lên vòng loại trực tiếp?",
+      content: "Top 2 mỗi bảng sẽ được xếp vào bracket loại trực tiếp. Nhất bảng lẻ vs Nhì bảng chẵn và ngược lại.",
+    });
+    if (!ok) return;
+    setStartingKO(true);
+    try {
+      await tournamentsApi.startKnockout(tournament.id);
+      await reload();
+      message.success("Đã sinh lịch vòng loại!");
+    } catch (e) {
+      message.error(e?.response?.data?.detail || "Lỗi khi tạo vòng loại");
+    } finally { setStartingKO(false); }
+  };
+
+  const handleEditInfo = async () => {
+    const vals = await editForm.validateFields();
+    await tournamentsApi.update(tournament.id, vals);
+    await reload();
+    setEditNameModal(false);
+    message.success("Đã cập nhật thông tin giải");
+  };
+
+  const fmt = tournament.format;
+  const matches = tournament.matches || [];
+  const groupMatches = matches.filter(m => m.phase === "group");
+  const koMatches = matches.filter(m => m.phase === "knockout");
+  const groups = [...new Set(tournament.participants.map(p => p.group_name).filter(Boolean))].sort();
+  const doneCount = matches.filter(m => m.status === "completed").length;
+  const groupDoneCount = groupMatches.filter(m => m.status === "completed").length;
+  const allGroupDone = groupMatches.length > 0 && groupDoneCount === groupMatches.length;
+
+  const matchTableCols = [
+    { title: "Vòng", dataIndex: "round_name", width: 160 },
+    {
+      title: "Đội 1",
+      render: (_, m) => {
+        const name = teamLabel(m.p1);
+        const rank = m.p1?.member?.rank;
+        return name !== "—"
+          ? <span>{name} {rank && <Tag color="purple" style={{ marginLeft: 4 }}>{rank}</Tag>}</span>
+          : <Text type="secondary">Chờ kết quả</Text>;
+      },
+    },
+    {
+      title: "Tỉ số", align: "center", width: 90,
+      render: (_, m) => m.status === "completed"
+        ? <b style={{ fontSize: 16 }}>{m.score1} – {m.score2}</b>
+        : <Tag>Chưa đấu</Tag>,
+    },
+    {
+      title: "Đội 2",
+      render: (_, m) => {
+        const name = teamLabel(m.p2);
+        const rank = m.p2?.member?.rank;
+        return name !== "—"
+          ? <span>{name} {rank && <Tag color="purple" style={{ marginLeft: 4 }}>{rank}</Tag>}</span>
+          : <Text type="secondary">Chờ kết quả</Text>;
+      },
+    },
+    {
+      title: "Kết quả", width: 140,
+      render: (_, m) => m.status === "completed"
+        ? <Tag icon={<CheckCircleOutlined />} color="success">{teamLabel(m.winner) || "Hòa"}</Tag>
+        : null,
+    },
+    {
+      title: "", width: 80, align: "center",
+      render: (_, m) => (
+        <Button size="small" type={m.status === "completed" ? "default" : "primary"}
+          icon={<EditOutlined />}
+          disabled={!m.p1_id || !m.p2_id}
+          onClick={() => setScoreMatch(m)}>
+          {m.status === "completed" ? "Sửa" : "Nhập"}
+        </Button>
+      ),
+    },
+  ];
+
+  const tabItems = [];
+
+  if (fmt === "round_robin" || fmt === "individual") {
+    tabItems.push({
+      key: "schedule",
+      label: `Lịch thi đấu (${doneCount}/${matches.length})`,
+      children: <Table columns={matchTableCols} dataSource={matches} rowKey="id" size="small" pagination={{ pageSize: 15 }} />,
+    });
+    if (fmt === "round_robin") {
+      tabItems.push({
+        key: "standings",
+        label: "Bảng xếp hạng",
+        children: <StandingsTable tournament={tournament} />,
+      });
+    }
+  }
+
+  if (fmt === "knockout") {
+    tabItems.push({
+      key: "bracket",
+      label: "Sơ đồ đấu",
+      children: <KnockoutBracket matches={matches} />,
+    });
+    tabItems.push({
+      key: "schedule",
+      label: `Danh sách trận (${doneCount}/${matches.length})`,
+      children: <Table columns={matchTableCols} dataSource={matches} rowKey="id" size="small" pagination={false} />,
+    });
+  }
+
+  if (fmt === "combined") {
+    tabItems.push({
+      key: "groups",
+      label: `Vòng bảng (${groupDoneCount}/${groupMatches.length})`,
+      children: (
+        <>
+          {allGroupDone && koMatches.length === 0 && (
+            <Alert
+              type="success"
+              showIcon
+              message="Vòng bảng đã hoàn thành!"
+              description="Nhấn nút bên dưới để tự động xếp lịch vòng loại trực tiếp."
+              action={
+                <Button type="primary" icon={<ArrowRightOutlined />} loading={startingKO} onClick={handleStartKO}>
+                  Lên vòng loại →
+                </Button>
+              }
+              style={{ marginBottom: 16 }}
+            />
+          )}
+          <Tabs
+            type="card"
+            items={groups.map(g => ({
+              key: g,
+              label: `Bảng ${g}`,
+              children: (
+                <>
+                  <Table
+                    columns={matchTableCols}
+                    dataSource={groupMatches.filter(m => m.group_name === g)}
+                    rowKey="id" size="small" pagination={false}
+                    style={{ marginBottom: 16 }}
+                  />
+                  <StandingsTable tournament={tournament} group={g} />
+                </>
+              ),
+            }))}
+          />
+        </>
+      ),
+    });
+    if (koMatches.length > 0) {
+      tabItems.push({
+        key: "knockout",
+        label: `Vòng loại (${koMatches.filter(m => m.status === "completed").length}/${koMatches.length})`,
+        children: (
+          <>
+            <KnockoutBracket matches={koMatches} />
+            <Divider />
+            <Table columns={matchTableCols} dataSource={koMatches} rowKey="id" size="small" pagination={false} />
+          </>
+        ),
+      });
+    }
+  }
+
+  return (
+    <div>
+      <Row justify="space-between" align="middle" style={{ marginBottom: 16 }}>
+        <Space wrap>
+          <Button onClick={onBack}>← Quay lại</Button>
+          <Title level={4} style={{ margin: 0 }}>{tournament.name}</Title>
+          <Badge status={STATUS_MAP[tournament.status]?.color} text={STATUS_MAP[tournament.status]?.label} />
+          <Tag color={FORMAT_MAP[fmt]?.color}>{FORMAT_MAP[fmt]?.label}</Tag>
+          <Tag color={tournament.team_type === "doubles" ? "geekblue" : "default"}>
+            {tournament.team_type === "doubles" ? "Đấu đôi" : "Đấu đơn"}
+          </Tag>
+          <Button size="small" icon={<EditOutlined />} onClick={() => {
+            editForm.setFieldsValue({ name: tournament.name, description: tournament.description });
+            setEditNameModal(true);
+          }}>Sửa tên</Button>
+        </Space>
+        <Space wrap>
+          {tournament.status === "active" && (
+            <Button icon={<CheckCircleOutlined />} onClick={() => handleStatusChange("completed")}>
+              Kết thúc giải
+            </Button>
+          )}
+          {tournament.status === "completed" && (
+            <Button onClick={() => handleStatusChange("active")}>Mở lại giải</Button>
+          )}
+          <Button icon={<ReloadOutlined />} onClick={reload}>Làm mới</Button>
+          {fmt !== "combined" && (
+            <Button icon={<ThunderboltOutlined />} loading={generating} onClick={() => handleGenerate(false)}>
+              Sinh lịch (giữ thứ tự)
+            </Button>
+          )}
+          <Button type="primary" icon={<ThunderboltOutlined />} loading={generating} onClick={() => handleGenerate(true)}>
+            {fmt === "combined" ? "Sinh lịch vòng bảng" : "Random & Sinh lịch"}
+          </Button>
+        </Space>
+      </Row>
+
+      <Row gutter={16} style={{ marginBottom: 16 }}>
+        <Col xs={6}>
+          <Card size="small">
+            <Statistic title="Số đội" value={tournament.participants.length} prefix={<TrophyOutlined />} />
+          </Card>
+        </Col>
+        <Col xs={6}>
+          <Card size="small">
+            <Statistic title="Tổng trận" value={matches.length} />
+          </Card>
+        </Col>
+        <Col xs={6}>
+          <Card size="small">
+            <Statistic title="Đã thi đấu" value={doneCount} styles={{ content: { color: "#52c41a" } }} />
+          </Card>
+        </Col>
+        <Col xs={6}>
+          <Card size="small">
+            <Statistic title="Còn lại" value={matches.length - doneCount}
+              styles={{ content: { color: matches.length - doneCount > 0 ? "#faad14" : "#52c41a" } }} />
+          </Card>
+        </Col>
+      </Row>
+
+      {matches.length === 0 ? (
+        <Card>
+          <Empty
+            description={fmt === "combined" ? "Nhấn 'Sinh lịch vòng bảng' để bắt đầu." : "Nhấn 'Random & Sinh lịch' để bắt đầu."}
+            image={Empty.PRESENTED_IMAGE_SIMPLE}>
+            <Button type="primary" icon={<ThunderboltOutlined />} loading={generating} onClick={() => handleGenerate(true)}>
+              {fmt === "combined" ? "Sinh lịch vòng bảng" : "Random & Sinh lịch"}
+            </Button>
+          </Empty>
+        </Card>
+      ) : (
+        <Tabs items={tabItems} />
+      )}
+
+      {scoreMatch && (
+        <ScoreModal
+          match={scoreMatch}
+          tournament={tournament}
+          onSaved={() => { setScoreMatch(null); reload(); }}
+          onClose={() => setScoreMatch(null)}
+        />
+      )}
+
+      <Modal title="Sửa thông tin giải đấu" open={editNameModal}
+        onCancel={() => setEditNameModal(false)}
+        onOk={handleEditInfo} okText="Lưu" cancelText="Hủy">
+        <Form form={editForm} layout="vertical" style={{ marginTop: 16 }}>
+          <Form.Item name="name" label="Tên giải đấu" rules={[{ required: true }]}>
+            <Input />
+          </Form.Item>
+          <Form.Item name="description" label="Mô tả">
+            <Input.TextArea rows={2} />
+          </Form.Item>
+        </Form>
+      </Modal>
+    </div>
+  );
+}
+
+// ── Trang chính ───────────────────────────────────────────
+export default function Tournament() {
+  const [tournaments, setTournaments] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [detail, setDetail] = useState(null);
+
+  const load = async () => {
+    setLoading(true);
+    try { const r = await tournamentsApi.list(); setTournaments(r.data); }
+    finally { setLoading(false); }
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const handleDelete = async (t) => {
+    const ok = await confirm({
+      title: "Xác nhận xóa giải đấu?",
+      content: <div>Giải <b>{t.name}</b> và toàn bộ kết quả sẽ bị xóa vĩnh viễn.</div>,
+      okButtonProps: { danger: true }, okText: "Xóa",
+    });
+    if (!ok) return;
+    await tournamentsApi.delete(t.id);
+    message.success("Đã xóa giải đấu");
+    load();
+  };
+
+  const columns = [
+    { title: "Tên giải đấu", dataIndex: "name", render: (v, r) => <a onClick={() => setDetail(r)}>{v}</a> },
+    { title: "Thể thức", dataIndex: "format", render: v => <Tag color={FORMAT_MAP[v]?.color}>{FORMAT_MAP[v]?.label}</Tag> },
+    { title: "Loại đội", dataIndex: "team_type", width: 90,
+      render: v => <Tag color={v === "doubles" ? "geekblue" : "default"}>{v === "doubles" ? "Đấu đôi" : "Đấu đơn"}</Tag> },
+    { title: "Trạng thái", dataIndex: "status", render: v => <Badge status={STATUS_MAP[v]?.color} text={STATUS_MAP[v]?.label} /> },
+    { title: "Đội", render: (_, r) => r.participants?.length || 0, align: "center", width: 60 },
+    {
+      title: "Tiến độ", render: (_, r) => {
+        const total = r.matches?.length || 0;
+        const done = r.matches?.filter(m => m.status === "completed").length || 0;
+        return total ? <Text>{done}/{total} trận</Text> : <Text type="secondary">Chưa sinh lịch</Text>;
+      },
+    },
+    {
+      title: "Thao tác", width: 120,
+      render: (_, r) => (
+        <Space>
+          <Button size="small" type="primary" onClick={() => setDetail(r)}>Mở</Button>
+          <Button size="small" danger icon={<DeleteOutlined />} onClick={() => handleDelete(r)} />
+        </Space>
+      ),
+    },
+  ];
+
+  if (detail) {
+    return (
+      <TournamentDetail
+        tournament={detail}
+        onBack={() => { setDetail(null); load(); }}
+        onUpdated={(t) => setDetail(t)}
+      />
+    );
+  }
+
+  return (
+    <div>
+      <Row justify="space-between" align="middle" style={{ marginBottom: 16 }}>
+        <Title level={3} style={{ margin: 0 }}>Quản lý Giải đấu</Title>
+        <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreating(true)}>
+          Tạo giải đấu mới
+        </Button>
+      </Row>
+
+      <Table
+        columns={columns}
+        dataSource={tournaments}
+        rowKey="id"
+        loading={loading}
+        size="small"
+        pagination={{ pageSize: 10 }}
+        locale={{ emptyText: <Empty description="Chưa có giải đấu nào." image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
+      />
+
+      <Modal
+        title="Tạo giải đấu mới"
+        open={creating}
+        onCancel={() => setCreating(false)}
+        footer={null}
+        width={700}
+        destroyOnHidden
+      >
+        <CreateWizard
+          onCreated={(t) => { setCreating(false); setDetail(t); load(); }}
+          onClose={() => setCreating(false)}
+        />
+      </Modal>
+    </div>
+  );
+}
