@@ -1,14 +1,29 @@
 #!/bin/sh
-# Entrypoint cho container Fly.io: chạy backend + bot cùng lúc
+# Entrypoint: khởi động backend FastAPI trước, sau đó khởi động bot
 
-# Khởi động Telegram bot nếu có đủ biến môi trường
+# Khởi động backend (background tạm thời để đợi)
+echo "🚀 Khởi động backend FastAPI..."
+uvicorn main:app --host 0.0.0.0 --port "${PORT:-8000}" --app-dir /app &
+BACKEND_PID=$!
+
+# Đợi backend sẵn sàng (tối đa 30 giây)
+echo "⏳ Đợi backend khởi động..."
+for i in $(seq 1 30); do
+  if wget -q -O /dev/null "http://localhost:${PORT:-8000}/api/club/status" 2>/dev/null; then
+    echo "✅ Backend sẵn sàng sau ${i}s"
+    break
+  fi
+  sleep 1
+done
+
+# Khởi động bot nếu có đủ biến môi trường
 if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$GROQ_API_KEY" ] && [ -n "$BOT_USERNAME" ] && [ -n "$BOT_PASSWORD" ]; then
   echo "🤖 Khởi động Telegram bot..."
   cd /bot && python bot.py &
+  BOT_PID=$!
 else
-  echo "⚠️  Thiếu TELEGRAM_BOT_TOKEN / ANTHROPIC_API_KEY / BOT_USERNAME / BOT_PASSWORD — bỏ qua bot."
+  echo "⚠️  Thiếu biến môi trường bot — bỏ qua."
 fi
 
-# Khởi động backend (foreground — process chính)
-echo "🚀 Khởi động backend FastAPI..."
-exec uvicorn main:app --host 0.0.0.0 --port "${PORT:-8000}" --app-dir /app
+# Chờ backend (process chính)
+wait $BACKEND_PID
