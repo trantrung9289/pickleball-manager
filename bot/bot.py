@@ -685,15 +685,35 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     needs_tool = any(kw in text.lower() for kw in DATA_KEYWORDS)
 
+    # Phát hiện ý định xóa mà không có ID số cụ thể
+    # → ép gọi list trước để lấy ID thực thay vì gọi delete với placeholder
+    import re as _re
+    _text_lower = text.lower()
+    _has_delete_intent = any(kw in _text_lower for kw in ("xóa", "xoá", "hủy", "huỷ"))
+    _has_explicit_id = bool(_re.search(r'\b\d+\b', text))
+    if _has_delete_intent and not _has_explicit_id:
+        if "thành viên" in _text_lower or "member" in _text_lower:
+            _force_list_tool = {"type": "function", "function": {"name": "list_members"}}
+        else:
+            _force_list_tool = {"type": "function", "function": {"name": "list_transactions"}}
+    else:
+        _force_list_tool = None
+
     try:
         for turn in range(10):
-            # Lần đầu: nếu tin nhắn liên quan dữ liệu → bắt buộc gọi tool
-            force_tool = (turn == 0 and needs_tool)
+            # Lần đầu: nếu cần xóa nhưng chưa có ID → ép list trước
+            # Nếu cần dữ liệu khác → bắt buộc gọi tool (required)
+            if turn == 0 and _force_list_tool:
+                tool_choice = _force_list_tool
+            elif turn == 0 and needs_tool:
+                tool_choice = "required"
+            else:
+                tool_choice = "auto"
             response = groq_client.chat.completions.create(
                 model="llama-3.3-70b-versatile",
                 messages=messages,
                 tools=TOOLS,
-                tool_choice="required" if force_tool else "auto",
+                tool_choice=tool_choice,
                 max_tokens=1024,
             )
             msg = response.choices[0].message
