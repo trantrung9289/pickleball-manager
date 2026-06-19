@@ -60,6 +60,7 @@ export const membersApi = {
   create: (data) => api.post("/api/members", data),
   update: (id, data) => api.put(`/api/members/${id}`, data),
   delete: (id) => api.delete(`/api/members/${id}`),
+  exportExcel: () => api.get("/api/members/export", { responseType: "blob" }),
   downloadTemplate: () => api.get("/api/members/template", { responseType: "blob" }),
   importExcel: (file) => {
     const form = new FormData();

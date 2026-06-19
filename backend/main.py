@@ -588,6 +588,82 @@ def import_members_excel(
     }
 
 
+@app.get("/api/members/export")
+def export_members_excel(
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    """Xuất danh sách thành viên ra file Excel."""
+    perms.require_view()
+    members = db.query(models.Member).filter(
+        models.Member.club_id == perms.club_id
+    ).order_by(models.Member.id).all()
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Danh sách thành viên"
+
+    headers = ["Mã thành viên", "Họ và tên", "Ngày sinh", "Số điện thoại",
+               "Email", "Ngày vào CLB", "Trạng thái", "Hạng", "Địa chỉ", "Ghi chú"]
+    col_widths = [15, 25, 14, 16, 28, 14, 12, 15, 30, 30]
+
+    header_fill = PatternFill("solid", fgColor="1677FF")
+    header_font = Font(bold=True, color="FFFFFF", name="Arial", size=11)
+    thin = Side(style="thin", color="CCCCCC")
+    cell_border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    status_map = {"active": "Hoạt động", "inactive": "Tạm nghỉ", "suspended": "Đình chỉ"}
+
+    for col, (h, w) in enumerate(zip(headers, col_widths), start=1):
+        cell = ws.cell(row=1, column=col, value=h)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        cell.border = cell_border
+        ws.column_dimensions[cell.column_letter].width = w
+    ws.row_dimensions[1].height = 28
+
+    even_fill = PatternFill("solid", fgColor="F5F9FF")
+    normal_font = Font(name="Arial", size=10)
+
+    for row_idx, m in enumerate(members, start=2):
+        fill = even_fill if row_idx % 2 == 0 else None
+        row_data = [
+            m.member_code or "",
+            m.full_name,
+            m.dob.strftime("%d/%m/%Y") if m.dob else "",
+            m.phone or "",
+            m.email or "",
+            m.join_date.strftime("%d/%m/%Y") if m.join_date else "",
+            status_map.get(m.status.value if hasattr(m.status, "value") else m.status, m.status),
+            m.rank or "",
+            m.address or "",
+            m.notes or "",
+        ]
+        for col, val in enumerate(row_data, start=1):
+            cell = ws.cell(row=row_idx, column=col, value=val)
+            cell.font = normal_font
+            cell.border = cell_border
+            cell.alignment = Alignment(vertical="center")
+            if fill:
+                cell.fill = fill
+        ws.row_dimensions[row_idx].height = 20
+
+    # Freeze header row
+    ws.freeze_panes = "A2"
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    from datetime import date as _date
+    filename = f"thanh-vien-{_date.today().strftime('%Y-%m-%d')}.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
 # ── FEE TYPES ─────────────────────────────────────────────
 @app.get("/api/fee-types", response_model=List[schemas.FeeTypeOut])
 def list_fee_types(

@@ -8,7 +8,7 @@ import {
   PlusOutlined, EditOutlined, DeleteOutlined, SearchOutlined,
   SaveOutlined, InfoCircleOutlined, DownloadOutlined,
   FileExcelOutlined, UploadOutlined, CheckCircleOutlined,
-  CloseCircleOutlined, WarningOutlined,
+  CloseCircleOutlined, WarningOutlined, FileAddOutlined,
 } from "@ant-design/icons";
 import dayjs from "dayjs";
 import { membersApi } from "../api";
@@ -163,24 +163,18 @@ export default function Members() {
     return false; // ngăn Upload tự upload
   };
 
-  const exportCSV = () => {
-    const headers = ["Mã TV,Họ tên,Điện thoại,Email,Hạng,Ngày tham gia,Trạng thái,Địa chỉ,Ghi chú"];
-    const rows = data.map(r => [
-      r.member_code,
-      `"${r.full_name}"`,
-      r.phone || "",
-      r.email || "",
-      r.rank || "",
-      r.join_date ? dayjs(r.join_date).format("DD/MM/YYYY") : "",
-      STATUS_MAP[r.status]?.label || r.status,
-      `"${(r.address || "").replace(/"/g, '""')}"`,
-      `"${(r.notes || "").replace(/"/g, '""')}"`,
-    ].join(","));
-    const blob = new Blob(["﻿" + [headers, ...rows].join("\n")], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a"); a.href = url;
-    a.download = `thanh-vien-${dayjs().format("YYYY-MM-DD")}.csv`;
-    a.click(); URL.revokeObjectURL(url);
+  const handleExportExcel = async () => {
+    try {
+      const res = await membersApi.exportExcel();
+      const url = URL.createObjectURL(new Blob([res.data]));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `thanh-vien-${dayjs().format("YYYY-MM-DD")}.xlsx`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      message.error("Không thể xuất file Excel");
+    }
   };
 
   const columns = [
@@ -234,7 +228,7 @@ export default function Members() {
       <Row justify="space-between" align="middle" style={{ marginBottom: 16 }}>
         <Title level={3} style={{ margin: 0 }}>Quản lý thành viên</Title>
         <Space>
-          <Button icon={<DownloadOutlined />} onClick={exportCSV}>Xuất CSV</Button>
+          <Button icon={<FileExcelOutlined />} onClick={handleExportExcel}>Xuất Excel</Button>
           <Button icon={<FileExcelOutlined />} style={{ color: "#52c41a", borderColor: "#52c41a" }} onClick={() => { setImportResult(null); setImportOpen(true); }}>
             Nhập từ Excel
           </Button>
