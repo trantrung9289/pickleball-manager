@@ -9,3 +9,9 @@ backend/clb.db
 **/*.pyc
 .env.local
 .DS_Store
+
+# Tài liệu Word
+*.docx
+
+# Claude Code local settings
+.claude/settings.local.json
