@@ -86,7 +86,7 @@ def _setup_bot_user():
         if not existing:
             bot_user = models.User(
                 username=bot_username,
-                hashed_password=hash_password(bot_password),
+                password_hash=hash_password(bot_password),
                 full_name="Telegram Bot",
                 role=models.UserRole.admin,
                 is_superuser=False,
@@ -109,7 +109,7 @@ def _setup_bot_user():
             print(f"[bot] Đã tạo tài khoản bot '{bot_username}'")
         else:
             # Cập nhật password nếu đổi
-            existing.hashed_password = hash_password(bot_password)
+            existing.password_hash = hash_password(bot_password)
             # Đảm bảo có membership trong tất cả CLB
             clubs = db.query(models.Club).all()
             for club in clubs:
