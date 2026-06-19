@@ -1,6 +1,6 @@
 """
-Telegram Bot cho CLB Pickleball — tích hợp Claude API với Tool Use.
-Chạy độc lập bên cạnh backend FastAPI.
+Telegram Bot cho CLB Pickleball — tích hợp Groq API (Llama 3.3 70B) với Tool Use.
+Groq miễn phí: 14.400 request/ngày.
 """
 import asyncio
 import json
@@ -9,7 +9,7 @@ import os
 from datetime import datetime
 
 import httpx
-from anthropic import Anthropic
+from groq import Groq
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
@@ -18,13 +18,13 @@ logger = logging.getLogger(__name__)
 
 # ── Cấu hình ──────────────────────────────────────────────────────────────────
 TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
+GROQ_API_KEY = os.environ["GROQ_API_KEY"]
 BACKEND_URL = os.environ.get("BACKEND_URL", "http://localhost:8000")
-BOT_USERNAME = os.environ["BOT_USERNAME"]    # Username tài khoản bot trong hệ thống
-BOT_PASSWORD = os.environ["BOT_PASSWORD"]    # Password tài khoản bot
+BOT_USERNAME = os.environ["BOT_USERNAME"]
+BOT_PASSWORD = os.environ["BOT_PASSWORD"]
 BOT_CLUB_ID = os.environ.get("BOT_CLUB_ID", "1")
 
-anthropic = Anthropic(api_key=ANTHROPIC_API_KEY)
+groq_client = Groq(api_key=GROQ_API_KEY)
 
 # ── JWT tự động refresh ───────────────────────────────────────────────────────
 _jwt_token: str | None = None
@@ -32,11 +32,10 @@ _jwt_expires_at: float = 0
 
 
 async def get_jwt_token() -> str:
-    """Lấy JWT token, tự đăng nhập lại nếu hết hạn."""
     import time
     global _jwt_token, _jwt_expires_at
 
-    if _jwt_token and time.time() < _jwt_expires_at - 3600:  # còn hơn 1 giờ
+    if _jwt_token and time.time() < _jwt_expires_at - 3600:
         return _jwt_token
 
     async with httpx.AsyncClient(timeout=10) as client:
@@ -48,12 +47,11 @@ async def get_jwt_token() -> str:
             raise RuntimeError(f"Bot login thất bại: {resp.text}")
         data = resp.json()
         _jwt_token = data["access_token"]
-        _jwt_expires_at = time.time() + 6 * 24 * 3600  # refresh sau 6 ngày
+        _jwt_expires_at = time.time() + 6 * 24 * 3600
         logger.info("Bot đăng nhập thành công")
         return _jwt_token
 
 
-# ── HTTP client gọi backend ───────────────────────────────────────────────────
 async def backend_headers() -> dict:
     token = await get_jwt_token()
     return {
@@ -63,7 +61,6 @@ async def backend_headers() -> dict:
 
 
 async def call_backend(method: str, path: str, **kwargs) -> dict:
-    """Gọi backend API, trả về dict kết quả hoặc raise với message lỗi."""
     url = f"{BACKEND_URL}{path}"
     headers = await backend_headers()
     async with httpx.AsyncClient(timeout=15) as client:
@@ -79,94 +76,117 @@ async def call_backend(method: str, path: str, **kwargs) -> dict:
         return resp.json()
 
 
-# ── Tool definitions cho Claude ───────────────────────────────────────────────
+# ── Tool definitions (OpenAI format cho Groq) ─────────────────────────────────
 TOOLS = [
     {
-        "name": "get_overview",
-        "description": "Lấy tổng quan CLB: số thành viên, tổng thu, tổng chi, số dư.",
-        "input_schema": {"type": "object", "properties": {}, "required": []},
+        "type": "function",
+        "function": {
+            "name": "get_overview",
+            "description": "Lấy tổng quan CLB: số thành viên, tổng thu, tổng chi, số dư.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
     },
     {
-        "name": "list_members",
-        "description": "Xem danh sách thành viên. Có thể lọc theo trạng thái.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "status": {"type": "string", "enum": ["active", "inactive"], "description": "Lọc theo trạng thái (bỏ trống = tất cả)"},
-                "search": {"type": "string", "description": "Tìm theo tên hoặc mã thành viên"},
+        "type": "function",
+        "function": {
+            "name": "list_members",
+            "description": "Xem danh sách thành viên. Có thể lọc theo trạng thái hoặc tìm kiếm.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "status": {"type": "string", "enum": ["active", "inactive"], "description": "Lọc theo trạng thái"},
+                    "search": {"type": "string", "description": "Tìm theo tên hoặc mã thành viên"},
+                },
             },
         },
     },
     {
-        "name": "add_member",
-        "description": "Thêm thành viên mới vào CLB.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "full_name": {"type": "string", "description": "Họ và tên"},
-                "phone": {"type": "string", "description": "Số điện thoại"},
-                "email": {"type": "string", "description": "Email (tuỳ chọn)"},
-                "rank": {"type": "string", "description": "Hạng: beginner, intermediate, advanced, pro"},
-                "join_date": {"type": "string", "description": "Ngày tham gia YYYY-MM-DD (mặc định hôm nay)"},
+        "type": "function",
+        "function": {
+            "name": "add_member",
+            "description": "Thêm thành viên mới vào CLB.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "full_name": {"type": "string", "description": "Họ và tên"},
+                    "phone": {"type": "string", "description": "Số điện thoại"},
+                    "email": {"type": "string", "description": "Email (tuỳ chọn)"},
+                    "rank": {"type": "string", "description": "Hạng: beginner, intermediate, advanced, pro"},
+                    "join_date": {"type": "string", "description": "Ngày tham gia YYYY-MM-DD"},
+                },
+                "required": ["full_name"],
             },
-            "required": ["full_name"],
         },
     },
     {
-        "name": "list_fee_types",
-        "description": "Xem danh mục khoản thu/chi.",
-        "input_schema": {"type": "object", "properties": {}, "required": []},
-    },
-    {
-        "name": "record_transaction",
-        "description": "Ghi nhận giao dịch thu hoặc chi.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "fee_type_name": {"type": "string", "description": "Tên khoản thu/chi (phải khớp với danh mục)"},
-                "amount": {"type": "number", "description": "Số tiền (VNĐ)"},
-                "member_name": {"type": "string", "description": "Tên thành viên (nếu là khoản thu từ thành viên)"},
-                "transaction_date": {"type": "string", "description": "Ngày giao dịch YYYY-MM-DD (mặc định hôm nay)"},
-                "payment_method": {"type": "string", "description": "Phương thức: Tiền mặt, Chuyển khoản, Momo"},
-                "description": {"type": "string", "description": "Ghi chú thêm"},
-            },
-            "required": ["fee_type_name", "amount"],
+        "type": "function",
+        "function": {
+            "name": "list_fee_types",
+            "description": "Xem danh mục khoản thu/chi.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
     {
-        "name": "get_monthly_report",
-        "description": "Báo cáo thu chi theo tháng.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "month": {"type": "integer", "description": "Tháng (1-12)"},
-                "year": {"type": "integer", "description": "Năm"},
+        "type": "function",
+        "function": {
+            "name": "record_transaction",
+            "description": "Ghi nhận giao dịch thu hoặc chi.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "fee_type_name": {"type": "string", "description": "Tên khoản thu/chi"},
+                    "amount": {"type": "number", "description": "Số tiền (VNĐ)"},
+                    "member_name": {"type": "string", "description": "Tên thành viên (nếu là khoản thu)"},
+                    "transaction_date": {"type": "string", "description": "Ngày giao dịch YYYY-MM-DD"},
+                    "payment_method": {"type": "string", "description": "Phương thức: Tiền mặt, Chuyển khoản, Momo"},
+                    "description": {"type": "string", "description": "Ghi chú"},
+                },
+                "required": ["fee_type_name", "amount"],
             },
-            "required": ["month", "year"],
         },
     },
     {
-        "name": "get_fee_status",
-        "description": "Kiểm tra trạng thái đóng phí của thành viên trong tháng.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "month": {"type": "integer", "description": "Tháng"},
-                "year": {"type": "integer", "description": "Năm"},
-                "fee_type_name": {"type": "string", "description": "Tên loại phí (tuỳ chọn)"},
+        "type": "function",
+        "function": {
+            "name": "get_monthly_report",
+            "description": "Báo cáo thu chi theo tháng.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "month": {"type": "integer", "description": "Tháng (1-12)"},
+                    "year": {"type": "integer", "description": "Năm"},
+                },
+                "required": ["month", "year"],
             },
-            "required": ["month", "year"],
         },
     },
     {
-        "name": "list_transactions",
-        "description": "Xem danh sách giao dịch, có thể lọc theo tháng/năm.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "month": {"type": "integer"},
-                "year": {"type": "integer"},
-                "type": {"type": "string", "enum": ["income", "expense"]},
+        "type": "function",
+        "function": {
+            "name": "get_fee_status",
+            "description": "Kiểm tra trạng thái đóng phí của thành viên trong tháng.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "month": {"type": "integer", "description": "Tháng"},
+                    "year": {"type": "integer", "description": "Năm"},
+                },
+                "required": ["month", "year"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_transactions",
+            "description": "Xem danh sách giao dịch, có thể lọc theo tháng/năm/loại.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "month": {"type": "integer"},
+                    "year": {"type": "integer"},
+                    "type": {"type": "string", "enum": ["income", "expense"]},
+                },
             },
         },
     },
@@ -174,6 +194,13 @@ TOOLS = [
 
 
 # ── Tool executor ─────────────────────────────────────────────────────────────
+def fmt_money(amount) -> str:
+    try:
+        return f"{int(float(amount)):,}đ".replace(",", ".")
+    except Exception:
+        return str(amount)
+
+
 async def execute_tool(name: str, inputs: dict) -> str:
     try:
         if name == "get_overview":
@@ -197,9 +224,9 @@ async def execute_tool(name: str, inputs: dict) -> str:
                 return "Không có thành viên nào."
             lines = [f"👥 Danh sách thành viên ({len(members)} người):"]
             for m in members[:20]:
-                status_icon = "✅" if m["status"] == "active" else "⏸"
-                lines.append(f"{status_icon} {m['member_code']} — {m['full_name']}" +
-                             (f" ({m['phone']})" if m.get("phone") else ""))
+                icon = "✅" if m["status"] == "active" else "⏸"
+                phone = f" ({m['phone']})" if m.get("phone") else ""
+                lines.append(f"{icon} {m['member_code']} — {m['full_name']}{phone}")
             if len(members) > 20:
                 lines.append(f"... và {len(members)-20} người khác")
             return "\n".join(lines)
@@ -210,12 +237,9 @@ async def execute_tool(name: str, inputs: dict) -> str:
                 "status": "active",
                 "join_date": inputs.get("join_date") or datetime.now().strftime("%Y-%m-%d"),
             }
-            if inputs.get("phone"):
-                payload["phone"] = inputs["phone"]
-            if inputs.get("email"):
-                payload["email"] = inputs["email"]
-            if inputs.get("rank"):
-                payload["rank"] = inputs["rank"]
+            for f in ["phone", "email", "rank"]:
+                if inputs.get(f):
+                    payload[f] = inputs[f]
             member = await call_backend("post", "/api/members", json=payload)
             return (
                 f"✅ Đã thêm thành viên:\n"
@@ -245,7 +269,6 @@ async def execute_tool(name: str, inputs: dict) -> str:
             return "\n".join(lines)
 
         elif name == "record_transaction":
-            # Tìm fee_type_id từ tên
             fee_types = await call_backend("get", "/api/fee-types")
             fee_type = next(
                 (f for f in fee_types if inputs["fee_type_name"].lower() in f["name"].lower()),
@@ -263,18 +286,16 @@ async def execute_tool(name: str, inputs: dict) -> str:
                 "payment_method": inputs.get("payment_method", "Tiền mặt"),
                 "description": inputs.get("description", ""),
             }
-
-            # Tìm member_id nếu có tên thành viên
             if inputs.get("member_name"):
                 members = await call_backend("get", "/api/members", params={"search": inputs["member_name"]})
                 if members:
                     payload["member_id"] = members[0]["id"]
 
             tx = await call_backend("post", "/api/transactions", json=payload)
-            type_label = "thu" if tx["type"] == "income" else "chi"
+            type_label = "THU" if tx["type"] == "income" else "CHI"
             return (
                 f"✅ Đã ghi nhận giao dịch:\n"
-                f"• Loại: {type_label.upper()}\n"
+                f"• Loại: {type_label}\n"
                 f"• Khoản: {fee_type['name']}\n"
                 f"• Số tiền: {fmt_money(tx['amount'])}\n"
                 f"• Ngày: {tx['transaction_date']}\n"
@@ -322,13 +343,7 @@ async def execute_tool(name: str, inputs: dict) -> str:
             return "\n".join(lines)
 
         elif name == "list_transactions":
-            params = {}
-            if inputs.get("month"):
-                params["month"] = inputs["month"]
-            if inputs.get("year"):
-                params["year"] = inputs["year"]
-            if inputs.get("type"):
-                params["type"] = inputs["type"]
+            params = {k: v for k, v in inputs.items() if v is not None}
             txs = await call_backend("get", "/api/transactions", params=params)
             if not txs:
                 return "Không có giao dịch nào."
@@ -338,7 +353,7 @@ async def execute_tool(name: str, inputs: dict) -> str:
             for t in txs[:15]:
                 icon = "💚" if t["type"] == "income" else "🔴"
                 fee_name = t.get("fee_type", {}).get("name", "?") if isinstance(t.get("fee_type"), dict) else "?"
-                member = t.get("member", {})
+                member = t.get("member") or {}
                 member_name = member.get("full_name", "") if isinstance(member, dict) else ""
                 lines.append(
                     f"{icon} {t['transaction_date']} — {fee_name}: {fmt_money(t['amount'])}"
@@ -348,8 +363,7 @@ async def execute_tool(name: str, inputs: dict) -> str:
                 lines.append(f"... và {len(txs)-15} giao dịch khác")
             return "\n".join(lines)
 
-        else:
-            return f"Tool '{name}' chưa được hỗ trợ."
+        return f"Tool '{name}' chưa được hỗ trợ."
 
     except ValueError as e:
         return f"❌ {e}"
@@ -358,71 +372,64 @@ async def execute_tool(name: str, inputs: dict) -> str:
         return f"❌ Lỗi hệ thống: {e}"
 
 
-def fmt_money(amount) -> str:
-    try:
-        return f"{int(float(amount)):,}đ".replace(",", ".")
-    except Exception:
-        return str(amount)
-
-
-# ── Conversation history (per user) ──────────────────────────────────────────
-# Giữ tối đa 20 tin nhắn gần nhất mỗi user
+# ── Conversation history ──────────────────────────────────────────────────────
 _history: dict[int, list] = {}
 MAX_HISTORY = 20
 
-SYSTEM_PROMPT = f"""Bạn là trợ lý quản lý CLB Pickleball.
-Ngày hôm nay: {datetime.now().strftime("%d/%m/%Y")}.
+SYSTEM_PROMPT = f"""Bạn là trợ lý quản lý CLB Pickleball. Hôm nay: {datetime.now().strftime("%d/%m/%Y")}.
 Trả lời bằng tiếng Việt, ngắn gọn, rõ ràng.
-Khi cần thông tin từ hệ thống, hãy dùng tool được cung cấp.
-Với các thao tác thêm/sửa/xóa, luôn xác nhận rõ thông tin trước khi thực hiện.
-Định dạng số tiền bằng VNĐ (ví dụ: 500.000đ).
-"""
+Khi cần thông tin từ hệ thống, dùng tool được cung cấp.
+Định dạng số tiền bằng VNĐ (ví dụ: 500.000đ)."""
 
 
 async def process_message(user_id: int, user_text: str) -> str:
-    """Gửi tin nhắn qua Claude với Tool Use, trả về response cuối."""
     history = _history.setdefault(user_id, [])
     history.append({"role": "user", "content": user_text})
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}] + history[-MAX_HISTORY:]
 
-    messages = history[-MAX_HISTORY:]
-
-    # Agentic loop — Claude có thể gọi nhiều tool
-    for _ in range(10):  # tối đa 10 vòng tool call
-        response = anthropic.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=1024,
-            system=SYSTEM_PROMPT,
-            tools=TOOLS,
+    for _ in range(10):
+        response = groq_client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
             messages=messages,
+            tools=TOOLS,
+            tool_choice="auto",
+            max_tokens=1024,
         )
 
-        # Nếu Claude muốn gọi tool
-        if response.stop_reason == "tool_use":
-            # Thêm response của Claude vào history
-            messages.append({"role": "assistant", "content": response.content})
+        msg = response.choices[0].message
 
-            # Thực thi tất cả tool call song song
-            tool_results = []
-            tool_calls = [b for b in response.content if b.type == "tool_use"]
-            results = await asyncio.gather(*[execute_tool(tc.name, tc.input) for tc in tool_calls])
+        if msg.tool_calls:
+            # Thêm response assistant vào messages
+            messages.append({
+                "role": "assistant",
+                "content": msg.content or "",
+                "tool_calls": [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                    }
+                    for tc in msg.tool_calls
+                ],
+            })
+
+            # Thực thi tool calls song song
+            tool_calls = msg.tool_calls
+            results = await asyncio.gather(*[
+                execute_tool(tc.function.name, json.loads(tc.function.arguments))
+                for tc in tool_calls
+            ])
 
             for tc, result in zip(tool_calls, results):
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": tc.id,
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.id,
                     "content": result,
                 })
-
-            messages.append({"role": "user", "content": tool_results})
-
         else:
-            # Claude đã trả lời xong
-            final_text = "".join(
-                b.text for b in response.content if hasattr(b, "text")
-            )
-            # Lưu vào history
+            # Trả lời cuối
+            final_text = msg.content or "Xin lỗi, tôi không hiểu yêu cầu này."
             history.append({"role": "assistant", "content": final_text})
-            # Giới hạn kích thước history
             if len(history) > MAX_HISTORY:
                 _history[user_id] = history[-MAX_HISTORY:]
             return final_text
@@ -455,7 +462,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not text:
         return
 
-    # Hiển thị "đang gõ..."
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
 
     try:
@@ -472,7 +478,7 @@ def main():
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("reset", cmd_reset))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    logger.info("Bot đang chạy...")
+    logger.info("Bot đang chạy (Groq / Llama 3.3 70B)...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 

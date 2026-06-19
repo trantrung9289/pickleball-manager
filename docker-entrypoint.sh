@@ -2,7 +2,7 @@
 # Entrypoint cho container Fly.io: chạy backend + bot cùng lúc
 
 # Khởi động Telegram bot nếu có đủ biến môi trường
-if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$ANTHROPIC_API_KEY" ] && [ -n "$BOT_USERNAME" ] && [ -n "$BOT_PASSWORD" ]; then
+if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$GROQ_API_KEY" ] && [ -n "$BOT_USERNAME" ] && [ -n "$BOT_PASSWORD" ]; then
   echo "🤖 Khởi động Telegram bot..."
   cd /bot && python bot.py &
 else
