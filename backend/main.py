@@ -350,61 +350,8 @@ def create_member(
     return member
 
 
-@app.get("/api/members/{member_id}", response_model=schemas.MemberOut)
-def get_member(
-    member_id: int,
-    db: Session = Depends(get_db),
-    perms: ClubPermissions = Depends(get_club_permission),
-):
-    perms.require_view()
-    m = db.query(models.Member).filter(
-        models.Member.id == member_id,
-        models.Member.club_id == perms.club_id,
-    ).first()
-    if not m:
-        raise HTTPException(404, "Không tìm thấy thành viên")
-    return m
-
-
-@app.put("/api/members/{member_id}", response_model=schemas.MemberOut)
-def update_member(
-    member_id: int,
-    data: schemas.MemberUpdate,
-    db: Session = Depends(get_db),
-    perms: ClubPermissions = Depends(get_club_permission),
-):
-    perms.require_edit()
-    m = db.query(models.Member).filter(
-        models.Member.id == member_id,
-        models.Member.club_id == perms.club_id,
-    ).first()
-    if not m:
-        raise HTTPException(404, "Không tìm thấy thành viên")
-    for k, v in data.model_dump(exclude_none=True).items():
-        setattr(m, k, v)
-    db.commit()
-    db.refresh(m)
-    return m
-
-
-@app.delete("/api/members/{member_id}", status_code=204)
-def delete_member(
-    member_id: int,
-    db: Session = Depends(get_db),
-    perms: ClubPermissions = Depends(get_club_permission),
-):
-    perms.require_delete()
-    m = db.query(models.Member).filter(
-        models.Member.id == member_id,
-        models.Member.club_id == perms.club_id,
-    ).first()
-    if not m:
-        raise HTTPException(404, "Không tìm thấy thành viên")
-    db.delete(m)
-    db.commit()
-
-
-# ── EXCEL IMPORT / TEMPLATE ───────────────────────────────
+# ── EXCEL TEMPLATE / EXPORT / IMPORT ─────────────────────
+# Phải đặt TRƯỚC {member_id} để tránh FastAPI match "template"/"export" như integer
 @app.get("/api/members/template")
 def download_member_template(perms: ClubPermissions = Depends(get_club_permission)):
     """Tạo và trả về file Excel mẫu để nhập thành viên."""
@@ -445,7 +392,6 @@ def download_member_template(perms: ClubPermissions = Depends(get_club_permissio
     ws.row_dimensions[1].height = 30
     ws.row_dimensions[2].height = 22
 
-    # Hướng dẫn ở sheet 2
     ws2 = wb.create_sheet("Hướng dẫn")
     guide = [
         ("HƯỚNG DẪN NHẬP THÀNH VIÊN TỪ EXCEL", None),
@@ -483,109 +429,6 @@ def download_member_template(perms: ClubPermissions = Depends(get_club_permissio
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": "attachment; filename=mau_nhap_thanh_vien.xlsx"},
     )
-
-
-@app.post("/api/members/import")
-def import_members_excel(
-    file: UploadFile = File(...),
-    db: Session = Depends(get_db),
-    perms: ClubPermissions = Depends(get_club_permission),
-):
-    """Import thành viên từ file Excel."""
-    perms.require_create()
-
-    if not file.filename.endswith((".xlsx", ".xls")):
-        raise HTTPException(400, "Chỉ chấp nhận file .xlsx hoặc .xls")
-
-    content = file.file.read()
-    try:
-        wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
-    except Exception:
-        raise HTTPException(400, "File Excel không hợp lệ hoặc bị lỗi")
-
-    ws = wb.active
-    rows = list(ws.iter_rows(min_row=2, values_only=True))  # bỏ header row 1
-
-    def parse_date(val):
-        if not val:
-            return None
-        if isinstance(val, (date, datetime)):
-            return val.date() if isinstance(val, datetime) else val
-        s = str(val).strip()
-        for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
-            try:
-                return datetime.strptime(s, fmt).date()
-            except ValueError:
-                continue
-        return None
-
-    def clean(val):
-        return str(val).strip() if val is not None else None
-
-    imported, skipped, errors = [], [], []
-
-    for i, row in enumerate(rows, start=2):
-        if not any(row):  # dòng trống
-            continue
-
-        member_code = clean(row[0])
-        full_name   = clean(row[1])
-        dob         = parse_date(row[2])
-        phone       = clean(row[3])
-        email       = clean(row[4])
-        join_date   = parse_date(row[5])
-        status_raw  = clean(row[6]) or "active"
-        rank        = clean(row[7])
-        address     = clean(row[8])
-        notes       = clean(row[9]) if len(row) > 9 else None
-
-        if not full_name:
-            errors.append({"row": i, "reason": "Thiếu Họ và tên"})
-            continue
-
-        # Kiểm tra trạng thái hợp lệ
-        try:
-            status = models.MemberStatus(status_raw.lower())
-        except ValueError:
-            status = models.MemberStatus.active
-
-        # Kiểm tra mã trùng trong CLB
-        if member_code:
-            exists = db.query(models.Member).filter(
-                models.Member.member_code == member_code,
-                models.Member.club_id == perms.club_id,
-            ).first()
-            if exists:
-                skipped.append({"row": i, "name": full_name, "reason": f"Mã '{member_code}' đã tồn tại"})
-                continue
-
-        member = models.Member(
-            club_id=perms.club_id,
-            member_code=member_code,
-            full_name=full_name,
-            dob=dob,
-            phone=phone,
-            email=email,
-            join_date=join_date,
-            status=status,
-            rank=rank,
-            address=address,
-            notes=notes,
-        )
-        db.add(member)
-        imported.append({"row": i, "name": full_name})
-
-    db.commit()
-
-    return {
-        "total_rows": len([r for r in rows if any(r)]),
-        "imported": len(imported),
-        "skipped": len(skipped),
-        "errors": len(errors),
-        "imported_list": imported,
-        "skipped_list": skipped,
-        "error_list": errors,
-    }
 
 
 @app.get("/api/members/export")
@@ -648,7 +491,6 @@ def export_members_excel(
                 cell.fill = fill
         ws.row_dimensions[row_idx].height = 20
 
-    # Freeze header row
     ws.freeze_panes = "A2"
 
     buf = io.BytesIO()
@@ -663,6 +505,160 @@ def export_members_excel(
         headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
 
+
+@app.post("/api/members/import")
+def import_members_excel(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    """Import thành viên từ file Excel."""
+    perms.require_create()
+
+    if not file.filename.endswith((".xlsx", ".xls")):
+        raise HTTPException(400, "Chỉ chấp nhận file .xlsx hoặc .xls")
+
+    content = file.file.read()
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
+    except Exception:
+        raise HTTPException(400, "File Excel không hợp lệ hoặc bị lỗi")
+
+    ws = wb.active
+    rows = list(ws.iter_rows(min_row=2, values_only=True))
+
+    def parse_date(val):
+        if not val:
+            return None
+        if isinstance(val, (date, datetime)):
+            return val.date() if isinstance(val, datetime) else val
+        s = str(val).strip()
+        for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
+            try:
+                return datetime.strptime(s, fmt).date()
+            except ValueError:
+                continue
+        return None
+
+    def clean(val):
+        return str(val).strip() if val is not None else None
+
+    imported, skipped, errors = [], [], []
+
+    for i, row in enumerate(rows, start=2):
+        if not any(row):
+            continue
+
+        member_code = clean(row[0])
+        full_name   = clean(row[1])
+        dob         = parse_date(row[2])
+        phone       = clean(row[3])
+        email       = clean(row[4])
+        join_date   = parse_date(row[5])
+        status_raw  = clean(row[6]) or "active"
+        rank        = clean(row[7])
+        address     = clean(row[8])
+        notes       = clean(row[9]) if len(row) > 9 else None
+
+        if not full_name:
+            errors.append({"row": i, "reason": "Thiếu Họ và tên"})
+            continue
+
+        try:
+            status = models.MemberStatus(status_raw.lower())
+        except ValueError:
+            status = models.MemberStatus.active
+
+        if member_code:
+            exists = db.query(models.Member).filter(
+                models.Member.member_code == member_code,
+                models.Member.club_id == perms.club_id,
+            ).first()
+            if exists:
+                skipped.append({"row": i, "name": full_name, "reason": f"Mã '{member_code}' đã tồn tại"})
+                continue
+
+        member = models.Member(
+            club_id=perms.club_id,
+            member_code=member_code,
+            full_name=full_name,
+            dob=dob,
+            phone=phone,
+            email=email,
+            join_date=join_date,
+            status=status,
+            rank=rank,
+            address=address,
+            notes=notes,
+        )
+        db.add(member)
+        imported.append({"row": i, "name": full_name})
+
+    db.commit()
+
+    return {
+        "total_rows": len([r for r in rows if any(r)]),
+        "imported": len(imported),
+        "skipped": len(skipped),
+        "errors": len(errors),
+        "imported_list": imported,
+        "skipped_list": skipped,
+        "error_list": errors,
+    }
+
+
+@app.get("/api/members/{member_id}", response_model=schemas.MemberOut)
+def get_member(
+    member_id: int,
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    perms.require_view()
+    m = db.query(models.Member).filter(
+        models.Member.id == member_id,
+        models.Member.club_id == perms.club_id,
+    ).first()
+    if not m:
+        raise HTTPException(404, "Không tìm thấy thành viên")
+    return m
+
+
+@app.put("/api/members/{member_id}", response_model=schemas.MemberOut)
+def update_member(
+    member_id: int,
+    data: schemas.MemberUpdate,
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    perms.require_edit()
+    m = db.query(models.Member).filter(
+        models.Member.id == member_id,
+        models.Member.club_id == perms.club_id,
+    ).first()
+    if not m:
+        raise HTTPException(404, "Không tìm thấy thành viên")
+    for k, v in data.model_dump(exclude_none=True).items():
+        setattr(m, k, v)
+    db.commit()
+    db.refresh(m)
+    return m
+
+
+@app.delete("/api/members/{member_id}", status_code=204)
+def delete_member(
+    member_id: int,
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    perms.require_delete()
+    m = db.query(models.Member).filter(
+        models.Member.id == member_id,
+        models.Member.club_id == perms.club_id,
+    ).first()
+    if not m:
+        raise HTTPException(404, "Không tìm thấy thành viên")
+    db.delete(m)
+    db.commit()
 
 # ── FEE TYPES ─────────────────────────────────────────────
 @app.get("/api/fee-types", response_model=List[schemas.FeeTypeOut])
