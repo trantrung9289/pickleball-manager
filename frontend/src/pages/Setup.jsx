@@ -88,7 +88,7 @@ export default function Setup() {
           />
 
           {/* Bước 1: Thông tin CLB */}
-          {step === 0 && (
+          <div style={{ display: step === 0 ? "block" : "none" }}>
             <Form form={clubForm} layout="vertical">
               <Form.Item
                 name="club_name"
@@ -134,10 +134,10 @@ export default function Setup() {
                 <Input prefix={<EnvironmentOutlined />} placeholder="Số nhà, đường, quận, thành phố..." />
               </Form.Item>
             </Form>
-          )}
+          </div>
 
           {/* Bước 2: Tài khoản Admin */}
-          {step === 1 && (
+          <div style={{ display: step === 1 ? "block" : "none" }}>
             <Form form={adminForm} layout="vertical">
               <div style={{
                 background: "#fffbe6",
@@ -198,7 +198,7 @@ export default function Setup() {
                 <Input.Password size="large" prefix={<LockOutlined />} placeholder="Nhập lại mật khẩu" />
               </Form.Item>
             </Form>
-          )}
+          </div>
 
           {/* Actions */}
           <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8 }}>
