@@ -10,7 +10,8 @@ import time
 from datetime import datetime
 
 import httpx
-from groq import Groq
+import google.genai as genai
+import google.genai.types as gtypes
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
@@ -22,10 +23,10 @@ logger = logging.getLogger(__name__)
 
 # ── Cấu hình ──────────────────────────────────────────────────────────────────
 TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-GROQ_API_KEY = os.environ["GROQ_API_KEY"]
+GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 BACKEND_URL = os.environ.get("BACKEND_URL", "http://localhost:8000")
 
-groq_client = Groq(api_key=GROQ_API_KEY)
+gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
 # ── ConversationHandler states ────────────────────────────────────────────────
 WAIT_USERNAME, WAIT_PASSWORD = range(2)
@@ -267,164 +268,129 @@ async def handle_club_selection(update: Update, context: ContextTypes.DEFAULT_TY
     )
 
 
-# ── Tool definitions ──────────────────────────────────────────────────────────
-TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "get_overview",
-            "description": "Lấy tổng quan CLB: số thành viên, tổng thu, tổng chi, số dư.",
-            "parameters": {"type": "object", "properties": {}, "required": []},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "list_members",
-            "description": "Xem danh sách thành viên.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "status": {"type": "string", "enum": ["active", "inactive"]},
-                    "search": {"type": "string"},
-                },
+# ── Tool definitions (Gemini format) ─────────────────────────────────────────
+TOOLS = gtypes.Tool(function_declarations=[
+    gtypes.FunctionDeclaration(
+        name="get_overview",
+        description="Lấy tổng quan CLB: số thành viên, tổng thu, tổng chi, số dư.",
+    ),
+    gtypes.FunctionDeclaration(
+        name="list_members",
+        description="Xem danh sách thành viên.",
+        parameters=gtypes.Schema(
+            type=gtypes.Type.OBJECT,
+            properties={
+                "status": gtypes.Schema(type=gtypes.Type.STRING, enum=["active", "inactive"]),
+                "search": gtypes.Schema(type=gtypes.Type.STRING),
             },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "add_member",
-            "description": "Thêm thành viên mới vào CLB.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "full_name": {"type": "string"},
-                    "phone": {"type": "string"},
-                    "email": {"type": "string"},
-                    "rank": {"type": "string"},
-                    "join_date": {"type": "string", "description": "YYYY-MM-DD"},
-                },
-                "required": ["full_name"],
+        ),
+    ),
+    gtypes.FunctionDeclaration(
+        name="add_member",
+        description="Thêm thành viên mới vào CLB.",
+        parameters=gtypes.Schema(
+            type=gtypes.Type.OBJECT,
+            properties={
+                "full_name": gtypes.Schema(type=gtypes.Type.STRING),
+                "phone": gtypes.Schema(type=gtypes.Type.STRING),
+                "email": gtypes.Schema(type=gtypes.Type.STRING),
+                "rank": gtypes.Schema(type=gtypes.Type.STRING),
+                "join_date": gtypes.Schema(type=gtypes.Type.STRING, description="YYYY-MM-DD"),
             },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "list_fee_types",
-            "description": "Xem danh mục khoản thu/chi.",
-            "parameters": {"type": "object", "properties": {}, "required": []},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "record_transaction",
-            "description": "Ghi nhận giao dịch thu hoặc chi.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "fee_type_name": {"type": "string"},
-                    "amount": {"type": "number"},
-                    "member_name": {"type": "string"},
-                    "transaction_date": {"type": "string", "description": "YYYY-MM-DD"},
-                    "payment_method": {"type": "string"},
-                    "description": {"type": "string"},
-                },
-                "required": ["fee_type_name", "amount"],
+            required=["full_name"],
+        ),
+    ),
+    gtypes.FunctionDeclaration(
+        name="list_fee_types",
+        description="Xem danh mục khoản thu/chi.",
+    ),
+    gtypes.FunctionDeclaration(
+        name="record_transaction",
+        description="Ghi nhận giao dịch thu hoặc chi.",
+        parameters=gtypes.Schema(
+            type=gtypes.Type.OBJECT,
+            properties={
+                "fee_type_name": gtypes.Schema(type=gtypes.Type.STRING),
+                "amount": gtypes.Schema(type=gtypes.Type.NUMBER),
+                "member_name": gtypes.Schema(type=gtypes.Type.STRING),
+                "transaction_date": gtypes.Schema(type=gtypes.Type.STRING, description="YYYY-MM-DD"),
+                "payment_method": gtypes.Schema(type=gtypes.Type.STRING),
+                "description": gtypes.Schema(type=gtypes.Type.STRING),
             },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_monthly_report",
-            "description": "Báo cáo thu chi theo tháng.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "month": {"type": "integer"},
-                    "year": {"type": "integer"},
-                },
-                "required": ["month", "year"],
+            required=["fee_type_name", "amount"],
+        ),
+    ),
+    gtypes.FunctionDeclaration(
+        name="get_monthly_report",
+        description="Báo cáo thu chi theo tháng.",
+        parameters=gtypes.Schema(
+            type=gtypes.Type.OBJECT,
+            properties={
+                "month": gtypes.Schema(type=gtypes.Type.INTEGER),
+                "year": gtypes.Schema(type=gtypes.Type.INTEGER),
             },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_fee_status",
-            "description": "Kiểm tra trạng thái đóng phí của thành viên trong tháng.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "month": {"type": "integer"},
-                    "year": {"type": "integer"},
-                },
-                "required": ["month", "year"],
+            required=["month", "year"],
+        ),
+    ),
+    gtypes.FunctionDeclaration(
+        name="get_fee_status",
+        description="Kiểm tra trạng thái đóng phí của thành viên trong tháng.",
+        parameters=gtypes.Schema(
+            type=gtypes.Type.OBJECT,
+            properties={
+                "month": gtypes.Schema(type=gtypes.Type.INTEGER),
+                "year": gtypes.Schema(type=gtypes.Type.INTEGER),
             },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "list_transactions",
-            "description": "Xem danh sách giao dịch, có thể lọc theo tháng/năm/loại. Dùng để tìm ID trước khi xóa/sửa.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "month": {"type": "integer"},
-                    "year": {"type": "integer"},
-                    "type": {"type": "string", "enum": ["income", "expense"]},
-                },
+            required=["month", "year"],
+        ),
+    ),
+    gtypes.FunctionDeclaration(
+        name="list_transactions",
+        description="Xem danh sách giao dịch (có ID). Dùng để tìm ID trước khi xóa.",
+        parameters=gtypes.Schema(
+            type=gtypes.Type.OBJECT,
+            properties={
+                "month": gtypes.Schema(type=gtypes.Type.INTEGER),
+                "year": gtypes.Schema(type=gtypes.Type.INTEGER),
+                "type": gtypes.Schema(type=gtypes.Type.STRING, enum=["income", "expense"]),
             },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "delete_transaction",
-            "description": "Xóa một giao dịch theo ID. Nếu không biết ID, hãy dùng list_transactions trước để tìm.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "transaction_id": {"type": "integer", "description": "ID của giao dịch cần xóa"},
-                },
-                "required": ["transaction_id"],
+        ),
+    ),
+    gtypes.FunctionDeclaration(
+        name="delete_transaction",
+        description="Xóa giao dịch theo ID. Phải gọi list_transactions trước để lấy ID thực.",
+        parameters=gtypes.Schema(
+            type=gtypes.Type.OBJECT,
+            properties={
+                "transaction_id": gtypes.Schema(type=gtypes.Type.INTEGER),
             },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "delete_member",
-            "description": "Xóa một thành viên theo ID. Nếu không biết ID, hãy dùng list_members trước để tìm.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "member_id": {"type": "integer", "description": "ID của thành viên cần xóa"},
-                },
-                "required": ["member_id"],
+            required=["transaction_id"],
+        ),
+    ),
+    gtypes.FunctionDeclaration(
+        name="delete_member",
+        description="Xóa thành viên theo ID. Phải gọi list_members trước để lấy ID thực.",
+        parameters=gtypes.Schema(
+            type=gtypes.Type.OBJECT,
+            properties={
+                "member_id": gtypes.Schema(type=gtypes.Type.INTEGER),
             },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "update_member_status",
-            "description": "Cập nhật trạng thái thành viên (active/inactive).",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "member_id": {"type": "integer"},
-                    "status": {"type": "string", "enum": ["active", "inactive"]},
-                },
-                "required": ["member_id", "status"],
+            required=["member_id"],
+        ),
+    ),
+    gtypes.FunctionDeclaration(
+        name="update_member_status",
+        description="Cập nhật trạng thái thành viên (active/inactive).",
+        parameters=gtypes.Schema(
+            type=gtypes.Type.OBJECT,
+            properties={
+                "member_id": gtypes.Schema(type=gtypes.Type.INTEGER),
+                "status": gtypes.Schema(type=gtypes.Type.STRING, enum=["active", "inactive"]),
             },
-        },
-    },
-]
+            required=["member_id", "status"],
+        ),
+    ),
+])
 
 
 def fmt_money(amount) -> str:
@@ -663,57 +629,73 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Người dùng: {name}. CLB đang làm việc: {club_name} (ID: {club_id}).\n"
         "Trả lời bằng tiếng Việt, ngắn gọn, rõ ràng. Định dạng tiền: 500.000đ.\n\n"
         "QUY TẮC BẮT BUỘC:\n"
-        "1. BẤT KỲ câu hỏi/yêu cầu nào liên quan đến dữ liệu CLB → LUÔN gọi tool tương ứng TRƯỚC, không bao giờ tự bịa.\n"
-        "2. Xem danh sách / báo cáo / kiểm tra → gọi tool ngay, không hỏi thêm.\n"
-        "3. Xóa giao dịch: BƯỚC 1 gọi list_transactions → BƯỚC 2 gọi delete_transaction với ID thực từ kết quả.\n"
-        "4. Xóa thành viên: BƯỚC 1 gọi list_members → BƯỚC 2 gọi delete_member với ID thực.\n"
-        "5. KHÔNG gọi record_transaction / add_member khi user muốn xóa hoặc xem.\n"
-        "6. Nếu tool báo lỗi → trả lỗi thực tế cho user, không đoán mò."
+        "1. BẤT KỲ câu hỏi/yêu cầu nào liên quan đến dữ liệu CLB → LUÔN gọi tool tương ứng TRƯỚC.\n"
+        "2. Xóa giao dịch: gọi list_transactions trước để lấy ID thực, rồi mới gọi delete_transaction.\n"
+        "3. Xóa thành viên: gọi list_members trước để lấy ID thực, rồi mới gọi delete_member.\n"
+        "4. KHÔNG gọi record_transaction / add_member khi user muốn xóa hoặc xem.\n"
+        "5. Nếu tool báo lỗi → trả lỗi thực tế, không đoán mò."
     )
-    messages = [{"role": "system", "content": system_prompt}] + history[-MAX_HISTORY:]
 
-    # Chú thích vào tin nhắn khi phát hiện ý định xóa mà không có ID cụ thể
+    # Build Gemini conversation history
+    gemini_history = []
+    for h in history[-MAX_HISTORY:]:
+        role = "user" if h["role"] == "user" else "model"
+        gemini_history.append(gtypes.Content(role=role, parts=[gtypes.Part(text=h["content"])]))
+
+    # Remove last user message — sẽ gửi qua chat.send_message
+    if gemini_history and gemini_history[-1].role == "user":
+        gemini_history = gemini_history[:-1]
+
+    # Chú thích cho delete intent không có ID
     import re as _re
     _text_lower = text.lower()
     _has_delete_intent = any(kw in _text_lower for kw in ("xóa", "xoá", "hủy", "huỷ"))
     _has_explicit_id = bool(_re.search(r'\b\d+\b', text))
+    send_text = text
     if _has_delete_intent and not _has_explicit_id:
-        messages[-1] = {
-            "role": "user",
-            "content": text + "\n[Ghi chú: chưa có ID — hãy gọi list_transactions hoặc list_members trước để lấy ID thực, rồi mới gọi delete]",
-        }
+        send_text = text + "\n[Chú ý: chưa có ID — gọi list_transactions hoặc list_members trước]"
 
     try:
-        for turn in range(10):
-            # Luôn dùng "auto" — tránh lỗi Groq 400 khi model tạo sai tên tool với "required"
-            response = groq_client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                messages=messages,
-                tools=TOOLS,
-                tool_choice="auto",
-                max_tokens=1024,
-            )
-            msg = response.choices[0].message
+        chat = gemini_client.chats.create(
+            model="gemini-2.0-flash",
+            config=gtypes.GenerateContentConfig(
+                system_instruction=system_prompt,
+                tools=[TOOLS],
+                temperature=0.1,
+            ),
+            history=gemini_history,
+        )
 
-            if msg.tool_calls:
-                messages.append({
-                    "role": "assistant",
-                    "content": msg.content or "",
-                    "tool_calls": [
-                        {"id": tc.id, "type": "function",
-                         "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
-                        for tc in msg.tool_calls
-                    ],
-                })
-                results = await asyncio.gather(*[
-                    execute_tool(tc.function.name, json.loads(tc.function.arguments),
-                                 session["token"], club_id)
-                    for tc in msg.tool_calls
-                ])
-                for tc, result in zip(msg.tool_calls, results):
-                    messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
+        for turn in range(10):
+            if turn == 0:
+                response = await asyncio.to_thread(chat.send_message, send_text)
             else:
-                reply = msg.content or "Xin lỗi, tôi không hiểu yêu cầu này."
+                # Tiếp tục sau tool call
+                tool_results = [
+                    gtypes.Part(function_response=gtypes.FunctionResponse(
+                        name=fn_name, response={"result": fn_result}
+                    ))
+                    for fn_name, fn_result in _pending_results
+                ]
+                response = await asyncio.to_thread(chat.send_message, gtypes.Content(
+                    role="user", parts=tool_results
+                ))
+
+            # Kiểm tra có function call không
+            fn_calls = [p for p in response.candidates[0].content.parts if p.function_call]
+            if fn_calls:
+                _pending_results = []
+                results = await asyncio.gather(*[
+                    execute_tool(fc.function_call.name, dict(fc.function_call.args),
+                                 session["token"], club_id)
+                    for fc in fn_calls
+                ])
+                _pending_results = [(fc.function_call.name, tool_res) for fc, tool_res in zip(fn_calls, results)]
+            else:
+                # Lấy text response
+                reply = "".join(
+                    p.text for p in response.candidates[0].content.parts if hasattr(p, "text") and p.text
+                ) or "Xin lỗi, tôi không hiểu yêu cầu này."
                 history.append({"role": "assistant", "content": reply})
                 if len(history) > MAX_HISTORY:
                     _history[user_id] = history[-MAX_HISTORY:]
@@ -724,7 +706,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         logger.error(f"handle_message error: {e}")
-        await update.message.reply_text("❌ Đã xảy ra lỗi, vui lòng thử lại.")
+        await update.message.reply_text(f"❌ Lỗi: {e}")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -748,7 +730,7 @@ def main():
     app.add_handler(CallbackQueryHandler(handle_club_selection, pattern=r"^sel_club:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    logger.info("Bot đang chạy (Groq / Llama 3.3 70B — đa CLB + auth)...")
+    logger.info("Bot đang chạy (Gemini 2.0 Flash — đa CLB + auth)...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
