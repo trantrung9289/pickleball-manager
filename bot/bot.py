@@ -370,7 +370,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "list_transactions",
-            "description": "Xem danh sách giao dịch.",
+            "description": "Xem danh sách giao dịch, có thể lọc theo tháng/năm/loại. Dùng để tìm ID trước khi xóa/sửa.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -378,6 +378,49 @@ TOOLS = [
                     "year": {"type": "integer"},
                     "type": {"type": "string", "enum": ["income", "expense"]},
                 },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_transaction",
+            "description": "Xóa một giao dịch theo ID. Nếu không biết ID, hãy dùng list_transactions trước để tìm.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "transaction_id": {"type": "integer", "description": "ID của giao dịch cần xóa"},
+                },
+                "required": ["transaction_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_member",
+            "description": "Xóa một thành viên theo ID. Nếu không biết ID, hãy dùng list_members trước để tìm.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "member_id": {"type": "integer", "description": "ID của thành viên cần xóa"},
+                },
+                "required": ["member_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_member_status",
+            "description": "Cập nhật trạng thái thành viên (active/inactive).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "member_id": {"type": "integer"},
+                    "status": {"type": "string", "enum": ["active", "inactive"]},
+                },
+                "required": ["member_id", "status"],
             },
         },
     },
@@ -533,18 +576,51 @@ async def execute_tool(name: str, inputs: dict, token: str, club_id: int) -> str
             total_income = sum(float(t["amount"]) for t in txs if t["type"] == "income")
             total_expense = sum(float(t["amount"]) for t in txs if t["type"] == "expense")
             lines = [f"💳 {len(txs)} giao dịch | Thu: {fmt_money(total_income)} | Chi: {fmt_money(total_expense)}"]
-            for t in txs[:15]:
+            for t in txs[:20]:
                 icon = "💚" if t["type"] == "income" else "🔴"
                 fee_name = t.get("fee_type", {}).get("name", "?") if isinstance(t.get("fee_type"), dict) else "?"
                 member = t.get("member") or {}
                 member_name = member.get("full_name", "") if isinstance(member, dict) else ""
                 lines.append(
-                    f"{icon} {t['transaction_date']} — {fee_name}: {fmt_money(t['amount'])}"
+                    f"{icon} [ID:{t['id']}] {t['transaction_date']} — {fee_name}: {fmt_money(t['amount'])}"
                     + (f" ({member_name})" if member_name else "")
                 )
-            if len(txs) > 15:
-                lines.append(f"... và {len(txs)-15} giao dịch khác")
+            if len(txs) > 20:
+                lines.append(f"... và {len(txs)-20} giao dịch khác")
             return "\n".join(lines)
+
+        elif name == "delete_transaction":
+            tx_id = inputs["transaction_id"]
+            # Lấy thông tin trước khi xóa để xác nhận
+            try:
+                tx = await call_backend("get", f"/api/transactions/{tx_id}", token=token, club_id=club_id)
+                fee_name = tx.get("fee_type", {}).get("name", "?") if isinstance(tx.get("fee_type"), dict) else "?"
+                amount = fmt_money(tx["amount"])
+                date = tx["transaction_date"]
+            except Exception:
+                return f"❌ Không tìm thấy giao dịch ID {tx_id}."
+
+            await call_backend("delete", f"/api/transactions/{tx_id}", token=token, club_id=club_id)
+            return f"✅ Đã xóa giao dịch [ID:{tx_id}] — {fee_name}: {amount} ngày {date}"
+
+        elif name == "delete_member":
+            member_id = inputs["member_id"]
+            try:
+                member = await call_backend("get", f"/api/members/{member_id}", token=token, club_id=club_id)
+                name_member = member.get("full_name", f"ID {member_id}")
+            except Exception:
+                return f"❌ Không tìm thấy thành viên ID {member_id}."
+
+            await call_backend("delete", f"/api/members/{member_id}", token=token, club_id=club_id)
+            return f"✅ Đã xóa thành viên {name_member} [ID:{member_id}]"
+
+        elif name == "update_member_status":
+            member_id = inputs["member_id"]
+            status = inputs["status"]
+            member = await call_backend("put", f"/api/members/{member_id}", token=token, club_id=club_id,
+                                        json={"status": status})
+            label = "hoạt động" if status == "active" else "tạm nghỉ"
+            return f"✅ Đã cập nhật {member['full_name']} → {label}"
 
         return f"Tool '{name}' chưa được hỗ trợ."
 
@@ -585,8 +661,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     system_prompt = (
         f"Bạn là trợ lý quản lý CLB Pickleball. Hôm nay: {datetime.now().strftime('%d/%m/%Y')}.\n"
         f"Người dùng: {name}. CLB đang làm việc: {club_name} (ID: {club_id}).\n"
-        "Trả lời bằng tiếng Việt, ngắn gọn, rõ ràng.\n"
-        "Dùng tool khi cần lấy/ghi dữ liệu. Định dạng tiền: 500.000đ."
+        "Trả lời bằng tiếng Việt, ngắn gọn, rõ ràng. Định dạng tiền: 500.000đ.\n"
+        "QUY TẮC BẮT BUỘC:\n"
+        "- Khi user yêu cầu XÓA: gọi list_transactions hoặc list_members để tìm ID, sau đó gọi delete_transaction hoặc delete_member. KHÔNG được gọi record_transaction hay add_member khi user muốn xóa.\n"
+        "- Khi user nói 'xóa khoản vừa nhập', 'xóa cái đó', 'xóa giao dịch vừa rồi': tìm giao dịch gần nhất trong lịch sử hội thoại để lấy ID, rồi xóa.\n"
+        "- Chỉ gọi record_transaction khi user rõ ràng muốn THÊM giao dịch mới.\n"
+        "- Nếu không chắc ID, hãy list trước rồi hỏi user xác nhận."
     )
     messages = [{"role": "system", "content": system_prompt}] + history[-MAX_HISTORY:]
 
