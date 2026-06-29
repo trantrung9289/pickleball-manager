@@ -13,6 +13,7 @@ import {
 import dayjs from "dayjs";
 import { membersApi } from "../api";
 import useHotkey from "../hooks/useHotkey";
+import ResponsiveTable from "../components/ResponsiveTable";
 
 const { Title } = Typography;
 const { Option } = Select;
@@ -225,9 +226,9 @@ export default function Members() {
 
   return (
     <div>
-      <Row justify="space-between" align="middle" style={{ marginBottom: 16 }}>
+      <Row justify="space-between" align="middle" gutter={[8, 8]} style={{ marginBottom: 16 }}>
         <Title level={3} style={{ margin: 0 }}>Quản lý thành viên</Title>
-        <Space>
+        <Space wrap>
           <Button icon={<FileExcelOutlined />} onClick={handleExportExcel}>Xuất Excel</Button>
           <Button icon={<FileExcelOutlined />} style={{ color: "#52c41a", borderColor: "#52c41a" }} onClick={() => { setImportResult(null); setImportOpen(true); }}>
             Nhập từ Excel
@@ -255,7 +256,21 @@ export default function Members() {
         </Col>
       </Row>
 
-      <Table columns={columns} dataSource={data} rowKey="id" loading={loading} pagination={{ pageSize: 15 }} size="small" />
+      <ResponsiveTable
+        columns={columns}
+        dataSource={data}
+        rowKey="id"
+        loading={loading}
+        pagination={{ pageSize: 15 }}
+        size="small"
+        mobileTitle={(r) => (
+          <span>
+            {r.full_name}
+            {r.rank && <Tag color="purple" style={{ marginLeft: 6 }}>{r.rank}</Tag>}
+          </span>
+        )}
+        mobileHideColumns={["Họ và tên", "Hạng"]}
+      />
 
       {/* Modal Import Excel */}
       <Modal

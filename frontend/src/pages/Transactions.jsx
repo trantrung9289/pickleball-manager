@@ -8,6 +8,7 @@ import { PlusOutlined, EditOutlined, DeleteOutlined, CloseOutlined, SaveOutlined
 import dayjs from "dayjs";
 import { transactionsApi, feeTypesApi, membersApi } from "../api";
 import useHotkey from "../hooks/useHotkey";
+import ResponsiveTable from "../components/ResponsiveTable";
 
 const { Title } = Typography;
 const { TextArea } = Input;
@@ -228,9 +229,9 @@ export default function Transactions() {
 
   return (
     <div>
-      <Row justify="space-between" align="middle" style={{ marginBottom: 16 }}>
+      <Row justify="space-between" align="middle" gutter={[8, 8]} style={{ marginBottom: 16 }}>
         <Title level={3} style={{ margin: 0 }}>Giao dịch thu/chi</Title>
-        <Space>
+        <Space wrap>
           <Button icon={<DownloadOutlined />} onClick={handleDownloadTemplate}>File mẫu</Button>
           <Button icon={<FileExcelOutlined />} onClick={handleExportExcel}>Xuất Excel</Button>
           <Button icon={<UploadOutlined />} style={{ background: "#52c41a", borderColor: "#52c41a", color: "#fff" }} onClick={() => { setImportOpen(true); setImportResult(null); }}>Nhập từ Excel</Button>
@@ -298,7 +299,24 @@ export default function Transactions() {
         />
       )}
 
-      <Table rowSelection={rowSelection} columns={columns} dataSource={data} rowKey="id" loading={loading} size="small" pagination={{ pageSize: 20 }} />
+      <ResponsiveTable
+        rowSelection={rowSelection}
+        columns={columns}
+        dataSource={data}
+        rowKey="id"
+        loading={loading}
+        size="small"
+        pagination={{ pageSize: 20 }}
+        mobileTitle={(r) => (
+          <span>
+            <Tag color={r.type === "income" ? "green" : "red"} style={{ marginRight: 6 }}>
+              {r.type === "income" ? "Thu" : "Chi"}
+            </Tag>
+            {r.fee_type?.name || "Giao dịch"}
+          </span>
+        )}
+        mobileHideColumns={["Loại", "Khoản"]}
+      />
 
       <Modal
         title={editing ? "Sửa giao dịch" : "Ghi nhận giao dịch mới"}

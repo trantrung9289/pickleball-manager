@@ -5,8 +5,10 @@ import { useViewMode } from '../contexts/ViewModeContext';
 
 const LABELS = { auto: 'Auto', desktop: 'Desktop', mobile: 'Mobile' };
 
+const DEVICE_LABEL = { mobile: 'điện thoại', tablet: 'máy tính bảng', desktop: 'máy tính' };
+
 const ViewModeSwitcher = () => {
-  const { mode, setMode, isForced } = useViewMode();
+  const { mode, setMode, isForced, deviceType } = useViewMode();
 
   const icon =
     mode === 'desktop' ? <DesktopOutlined /> :
@@ -14,7 +16,7 @@ const ViewModeSwitcher = () => {
     <SyncOutlined />;
 
   const items = [
-    { key: 'auto',    icon: <SyncOutlined />,    label: 'Tự động (theo màn hình)' },
+    { key: 'auto',    icon: <SyncOutlined />,    label: `Tự động — nhận dạng: ${DEVICE_LABEL[deviceType] || 'máy tính'}` },
     { key: 'desktop', icon: <DesktopOutlined />, label: 'Giao diện Desktop' },
     { key: 'mobile',  icon: <MobileOutlined />,  label: 'Giao diện Mobile' },
   ].map(item => ({

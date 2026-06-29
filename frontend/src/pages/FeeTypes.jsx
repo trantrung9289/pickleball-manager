@@ -10,6 +10,7 @@ import {
   UploadOutlined, CheckCircleOutlined, CloseCircleOutlined, WarningOutlined,
 } from "@ant-design/icons";
 import dayjs from "dayjs";
+import ResponsiveTable from "../components/ResponsiveTable";
 import { feeTypesApi } from "../api";
 import useHotkey from "../hooks/useHotkey";
 
@@ -198,9 +199,9 @@ export default function FeeTypes() {
       <Tabs
         defaultActiveKey="all"
         items={[
-          { key: "all", label: `Tất cả (${data.length})`, children: <Table columns={columns} dataSource={data} rowKey="id" loading={loading} size="small" /> },
-          { key: "income", label: `Thu (${incomeItems.length})`, children: <Table columns={columns} dataSource={incomeItems} rowKey="id" size="small" /> },
-          { key: "expense", label: `Chi (${expenseItems.length})`, children: <Table columns={columns} dataSource={expenseItems} rowKey="id" size="small" /> },
+          { key: "all", label: `Tất cả (${data.length})`, children: <ResponsiveTable columns={columns} dataSource={data} rowKey="id" loading={loading} size="small" mobileTitle={(r) => r.name} mobileHideColumns={["Tên khoản"]} /> },
+          { key: "income", label: `Thu (${incomeItems.length})`, children: <ResponsiveTable columns={columns} dataSource={incomeItems} rowKey="id" size="small" mobileTitle={(r) => r.name} mobileHideColumns={["Tên khoản"]} /> },
+          { key: "expense", label: `Chi (${expenseItems.length})`, children: <ResponsiveTable columns={columns} dataSource={expenseItems} rowKey="id" size="small" mobileTitle={(r) => r.name} mobileHideColumns={["Tên khoản"]} /> },
         ]}
       />
 

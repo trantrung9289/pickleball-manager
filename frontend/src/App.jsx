@@ -12,7 +12,6 @@ import { AuthProvider, useAuth } from "./context/AuthContext";
 import { ViewModeProvider, useViewMode } from "./contexts/ViewModeContext";
 import ViewModeSwitcher from "./components/ViewModeSwitcher";
 import MobileBottomNav from "./components/mobile/MobileBottomNav";
-import { useResponsive } from "./hooks/useResponsive";
 import Dashboard from "./pages/Dashboard";
 import Members from "./pages/Members";
 import FeeTypes from "./pages/FeeTypes";
@@ -61,7 +60,6 @@ function AppShell() {
   const [mode, setMode] = useState(null); // null | "admin" | "member"
   const [moreOpen, setMoreOpen] = useState(false);
   const { token } = theme.useToken();
-  const { isMobile } = useResponsive();
   const { isMobileView } = useViewMode();
 
   // Cập nhật Page Title theo mode
@@ -191,7 +189,7 @@ function AppShell() {
   return (
     <Layout style={{ minHeight: "100vh" }}>
       {/* Desktop: sidebar cố định. Mobile: dùng bottom navigation thay thế. */}
-      {!isMobile && (
+      {!isMobileView && (
         <Sider style={{ background: "#001529" }}>
           {sidebarContent}
         </Sider>
@@ -200,18 +198,18 @@ function AppShell() {
       <Layout>
         <Header style={{
           background: token.colorBgContainer,
-          padding: isMobile ? "0 12px" : "0 24px",
+          padding: isMobileView ? "0 12px" : "0 24px",
           borderBottom: `1px solid ${token.colorBorderSecondary}`,
         }}>
           <Row justify="space-between" align="middle" style={{ height: "100%" }}>
             <Space>
-              <Title level={4} style={{ margin: 0, fontSize: isMobile ? 15 : 20 }}>
+              <Title level={4} style={{ margin: 0, fontSize: isMobileView ? 15 : 20 }}>
                 {ALL_PAGES[safeKey]?.label}
               </Title>
             </Space>
-            <Space size={isMobile ? "small" : "middle"}>
+            <Space size={isMobileView ? "small" : "middle"}>
               <ViewModeSwitcher />
-              {!isMobile && <ShortcutHelp />}
+              {!isMobileView && <ShortcutHelp />}
               <Dropdown menu={userMenu} placement="bottomRight">
                 <Avatar style={{ background: "#1677ff", cursor: "pointer" }} icon={<UserOutlined />} />
               </Dropdown>
@@ -219,16 +217,16 @@ function AppShell() {
           </Row>
         </Header>
         <Content style={{
-          margin: isMobile ? "12px 8px" : "24px",
+          margin: isMobileView ? "12px 8px" : "24px",
           minHeight: 280,
-          paddingBottom: isMobile ? "calc(64px + env(safe-area-inset-bottom, 0px))" : 0,
+          paddingBottom: isMobileView ? "calc(64px + env(safe-area-inset-bottom, 0px))" : 0,
         }}>
           <PageComp perms={perms} />
         </Content>
       </Layout>
 
       {/* Bottom navigation + sheet "Thêm" — chỉ trên mobile */}
-      {isMobile && (
+      {isMobileView && (
         <>
           <MobileBottomNav
             items={primaryTabs}
