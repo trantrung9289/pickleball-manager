@@ -206,7 +206,7 @@ class TransactionBase(BaseModel):
     amount: Decimal
     transaction_date: date
     description: Optional[str] = None
-    payment_method: str = "Tiền mặt"
+    payment_method: str = "Chuyển khoản"
 
 
 class TransactionCreate(TransactionBase):

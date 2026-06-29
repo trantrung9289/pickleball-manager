@@ -62,7 +62,7 @@ export default function Transactions() {
     setEditing(null);
     setSelectedFeeType(null);
     form.resetFields();
-    form.setFieldsValue({ transaction_date: dayjs() });
+    form.setFieldsValue({ transaction_date: dayjs(), payment_method: "Chuyển khoản" });
     setModalOpen(true);
   };
 
@@ -359,7 +359,7 @@ export default function Transactions() {
               </Form.Item>
             </Col>
             <Col span={12}>
-              <Form.Item name="payment_method" label="Phương thức" initialValue="Tiền mặt">
+              <Form.Item name="payment_method" label="Phương thức" initialValue="Chuyển khoản">
                 <Select>
                   <Select.Option value="Tiền mặt">Tiền mặt</Select.Option>
                   <Select.Option value="Chuyển khoản">Chuyển khoản</Select.Option>
