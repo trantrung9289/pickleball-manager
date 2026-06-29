@@ -1242,12 +1242,16 @@ def report_monthly_detail(
     """Chi tiết thu chi trong một tháng: breakdown theo loại khoản + số dư đầu/cuối kỳ."""
     perms.require_view()
 
-    # Xác định khoảng thời gian của tháng
-    start_of_month = datetime(year, month, 1)
+    # Dùng date (không phải datetime) để so sánh với cột Date trong SQLite.
+    # SQLite lưu Date dưới dạng chuỗi "YYYY-MM-DD"; nếu so sánh với datetime
+    # "YYYY-MM-DD 00:00:00" thì "2026-07-01" < "2026-07-01 00:00:00" = True,
+    # khiến giao dịch ngày đầu tháng bị tính nhầm vào kỳ trước.
+    from datetime import date as date_type
+    start_of_month = date_type(year, month, 1)
     if month == 12:
-        end_of_month = datetime(year + 1, 1, 1)
+        end_of_month = date_type(year + 1, 1, 1)
     else:
-        end_of_month = datetime(year, month + 1, 1)
+        end_of_month = date_type(year, month + 1, 1)
 
     # Tồn quỹ đầu kỳ: tổng đại số toàn bộ giao dịch TRƯỚC tháng này
     # Thu (income) cộng dương, Chi (expense) cộng âm để ra số dư tích lũy
