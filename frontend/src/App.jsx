@@ -6,11 +6,12 @@ import {
 import {
   DashboardOutlined, TeamOutlined, DollarOutlined,
   SwapOutlined, BarChartOutlined, TrophyOutlined,
-  UserOutlined, LogoutOutlined, LockOutlined, MenuOutlined,
+  UserOutlined, LogoutOutlined, LockOutlined,
 } from "@ant-design/icons";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { ViewModeProvider, useViewMode } from "./contexts/ViewModeContext";
 import ViewModeSwitcher from "./components/ViewModeSwitcher";
+import MobileBottomNav from "./components/mobile/MobileBottomNav";
 import { useResponsive } from "./hooks/useResponsive";
 import Dashboard from "./pages/Dashboard";
 import Members from "./pages/Members";
@@ -58,7 +59,7 @@ function AppShell() {
   const { user, initialized, loading, memberships, selectedMembership, selectedClub, perms, logout, selectClub } = useAuth();
   const [current, setCurrent] = useState("dashboard");
   const [mode, setMode] = useState(null); // null | "admin" | "member"
-  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
   const { token } = theme.useToken();
   const { isMobile } = useResponsive();
   const { isMobileView } = useViewMode();
@@ -154,6 +155,19 @@ function AppShell() {
 
   const menuItems = visiblePages.map(([key, { label, icon }]) => ({ key, icon, label }));
 
+  // ── Bottom navigation cho mobile ──
+  // 4 tab chính (theo thứ tự ưu tiên), các trang còn lại nằm trong sheet "Thêm"
+  const PRIMARY_KEYS = ["dashboard", "members", "transactions", "tournaments"];
+  const primaryTabs = PRIMARY_KEYS
+    .map((k) => visiblePages.find(([key]) => key === k))
+    .filter(Boolean)
+    .map(([key, { label, icon }]) => ({ key, label, icon }));
+  const primaryKeySet = new Set(primaryTabs.map((t) => t.key));
+  const overflowTabs = visiblePages
+    .filter(([key]) => !primaryKeySet.has(key))
+    .map(([key, { label, icon }]) => ({ key, label, icon }));
+  const currentInOverflow = !primaryKeySet.has(safeKey);
+
   const sidebarContent = (
     <>
       <div style={{ padding: "16px 24px", borderBottom: "1px solid rgba(255,255,255,0.1)" }}>
@@ -168,7 +182,7 @@ function AppShell() {
         theme="dark"
         mode="inline"
         selectedKeys={[safeKey]}
-        onClick={({ key }) => { setCurrent(key); setDrawerOpen(false); }}
+        onClick={({ key }) => setCurrent(key)}
         items={menuItems}
       />
     </>
@@ -176,19 +190,8 @@ function AppShell() {
 
   return (
     <Layout style={{ minHeight: "100vh" }}>
-      {/* Sidebar: Drawer trên màn hình nhỏ (<992px), Sider trên desktop */}
-      {isMobile ? (
-        <Drawer
-          placement="left"
-          open={drawerOpen}
-          onClose={() => setDrawerOpen(false)}
-          bodyStyle={{ padding: 0, background: "#001529" }}
-          headerStyle={{ display: "none" }}
-          width={240}
-        >
-          {sidebarContent}
-        </Drawer>
-      ) : (
+      {/* Desktop: sidebar cố định. Mobile: dùng bottom navigation thay thế. */}
+      {!isMobile && (
         <Sider style={{ background: "#001529" }}>
           {sidebarContent}
         </Sider>
@@ -202,14 +205,6 @@ function AppShell() {
         }}>
           <Row justify="space-between" align="middle" style={{ height: "100%" }}>
             <Space>
-              {isMobile && (
-                <Button
-                  type="text"
-                  icon={<MenuOutlined />}
-                  onClick={() => setDrawerOpen(true)}
-                  style={{ marginRight: 4 }}
-                />
-              )}
               <Title level={4} style={{ margin: 0, fontSize: isMobile ? 15 : 20 }}>
                 {ALL_PAGES[safeKey]?.label}
               </Title>
@@ -223,10 +218,54 @@ function AppShell() {
             </Space>
           </Row>
         </Header>
-        <Content style={{ margin: isMobile ? "12px 8px" : "24px", minHeight: 280 }}>
+        <Content style={{
+          margin: isMobile ? "12px 8px" : "24px",
+          minHeight: 280,
+          paddingBottom: isMobile ? "calc(64px + env(safe-area-inset-bottom, 0px))" : 0,
+        }}>
           <PageComp perms={perms} />
         </Content>
       </Layout>
+
+      {/* Bottom navigation + sheet "Thêm" — chỉ trên mobile */}
+      {isMobile && (
+        <>
+          <MobileBottomNav
+            items={primaryTabs}
+            current={safeKey}
+            onSelect={(key) => { setCurrent(key); setMoreOpen(false); }}
+            onMore={() => setMoreOpen(true)}
+            moreActive={moreOpen || currentInOverflow}
+          />
+          <Drawer
+            placement="bottom"
+            open={moreOpen}
+            onClose={() => setMoreOpen(false)}
+            title="Thêm"
+            height="auto"
+            styles={{ body: { padding: 0 } }}
+          >
+            <Menu
+              mode="inline"
+              selectedKeys={[safeKey]}
+              onClick={({ key }) => {
+                if (key === "switch_club") { selectClub(null); }
+                else if (key === "logout") { logout(); setMode(null); }
+                else { setCurrent(key); }
+                setMoreOpen(false);
+              }}
+              items={[
+                ...overflowTabs.map(({ key, label, icon }) => ({ key, label, icon })),
+                { type: "divider" },
+                ...(memberships.length > 1
+                  ? [{ key: "switch_club", label: "Đổi câu lạc bộ", icon: <SwapOutlined /> }]
+                  : []),
+                { key: "logout", label: "Đăng xuất", icon: <LogoutOutlined />, danger: true },
+              ]}
+            />
+          </Drawer>
+        </>
+      )}
     </Layout>
   );
 }
