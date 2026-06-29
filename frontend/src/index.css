@@ -1,5 +1,5 @@
-body { background: #f0f2f5; }
-#root { width: 100% !important; max-width: 100% !important; border: none !important; text-align: left !important; }
+body { background: #f0f2f5; margin: 0; }
+#root { width: 100% !important; max-width: 100% !important; border: none !important; text-align: left !important; min-height: 100svh; }
 
 :root {
   --text: #6b6375;
@@ -53,20 +53,37 @@ body { background: #f0f2f5; }
   }
 }
 
-body {
-  margin: 0;
+/* Mobile touch targets */
+@media (max-width: 768px) {
+  .ant-btn {
+    min-height: 36px;
+  }
+  .ant-input,
+  .ant-select-selector,
+  .ant-picker {
+    font-size: 16px !important; /* ngăn auto-zoom trên iOS */
+  }
+  .ant-card-body {
+    padding: 12px !important;
+  }
+  .ant-table-wrapper {
+    overflow-x: auto;
+  }
 }
 
-#root {
-  width: 1126px;
-  max-width: 100%;
-  margin: 0 auto;
-  text-align: center;
-  border-inline: 1px solid var(--border);
-  min-height: 100svh;
-  display: flex;
-  flex-direction: column;
-  box-sizing: border-box;
+/* Modal full-width trên mobile */
+@media (max-width: 576px) {
+  .ant-modal {
+    max-width: calc(100vw - 16px) !important;
+    margin: 8px auto !important;
+  }
+  .ant-modal-content {
+    border-radius: 12px !important;
+  }
+}
+
+.ant-message {
+  top: 70px !important;
 }
 
 h1,

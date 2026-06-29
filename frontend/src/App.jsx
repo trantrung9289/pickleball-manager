@@ -1,14 +1,17 @@
 import React, { useState } from "react";
 import {
   Layout, Menu, Typography, theme, Row, Spin,
-  Avatar, Dropdown, Space, Result, Button,
+  Avatar, Dropdown, Space, Result, Button, Drawer,
 } from "antd";
 import {
   DashboardOutlined, TeamOutlined, DollarOutlined,
   SwapOutlined, BarChartOutlined, TrophyOutlined,
-  UserOutlined, LogoutOutlined, LockOutlined,
+  UserOutlined, LogoutOutlined, LockOutlined, MenuOutlined,
 } from "@ant-design/icons";
 import { AuthProvider, useAuth } from "./context/AuthContext";
+import { ViewModeProvider, useViewMode } from "./contexts/ViewModeContext";
+import ViewModeSwitcher from "./components/ViewModeSwitcher";
+import { useResponsive } from "./hooks/useResponsive";
 import Dashboard from "./pages/Dashboard";
 import Members from "./pages/Members";
 import FeeTypes from "./pages/FeeTypes";
@@ -55,7 +58,10 @@ function AppShell() {
   const { user, initialized, loading, memberships, selectedMembership, selectedClub, perms, logout, selectClub } = useAuth();
   const [current, setCurrent] = useState("dashboard");
   const [mode, setMode] = useState(null); // null | "admin" | "member"
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const { token } = theme.useToken();
+  const { isMobile } = useResponsive();
+  const { isMobileView } = useViewMode();
 
   // Cập nhật Page Title theo mode
   React.useEffect(() => {
@@ -146,42 +152,78 @@ function AppShell() {
     },
   };
 
+  const menuItems = visiblePages.map(([key, { label, icon }]) => ({ key, icon, label }));
+
+  const sidebarContent = (
+    <>
+      <div style={{ padding: "16px 24px", borderBottom: "1px solid rgba(255,255,255,0.1)" }}>
+        <Title level={5} style={{ color: "#fff", margin: 0, fontSize: 14 }}>
+          🏸 {selectedClub?.name || "Quản lý CLB"}
+        </Title>
+        <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 12 }}>
+          {selectedClub?.sport || "Thể thao Pickleball"}
+        </div>
+      </div>
+      <Menu
+        theme="dark"
+        mode="inline"
+        selectedKeys={[safeKey]}
+        onClick={({ key }) => { setCurrent(key); setDrawerOpen(false); }}
+        items={menuItems}
+      />
+    </>
+  );
+
   return (
     <Layout style={{ minHeight: "100vh" }}>
-      <Sider breakpoint="lg" collapsedWidth="0" style={{ background: "#001529" }}>
-        <div style={{ padding: "16px 24px", borderBottom: "1px solid rgba(255,255,255,0.1)" }}>
-          <Title level={5} style={{ color: "#fff", margin: 0, fontSize: 14 }}>
-            🏸 {selectedClub?.name || "Quản lý CLB"}
-          </Title>
-          <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 12 }}>
-            {selectedClub?.sport || "Thể thao Pickleball"}
-          </div>
-        </div>
-        <Menu
-          theme="dark"
-          mode="inline"
-          selectedKeys={[safeKey]}
-          onClick={({ key }) => setCurrent(key)}
-          items={visiblePages.map(([key, { label, icon }]) => ({ key, icon, label }))}
-        />
-      </Sider>
+      {/* Sidebar: Drawer trên màn hình nhỏ (<992px), Sider trên desktop */}
+      {isMobile ? (
+        <Drawer
+          placement="left"
+          open={drawerOpen}
+          onClose={() => setDrawerOpen(false)}
+          bodyStyle={{ padding: 0, background: "#001529" }}
+          headerStyle={{ display: "none" }}
+          width={240}
+        >
+          {sidebarContent}
+        </Drawer>
+      ) : (
+        <Sider style={{ background: "#001529" }}>
+          {sidebarContent}
+        </Sider>
+      )}
+
       <Layout>
         <Header style={{
           background: token.colorBgContainer,
-          padding: "0 24px",
+          padding: isMobile ? "0 12px" : "0 24px",
           borderBottom: `1px solid ${token.colorBorderSecondary}`,
         }}>
           <Row justify="space-between" align="middle" style={{ height: "100%" }}>
-            <Title level={4} style={{ margin: 0 }}>{ALL_PAGES[safeKey]?.label}</Title>
             <Space>
-              <ShortcutHelp />
+              {isMobile && (
+                <Button
+                  type="text"
+                  icon={<MenuOutlined />}
+                  onClick={() => setDrawerOpen(true)}
+                  style={{ marginRight: 4 }}
+                />
+              )}
+              <Title level={4} style={{ margin: 0, fontSize: isMobile ? 15 : 20 }}>
+                {ALL_PAGES[safeKey]?.label}
+              </Title>
+            </Space>
+            <Space size={isMobile ? "small" : "middle"}>
+              <ViewModeSwitcher />
+              {!isMobile && <ShortcutHelp />}
               <Dropdown menu={userMenu} placement="bottomRight">
                 <Avatar style={{ background: "#1677ff", cursor: "pointer" }} icon={<UserOutlined />} />
               </Dropdown>
             </Space>
           </Row>
         </Header>
-        <Content style={{ margin: "24px", minHeight: 280 }}>
+        <Content style={{ margin: isMobile ? "12px 8px" : "24px", minHeight: 280 }}>
           <PageComp perms={perms} />
         </Content>
       </Layout>
@@ -192,7 +234,9 @@ function AppShell() {
 export default function App() {
   return (
     <AuthProvider>
-      <AppShell />
+      <ViewModeProvider>
+        <AppShell />
+      </ViewModeProvider>
     </AuthProvider>
   );
 }
