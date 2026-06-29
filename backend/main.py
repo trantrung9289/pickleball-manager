@@ -1239,12 +1239,38 @@ def report_monthly_detail(
     db: Session = Depends(get_db),
     perms: ClubPermissions = Depends(get_club_permission),
 ):
-    """Chi tiết thu chi trong một tháng: breakdown theo loại khoản."""
+    """Chi tiết thu chi trong một tháng: breakdown theo loại khoản + số dư đầu/cuối kỳ."""
     perms.require_view()
+
+    # Xác định khoảng thời gian của tháng
+    start_of_month = datetime(year, month, 1)
+    if month == 12:
+        end_of_month = datetime(year + 1, 1, 1)
+    else:
+        end_of_month = datetime(year, month + 1, 1)
+
+    # Tồn quỹ đầu kỳ: tổng đại số toàn bộ giao dịch TRƯỚC tháng này
+    # Thu (income) cộng dương, Chi (expense) cộng âm để ra số dư tích lũy
+    opening_income = db.query(func.sum(models.Transaction.amount)).filter(
+        models.Transaction.club_id == perms.club_id,
+        models.Transaction.transaction_date < start_of_month,
+        models.Transaction.type == "income",
+    ).scalar() or 0
+
+    opening_expense = db.query(func.sum(models.Transaction.amount)).filter(
+        models.Transaction.club_id == perms.club_id,
+        models.Transaction.transaction_date < start_of_month,
+        models.Transaction.type == "expense",
+    ).scalar() or 0
+
+    # Tồn quỹ đầu kỳ = tổng thu trước kỳ - tổng chi trước kỳ
+    opening_balance = float(opening_income) - float(opening_expense)
+
+    # Giao dịch trong tháng
     txs = db.query(models.Transaction).filter(
         models.Transaction.club_id == perms.club_id,
-        extract("month", models.Transaction.transaction_date) == month,
-        extract("year", models.Transaction.transaction_date) == year,
+        models.Transaction.transaction_date >= start_of_month,
+        models.Transaction.transaction_date < end_of_month,
     ).all()
 
     income_by_fee: dict = {}
@@ -1260,11 +1286,16 @@ def report_monthly_detail(
     total_income = sum(v["amount"] for v in income_by_fee.values())
     total_expense = sum(v["amount"] for v in expense_by_fee.values())
 
+    # Tồn quỹ cuối kỳ = Đầu kỳ + Thu trong kỳ - Chi trong kỳ
+    closing_balance = opening_balance + total_income - total_expense
+
     return {
         "month": month, "year": year,
+        "opening_balance": opening_balance,   # Tồn quỹ đầu kỳ (chuyển từ tháng trước)
         "total_income": total_income,
         "total_expense": total_expense,
-        "balance": total_income - total_expense,
+        "closing_balance": closing_balance,   # Tồn quỹ cuối kỳ (chuyển sang tháng sau)
+        "balance": total_income - total_expense,  # Số dư trong kỳ (giữ để backward-compat)
         "transaction_count": len(txs),
         "income_breakdown": sorted(income_by_fee.values(), key=lambda x: -x["amount"]),
         "expense_breakdown": sorted(expense_by_fee.values(), key=lambda x: -x["amount"]),

@@ -76,6 +76,9 @@ export const feeTypesApi = {
   create: (data) => api.post("/api/fee-types", data),
   update: (id, data) => api.put(`/api/fee-types/${id}`, data),
   delete: (id) => api.delete(`/api/fee-types/${id}`),
+  exportExcel: () => api.get("/api/fee-types/export", { responseType: "blob" }),
+  downloadTemplate: () => api.get("/api/fee-types/template", { responseType: "blob" }),
+  importExcel: (file) => { const f = new FormData(); f.append("file", file); return api.post("/api/fee-types/import", f, { headers: { "Content-Type": "multipart/form-data" } }); },
 };
 
 export const transactionsApi = {
@@ -83,6 +86,9 @@ export const transactionsApi = {
   create: (data) => api.post("/api/transactions", data),
   update: (id, data) => api.put(`/api/transactions/${id}`, data),
   delete: (id) => api.delete(`/api/transactions/${id}`),
+  exportExcel: (params) => api.get("/api/transactions/export", { params, responseType: "blob" }),
+  downloadTemplate: () => api.get("/api/transactions/template", { responseType: "blob" }),
+  importExcel: (file) => { const f = new FormData(); f.append("file", file); return api.post("/api/transactions/import", f, { headers: { "Content-Type": "multipart/form-data" } }); },
 };
 
 export const reportsApi = {

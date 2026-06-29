@@ -6,6 +6,7 @@ import {
 import {
   RiseOutlined, FallOutlined, WalletOutlined, SwapOutlined,
   CheckCircleOutlined, CloseCircleOutlined, DownloadOutlined,
+  ArrowRightOutlined,
 } from "@ant-design/icons";
 import dayjs from "dayjs";
 import { reportsApi, feeTypesApi, transactionsApi } from "../api";
@@ -242,9 +243,89 @@ function MonthlyStats({ year }) {
       <Spin spinning={loading}>
         {detail && (
           <>
-            {/* KPI cards */}
+            {/* Bảng cân đối quỹ theo nguyên tắc kế toán: Đầu kỳ → Thu → Chi → Cuối kỳ */}
+            <Card
+              size="small"
+              title={<span><WalletOutlined /> Cân đối quỹ tháng {month}/{year}</span>}
+              style={{ marginBottom: 16, borderLeft: "4px solid #1677ff" }}
+            >
+              <Row gutter={[16, 12]} align="middle">
+                <Col xs={24} sm={6}>
+                  <Card
+                    size="small"
+                    bordered={false}
+                    style={{ background: "#e6f4ff", borderRadius: 8 }}
+                  >
+                    <Statistic
+                      title={<span style={{ fontSize: 12 }}>Tồn quỹ đầu kỳ<br/><Text type="secondary" style={{ fontSize: 11 }}>(Chuyển từ tháng trước)</Text></span>}
+                      value={detail.opening_balance ?? 0}
+                      formatter={fmt}
+                      prefix={<ArrowRightOutlined style={{ color: "#1677ff" }} />}
+                      styles={{ content: { color: (detail.opening_balance ?? 0) >= 0 ? "#1677ff" : "#ff4d4f", fontSize: 16 } }}
+                    />
+                  </Card>
+                </Col>
+                <Col xs={12} sm={5}>
+                  <Card
+                    size="small"
+                    bordered={false}
+                    style={{ background: "#f6ffed", borderRadius: 8 }}
+                  >
+                    <Statistic
+                      title={<span style={{ fontSize: 12 }}>Tổng thu trong kỳ</span>}
+                      value={detail.total_income}
+                      formatter={fmt}
+                      prefix={<RiseOutlined style={{ color: "#52c41a" }} />}
+                      styles={{ content: { color: "#52c41a", fontSize: 16 } }}
+                    />
+                  </Card>
+                </Col>
+                <Col xs={12} sm={5}>
+                  <Card
+                    size="small"
+                    bordered={false}
+                    style={{ background: "#fff2f0", borderRadius: 8 }}
+                  >
+                    <Statistic
+                      title={<span style={{ fontSize: 12 }}>Tổng chi trong kỳ</span>}
+                      value={detail.total_expense}
+                      formatter={fmt}
+                      prefix={<FallOutlined style={{ color: "#ff4d4f" }} />}
+                      styles={{ content: { color: "#ff4d4f", fontSize: 16 } }}
+                    />
+                  </Card>
+                </Col>
+                <Col xs={24} sm={8}>
+                  <Card
+                    size="small"
+                    bordered={false}
+                    style={{
+                      background: (detail.closing_balance ?? detail.opening_balance + detail.balance) >= 0 ? "#e6f4ff" : "#fff2f0",
+                      borderRadius: 8,
+                      border: "2px solid #1677ff",
+                    }}
+                  >
+                    <Statistic
+                      title={<span style={{ fontSize: 12 }}>Tồn quỹ cuối kỳ<br/><Text type="secondary" style={{ fontSize: 11 }}>(Chuyển sang tháng sau)</Text></span>}
+                      value={detail.closing_balance ?? (detail.opening_balance + detail.balance)}
+                      formatter={fmt}
+                      prefix={<WalletOutlined />}
+                      styles={{
+                        content: {
+                          color: (detail.closing_balance ?? (detail.opening_balance + detail.balance)) >= 0 ? "#1677ff" : "#ff4d4f",
+                          fontSize: 18,
+                          fontWeight: 700,
+                        }
+                      }}
+                    />
+                  </Card>
+                </Col>
+              </Row>
+            </Card>
+
+            {/* KPI cards phụ */}
             <Row gutter={16} style={{ marginBottom: 16 }}>
-              <Col xs={12} sm={6}>
+              <Col xs={12} sm={8}>
                 <Card size="small" style={{ borderTop: "3px solid #52c41a" }}>
                   <Statistic
                     title="Tổng thu"
@@ -254,7 +335,7 @@ function MonthlyStats({ year }) {
                   />
                 </Card>
               </Col>
-              <Col xs={12} sm={6}>
+              <Col xs={12} sm={8}>
                 <Card size="small" style={{ borderTop: "3px solid #ff4d4f" }}>
                   <Statistic
                     title="Tổng chi"
@@ -264,17 +345,7 @@ function MonthlyStats({ year }) {
                   />
                 </Card>
               </Col>
-              <Col xs={12} sm={6}>
-                <Card size="small" style={{ borderTop: "3px solid #1677ff" }}>
-                  <Statistic
-                    title="Số dư"
-                    value={detail.balance}
-                    formatter={fmt}
-                    styles={{ content: { color: detail.balance >= 0 ? "#1677ff" : "#ff4d4f", fontSize: 18 } }}
-                  />
-                </Card>
-              </Col>
-              <Col xs={12} sm={6}>
+              <Col xs={24} sm={8}>
                 <Card size="small" style={{ borderTop: "3px solid #faad14" }}>
                   <Statistic
                     title="Số giao dịch"
