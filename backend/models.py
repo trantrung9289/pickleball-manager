@@ -162,6 +162,7 @@ class Player(Base):
     name       = Column(String(100), nullable=False)
     phone      = Column(String(20), nullable=True)
     email      = Column(String(100), nullable=True)
+    rank       = Column(String(50), nullable=True, default="Chưa xếp hạng")
     member_id  = Column(Integer, ForeignKey("members.id", ondelete="SET NULL"), nullable=True)
     club_id    = Column(Integer, ForeignKey("clubs.id", ondelete="CASCADE"), nullable=False)
     created_at = Column(DateTime, server_default=func.now())

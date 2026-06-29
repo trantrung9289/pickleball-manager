@@ -44,7 +44,7 @@ function CreateWizard({ onCreated, onClose }) {
 
   // Bước 1: chọn người chơi (thành viên + khách mời)
   const [selectedIds, setSelectedIds] = useState([]);          // member IDs đã chọn
-  const [guestPlayers, setGuestPlayers] = useState([]);        // [{id, name, phone}] đã tạo qua API
+  const [guestPlayers, setGuestPlayers] = useState([]);        // [{id, name, phone, rank}] đã tạo qua API
   const [guestForm] = Form.useForm();
   const [addingGuest, setAddingGuest] = useState(false);
 
@@ -71,7 +71,7 @@ function CreateWizard({ onCreated, onClose }) {
   // Pool chung cho ghép đội đôi (key: "m-{id}" hoặc "g-{id}")
   const allPool = [
     ...selectedMembers.map(m => ({ key: `m-${m.id}`, name: m.full_name, rank: m.rank, type: "member", member_id: m.id })),
-    ...guestPlayers.map(g => ({ key: `g-${g.id}`, name: g.name, phone: g.phone, type: "guest", player_id: g.id })),
+    ...guestPlayers.map(g => ({ key: `g-${g.id}`, name: g.name, phone: g.phone, rank: g.rank, type: "guest", player_id: g.id })),
   ];
   const usedKeys = new Set(teams.flatMap(t => [t._key1, t._key2].filter(Boolean)));
   const availablePool = allPool.filter(p => !usedKeys.has(p.key));
@@ -91,8 +91,8 @@ function CreateWizard({ onCreated, onClose }) {
     try { vals = await guestForm.validateFields(); } catch { return; }
     setAddingGuest(true);
     try {
-      const res = await playersApi.create({ name: vals.name, phone: vals.phone || null, email: vals.email || null });
-      setGuestPlayers(prev => [...prev, { id: res.data.id, name: res.data.name, phone: res.data.phone }]);
+      const res = await playersApi.create({ name: vals.name, phone: vals.phone || null, email: vals.email || null, rank: vals.rank || "Chưa xếp hạng" });
+      setGuestPlayers(prev => [...prev, { id: res.data.id, name: res.data.name, phone: res.data.phone, rank: res.data.rank }]);
       guestForm.resetFields();
       message.success(`Đã thêm khách mời: ${res.data.name}`);
     } catch (err) {
@@ -132,27 +132,29 @@ function CreateWizard({ onCreated, onClose }) {
   const autoTeamByRank = () => {
     const newTeams = [];
     const used = new Set();
-    // Chỉ áp dụng ghép theo rank cho thành viên CLB (có rank)
-    const memberPool = selectedMembers;
+    // Áp dụng ghép theo rank cho cả thành viên CLB và khách mời có rank
+    const memberPool = allPool;  // allPool gồm cả member + guest, đều có rank
 
     for (const rule of rankRules) {
       if (!rule.rank1 || !rule.rank2) continue;
 
       if (rule.rank1 === rule.rank2) {
-        const pool = shuffle(memberPool.filter(m => m.rank === rule.rank1 && !used.has(m.id)));
+        const pool = shuffle(memberPool.filter(p => p.rank === rule.rank1 && !used.has(p.key)));
         for (let i = 0; i + 1 < pool.length; i += 2) {
           const a = pool[i], b = pool[i + 1];
-          newTeams.push({ member_id: a.id, partner_member_id: b.id, team_name: `${a.full_name} / ${b.full_name}`, _key1: `m-${a.id}`, _key2: `m-${b.id}` });
-          used.add(a.id); used.add(b.id);
+          const pa = parseKey(a.key), pb = parseKey(b.key);
+          newTeams.push({ ...pa, partner_member_id: pb.member_id, partner_player_id: pb.player_id, team_name: `${a.name} / ${b.name}`, _key1: a.key, _key2: b.key });
+          used.add(a.key); used.add(b.key);
         }
       } else {
-        const p1s = shuffle(memberPool.filter(m => m.rank === rule.rank1 && !used.has(m.id)));
-        const p2s = shuffle(memberPool.filter(m => m.rank === rule.rank2 && !used.has(m.id)));
+        const p1s = shuffle(memberPool.filter(p => p.rank === rule.rank1 && !used.has(p.key)));
+        const p2s = shuffle(memberPool.filter(p => p.rank === rule.rank2 && !used.has(p.key)));
         for (const a of p1s) {
-          const b = p2s.find(x => !used.has(x.id));
+          const b = p2s.find(x => !used.has(x.key));
           if (!b) break;
-          newTeams.push({ member_id: a.id, partner_member_id: b.id, team_name: `${a.full_name} / ${b.full_name}`, _key1: `m-${a.id}`, _key2: `m-${b.id}` });
-          used.add(a.id); used.add(b.id);
+          const pa = parseKey(a.key), pb = parseKey(b.key);
+          newTeams.push({ ...pa, partner_member_id: pb.member_id, partner_player_id: pb.player_id, team_name: `${a.name} / ${b.name}`, _key1: a.key, _key2: b.key });
+          used.add(a.key); used.add(b.key);
         }
       }
     }
@@ -161,7 +163,7 @@ function CreateWizard({ onCreated, onClose }) {
       message.warning("Không tìm được cặp nào phù hợp với quy tắc đã đặt"); return;
     }
     setTeams(newTeams);
-    const unpairedCount = memberPool.filter(m => !used.has(m.id)).length + guestPlayers.length;
+    const unpairedCount = memberPool.filter(p => !used.has(p.key)).length;
     message.success(`Đã ghép ${newTeams.length} đội${unpairedCount > 0 ? ` · ${unpairedCount} người chưa có đội` : ""}`);
   };
 
@@ -292,17 +294,24 @@ function CreateWizard({ onCreated, onClose }) {
                     >
                       <Form form={guestForm} layout="inline" style={{ flexWrap: "wrap", gap: 8 }}>
                         <Form.Item name="name" rules={[{ required: true, message: "Nhập tên" }]} style={{ marginBottom: 8 }}>
-                          <Input placeholder="Họ và tên *" style={{ width: 180 }} />
+                          <Input placeholder="Họ và tên *" style={{ width: 160 }} />
                         </Form.Item>
                         <Form.Item name="phone" style={{ marginBottom: 8 }}>
-                          <Input placeholder="Số điện thoại" style={{ width: 140 }} />
+                          <Input placeholder="Số điện thoại" style={{ width: 130 }} />
+                        </Form.Item>
+                        <Form.Item name="rank" initialValue="Chưa xếp hạng" style={{ marginBottom: 8 }}>
+                          <Select style={{ width: 140 }} placeholder="Chọn hạng">
+                            {["A","B","C","D","Hạt giống 1","Hạt giống 2","Hạt giống 3","Chưa xếp hạng"].map(r => (
+                              <Select.Option key={r} value={r}>{r}</Select.Option>
+                            ))}
+                          </Select>
                         </Form.Item>
                         <Form.Item style={{ marginBottom: 8 }}>
                           <Button
                             type="primary" icon={<PlusOutlined />}
                             loading={addingGuest} onClick={handleAddGuest}
                           >
-                            Thêm khách mời
+                            Thêm
                           </Button>
                         </Form.Item>
                       </Form>
@@ -320,7 +329,14 @@ function CreateWizard({ onCreated, onClose }) {
                           { title: "#", render: (_, __, i) => i + 1, width: 40, align: "center" },
                           { title: "Họ và tên", dataIndex: "name",
                             render: v => <><Tag color="orange" style={{ marginRight: 6 }}>Khách</Tag>{v}</> },
-                          { title: "SĐT", dataIndex: "phone", render: v => v || "—" },
+                          { title: "SĐT", dataIndex: "phone", width: 120, render: v => v || "—" },
+                          {
+                            title: "Hạng", dataIndex: "rank", width: 120,
+                            render: v => {
+                              const colorMap = { A: "red", B: "gold", C: "blue", D: "green", "Hạt giống 1": "purple", "Hạt giống 2": "purple", "Hạt giống 3": "purple" };
+                              return <Tag color={colorMap[v] || "default"}>{v || "Chưa xếp hạng"}</Tag>;
+                            },
+                          },
                           {
                             title: "", width: 60, align: "center",
                             render: (_, r) => (
@@ -522,8 +538,9 @@ function CreateWizard({ onCreated, onClose }) {
                       color={paired ? "green" : p.type === "guest" ? "orange" : "gold"}
                       style={{ marginBottom: 4 }}
                     >
-                      {paired ? "✓ " : ""}{p.name}{p.rank ? ` (${p.rank})` : ""}
-                      {p.type === "guest" && <span style={{ opacity: 0.75 }}> [Khách]</span>}
+                      {paired ? "✓ " : ""}{p.name}
+                      {p.rank && p.rank !== "Chưa xếp hạng" && ` (${p.rank})`}
+                      {p.type === "guest" && <span style={{ opacity: 0.75 }}> [K]</span>}
                       {paired && partnerName && <Text style={{ color: "inherit", fontSize: 11 }}> + {partnerName}</Text>}
                     </Tag>
                   );

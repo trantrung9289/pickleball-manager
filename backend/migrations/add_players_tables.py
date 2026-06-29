@@ -48,6 +48,7 @@ def migrate():
                     name            VARCHAR(100) NOT NULL,
                     phone           VARCHAR(20),
                     email           VARCHAR(100),
+                    rank            VARCHAR(50) DEFAULT 'Chưa xếp hạng',
                     member_id       INTEGER REFERENCES members(id) ON DELETE SET NULL,
                     club_id         INTEGER NOT NULL REFERENCES clubs(id) ON DELETE CASCADE,
                     created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -100,6 +101,14 @@ def migrate():
             cursor.execute("ALTER TABLE tournament_participants_new RENAME TO tournament_participants")
             cursor.execute("PRAGMA foreign_keys=ON")
             print("[migration] ✅ tournament_participants recreated, data preserved")
+
+        # ── 3. Thêm cột rank vào players (nếu chưa có) ─────────────────────────
+        if _table_exists(cursor, "players") and not _column_exists(cursor, "players", "rank"):
+            cursor.execute("ALTER TABLE players ADD COLUMN rank VARCHAR(50) DEFAULT 'Chưa xếp hạng'")
+            cursor.execute("UPDATE players SET rank = 'Chưa xếp hạng' WHERE rank IS NULL")
+            print("[migration] ✅ Column 'rank' added to players")
+        elif _table_exists(cursor, "players"):
+            print("[migration] Column 'rank' in players already exists — skip")
 
         conn.commit()
         print("[migration] ✅ All migrations completed successfully")

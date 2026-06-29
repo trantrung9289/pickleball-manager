@@ -1409,7 +1409,7 @@ def list_players(
     return [
         schemas.PlayerOut(
             id=p.id, name=p.name, phone=p.phone, email=p.email,
-            member_id=p.member_id, club_id=p.club_id,
+            rank=p.rank, member_id=p.member_id, club_id=p.club_id,
             is_guest=(p.member_id is None),
         )
         for p in players
@@ -1440,8 +1440,8 @@ def create_player(
             # Trả về record đã có thay vì báo lỗi
             return schemas.PlayerOut(
                 id=existing.id, name=existing.name, phone=existing.phone,
-                email=existing.email, member_id=existing.member_id,
-                club_id=existing.club_id, is_guest=False,
+                email=existing.email, rank=existing.rank,
+                member_id=existing.member_id, club_id=existing.club_id, is_guest=False,
             )
         name = data.name or member.full_name
     else:
@@ -1451,12 +1451,13 @@ def create_player(
 
     p = models.Player(
         name=name, phone=data.phone, email=data.email,
+        rank=data.rank or "Chưa xếp hạng",
         member_id=data.member_id, club_id=perms.club_id,
     )
     db.add(p); db.commit(); db.refresh(p)
     return schemas.PlayerOut(
         id=p.id, name=p.name, phone=p.phone, email=p.email,
-        member_id=p.member_id, club_id=p.club_id,
+        rank=p.rank, member_id=p.member_id, club_id=p.club_id,
         is_guest=(p.member_id is None),
     )
 
@@ -1477,10 +1478,12 @@ def update_player(
     p.name = data.name or p.name
     p.phone = data.phone
     p.email = data.email
+    if data.rank is not None:
+        p.rank = data.rank
     db.commit(); db.refresh(p)
     return schemas.PlayerOut(
         id=p.id, name=p.name, phone=p.phone, email=p.email,
-        member_id=p.member_id, club_id=p.club_id,
+        rank=p.rank, member_id=p.member_id, club_id=p.club_id,
         is_guest=(p.member_id is None),
     )
 

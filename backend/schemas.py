@@ -230,6 +230,7 @@ class PlayerCreate(BaseModel):
     name: str
     phone: Optional[str] = None
     email: Optional[str] = None
+    rank: Optional[str] = "Chưa xếp hạng"
     member_id: Optional[int] = None  # NULL = khách mời
 
 
@@ -238,6 +239,7 @@ class PlayerOut(BaseModel):
     name: str
     phone: Optional[str] = None
     email: Optional[str] = None
+    rank: Optional[str] = "Chưa xếp hạng"
     member_id: Optional[int] = None
     club_id: int
     is_guest: bool = False  # computed field
