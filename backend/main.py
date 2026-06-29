@@ -1391,6 +1391,124 @@ def fee_status(
 
 # ── TOURNAMENTS ───────────────────────────────────────────
 
+# ── PLAYERS ───────────────────────────────────────────────
+
+@app.get("/api/players", response_model=List[schemas.PlayerOut])
+def list_players(
+    type: Optional[str] = None,   # "member" | "guest" | None = all
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    perms.require_view()
+    q = db.query(models.Player).filter(models.Player.club_id == perms.club_id)
+    if type == "member":
+        q = q.filter(models.Player.member_id.isnot(None))
+    elif type == "guest":
+        q = q.filter(models.Player.member_id.is_(None))
+    players = q.order_by(models.Player.name).all()
+    return [
+        schemas.PlayerOut(
+            id=p.id, name=p.name, phone=p.phone, email=p.email,
+            member_id=p.member_id, club_id=p.club_id,
+            is_guest=(p.member_id is None),
+        )
+        for p in players
+    ]
+
+
+@app.post("/api/players", response_model=schemas.PlayerOut, status_code=201)
+def create_player(
+    data: schemas.PlayerCreate,
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    perms.require_create()
+    # Nếu là thành viên CLB, kiểm tra member thuộc CLB hiện tại
+    if data.member_id:
+        member = db.query(models.Member).filter(
+            models.Member.id == data.member_id,
+            models.Member.club_id == perms.club_id,
+        ).first()
+        if not member:
+            raise HTTPException(404, "Thành viên không tồn tại trong CLB")
+        # Kiểm tra player record đã tồn tại chưa
+        existing = db.query(models.Player).filter(
+            models.Player.club_id == perms.club_id,
+            models.Player.member_id == data.member_id,
+        ).first()
+        if existing:
+            # Trả về record đã có thay vì báo lỗi
+            return schemas.PlayerOut(
+                id=existing.id, name=existing.name, phone=existing.phone,
+                email=existing.email, member_id=existing.member_id,
+                club_id=existing.club_id, is_guest=False,
+            )
+        name = data.name or member.full_name
+    else:
+        if not data.name:
+            raise HTTPException(422, "Tên là bắt buộc với khách mời")
+        name = data.name
+
+    p = models.Player(
+        name=name, phone=data.phone, email=data.email,
+        member_id=data.member_id, club_id=perms.club_id,
+    )
+    db.add(p); db.commit(); db.refresh(p)
+    return schemas.PlayerOut(
+        id=p.id, name=p.name, phone=p.phone, email=p.email,
+        member_id=p.member_id, club_id=p.club_id,
+        is_guest=(p.member_id is None),
+    )
+
+
+@app.put("/api/players/{pid}", response_model=schemas.PlayerOut)
+def update_player(
+    pid: int,
+    data: schemas.PlayerCreate,
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    perms.require_edit()
+    p = db.query(models.Player).filter(
+        models.Player.id == pid, models.Player.club_id == perms.club_id
+    ).first()
+    if not p:
+        raise HTTPException(404, "Không tìm thấy player")
+    p.name = data.name or p.name
+    p.phone = data.phone
+    p.email = data.email
+    db.commit(); db.refresh(p)
+    return schemas.PlayerOut(
+        id=p.id, name=p.name, phone=p.phone, email=p.email,
+        member_id=p.member_id, club_id=p.club_id,
+        is_guest=(p.member_id is None),
+    )
+
+
+@app.delete("/api/players/{pid}", status_code=204)
+def delete_player(
+    pid: int,
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    perms.require_delete()
+    p = db.query(models.Player).filter(
+        models.Player.id == pid, models.Player.club_id == perms.club_id
+    ).first()
+    if not p:
+        raise HTTPException(404, "Không tìm thấy player")
+    # Kiểm tra player đang tham gia giải đấu nào không
+    used = db.query(models.TournamentParticipant).filter(
+        (models.TournamentParticipant.player_id == pid) |
+        (models.TournamentParticipant.partner_player_id == pid)
+    ).first()
+    if used:
+        raise HTTPException(400, "Không thể xóa: player đang tham gia giải đấu")
+    db.delete(p); db.commit()
+
+
+# ── TOURNAMENTS ───────────────────────────────────────────
+
 @app.get("/api/tournaments", response_model=List[schemas.TournamentOut])
 def list_tournaments(
     db: Session = Depends(get_db),
@@ -1416,31 +1534,50 @@ def create_tournament(
     )
     db.add(t); db.flush()
 
+    def _resolve_name(db, member_id=None, player_id=None) -> str:
+        """Lấy tên hiển thị từ member hoặc player."""
+        if member_id:
+            return db.query(models.Member.full_name).filter(models.Member.id == member_id).scalar() or ""
+        if player_id:
+            return db.query(models.Player.name).filter(models.Player.id == player_id).scalar() or ""
+        return ""
+
     if data.team_type == "doubles" and data.teams:
-        # Doubles: mỗi phần tử trong teams = 1 đội {member_id, partner_member_id, team_name?}
+        # Doubles: mỗi team dict có thể chứa member_id/player_id cho từng vị trí
         for idx, team in enumerate(data.teams):
             m1 = team.get("member_id")
+            p1 = team.get("player_id")
             m2 = team.get("partner_member_id")
+            p2 = team.get("partner_player_id")
             tname = team.get("team_name") or None
-            if not tname and m1 and m2:
-                n1 = db.query(models.Member.full_name).filter(models.Member.id == m1).scalar() or ""
-                n2 = db.query(models.Member.full_name).filter(models.Member.id == m2).scalar() or ""
-                tname = f"{n1} / {n2}"
-            p = models.TournamentParticipant(
-                tournament_id=t.id, member_id=m1,
-                partner_member_id=m2, team_name=tname, seed=idx + 1,
-            )
-            db.add(p)
-    else:
-        # Singles: mỗi member_id = 1 đội
-        for idx, mid in enumerate(data.member_ids or []):
-            member = db.query(models.Member).filter(models.Member.id == mid).first()
-            tname = member.full_name if member else None
-            p = models.TournamentParticipant(
-                tournament_id=t.id, member_id=mid,
+            if not tname:
+                n1 = _resolve_name(db, m1, p1)
+                n2 = _resolve_name(db, m2, p2)
+                tname = f"{n1} / {n2}" if n1 and n2 else (n1 or n2)
+            pt = models.TournamentParticipant(
+                tournament_id=t.id,
+                member_id=m1, player_id=p1,
+                partner_member_id=m2, partner_player_id=p2,
                 team_name=tname, seed=idx + 1,
             )
-            db.add(p)
+            db.add(pt)
+    else:
+        # Singles: kết hợp member_ids (thành viên) + player_ids (khách mời)
+        idx = 0
+        for mid in (data.member_ids or []):
+            member = db.query(models.Member).filter(models.Member.id == mid).first()
+            pt = models.TournamentParticipant(
+                tournament_id=t.id, member_id=mid,
+                team_name=member.full_name if member else None, seed=idx + 1,
+            )
+            db.add(pt); idx += 1
+        for pid in (data.player_ids or []):
+            pname = db.query(models.Player.name).filter(models.Player.id == pid).scalar() or "Khách"
+            pt = models.TournamentParticipant(
+                tournament_id=t.id, player_id=pid,
+                team_name=pname, seed=idx + 1,
+            )
+            db.add(pt); idx += 1
 
     db.commit(); db.refresh(t)
     return t

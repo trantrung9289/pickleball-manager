@@ -224,6 +224,28 @@ class TransactionOut(TransactionBase):
         from_attributes = True
 
 
+# ── Player (thành viên + khách mời) ──────────────────────
+
+class PlayerCreate(BaseModel):
+    name: str
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    member_id: Optional[int] = None  # NULL = khách mời
+
+
+class PlayerOut(BaseModel):
+    id: int
+    name: str
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    member_id: Optional[int] = None
+    club_id: int
+    is_guest: bool = False  # computed field
+
+    class Config:
+        from_attributes = True
+
+
 # ── Tournament ────────────────────────────────────────────
 class TournamentCreate(BaseModel):
     name: str
@@ -233,8 +255,9 @@ class TournamentCreate(BaseModel):
     rank_rules: Optional[List[Dict[str, str]]] = None
     num_groups: int = 2
     description: Optional[str] = None
-    member_ids: Optional[List[int]] = None   # singles mode
-    teams: Optional[List[Dict]] = None       # doubles mode: [{member_id, partner_member_id, team_name?}]
+    member_ids: Optional[List[int]] = None   # singles: thành viên CLB
+    player_ids: Optional[List[int]] = None   # singles: khách mời (Player.id)
+    teams: Optional[List[Dict]] = None       # doubles: [{member_id?, player_id?, partner_member_id?, partner_player_id?, team_name?}]
 
 
 class TournamentUpdate(BaseModel):
@@ -245,13 +268,17 @@ class TournamentUpdate(BaseModel):
 
 class ParticipantOut(BaseModel):
     id: int
-    member_id: int
+    member_id: Optional[int] = None
+    player_id: Optional[int] = None
     partner_member_id: Optional[int] = None
+    partner_player_id: Optional[int] = None
     team_name: Optional[str] = None
     seed: Optional[int] = None
     group_name: Optional[str] = None
     member: Optional[MemberOut] = None
     partner: Optional[MemberOut] = None
+    player: Optional[PlayerOut] = None
+    partner_player: Optional[PlayerOut] = None
 
     class Config:
         from_attributes = True

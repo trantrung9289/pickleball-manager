@@ -3,15 +3,15 @@ import {
   Table, Button, Space, Tag, Modal, Form, Input, Select,
   message, Typography, Row, Col, Card, Steps,
   InputNumber, Tabs, Badge, Statistic, Empty,
-  Divider, Alert, Transfer,
+  Divider, Alert, Transfer, Tooltip,
 } from "antd";
 import {
   PlusOutlined, ThunderboltOutlined, TrophyOutlined,
   EditOutlined, DeleteOutlined, ReloadOutlined,
   CheckCircleOutlined, SaveOutlined, ArrowRightOutlined,
-  UserOutlined, TeamOutlined,
+  UserOutlined, TeamOutlined, UserAddOutlined,
 } from "@ant-design/icons";
-import { tournamentsApi, membersApi } from "../api";
+import { tournamentsApi, membersApi, playersApi } from "../api";
 
 const { Title, Text } = Typography;
 
@@ -33,7 +33,7 @@ const confirm = (opts) =>
     Modal.confirm({ okText: "Xác nhận", cancelText: "Hủy", ...opts, onOk: () => res(true), onCancel: () => res(false) })
   );
 
-const teamLabel = (p) => p?.team_name || p?.member?.full_name || "—";
+const teamLabel = (p) => p?.team_name || p?.member?.full_name || p?.player?.name || "—";
 
 // ── Wizard tạo giải ──────────────────────────────────────
 function CreateWizard({ onCreated, onClose }) {
@@ -42,8 +42,11 @@ function CreateWizard({ onCreated, onClose }) {
   const [allMembers, setAllMembers] = useState([]);
   const [format, setFormat] = useState(null);
 
-  // Bước 2: chọn người chơi
-  const [selectedIds, setSelectedIds] = useState([]);
+  // Bước 1: chọn người chơi (thành viên + khách mời)
+  const [selectedIds, setSelectedIds] = useState([]);          // member IDs đã chọn
+  const [guestPlayers, setGuestPlayers] = useState([]);        // [{id, name, phone}] đã tạo qua API
+  const [guestForm] = Form.useForm();
+  const [addingGuest, setAddingGuest] = useState(false);
 
   // Bước 3: ghép đội
   const [teamType, setTeamType] = useState("singles");
@@ -51,9 +54,9 @@ function CreateWizard({ onCreated, onClose }) {
   const [doubleMethod, setDoubleMethod] = useState("manual");
   // doubles – rank rules: [{rank1, rank2}] for auto-pairing
   const [rankRules, setRankRules] = useState([{ rank1: "", rank2: "" }]);
-  // doubles – built teams
+  // doubles – built teams (mở rộng: hỗ trợ player_id cho khách mời)
   const [teams, setTeams] = useState([]);
-  const [pick1, setPick1] = useState(null);
+  const [pick1, setPick1] = useState(null);  // "m-{id}" hoặc "g-{id}"
   const [pick2, setPick2] = useState(null);
 
   const [saving, setSaving] = useState(false);
@@ -63,17 +66,54 @@ function CreateWizard({ onCreated, onClose }) {
   }, []);
 
   const selectedMembers = allMembers.filter(m => selectedIds.includes(m.id));
-  const usedIds = new Set(teams.flatMap(t => [t.member_id, t.partner_member_id]));
-  const availableForTeam = selectedMembers.filter(m => !usedIds.has(m.id));
+  const totalSelected = selectedIds.length + guestPlayers.length;
 
-  // Thêm 1 đội thủ công
+  // Pool chung cho ghép đội đôi (key: "m-{id}" hoặc "g-{id}")
+  const allPool = [
+    ...selectedMembers.map(m => ({ key: `m-${m.id}`, name: m.full_name, rank: m.rank, type: "member", member_id: m.id })),
+    ...guestPlayers.map(g => ({ key: `g-${g.id}`, name: g.name, phone: g.phone, type: "guest", player_id: g.id })),
+  ];
+  const usedKeys = new Set(teams.flatMap(t => [t._key1, t._key2].filter(Boolean)));
+  const availablePool = allPool.filter(p => !usedKeys.has(p.key));
+
+  // Helper: parse key để lấy type+id cho payload
+  const parseKey = (key) => {
+    if (!key) return {};
+    if (key.startsWith("m-")) return { member_id: parseInt(key.slice(2)) };
+    if (key.startsWith("g-")) return { player_id: parseInt(key.slice(2)) };
+    return {};
+  };
+  const keyToName = (key) => allPool.find(p => p.key === key)?.name || "?";
+
+  // Thêm khách mời qua API rồi lưu vào guestPlayers
+  const handleAddGuest = async () => {
+    let vals;
+    try { vals = await guestForm.validateFields(); } catch { return; }
+    setAddingGuest(true);
+    try {
+      const res = await playersApi.create({ name: vals.name, phone: vals.phone || null, email: vals.email || null });
+      setGuestPlayers(prev => [...prev, { id: res.data.id, name: res.data.name, phone: res.data.phone }]);
+      guestForm.resetFields();
+      message.success(`Đã thêm khách mời: ${res.data.name}`);
+    } catch (err) {
+      message.error(err.response?.data?.detail || "Không thể thêm khách mời");
+    } finally { setAddingGuest(false); }
+  };
+
+  const removeGuest = (id) => setGuestPlayers(prev => prev.filter(g => g.id !== id));
+
+  // Thêm 1 đội thủ công (hỗ trợ cả member và guest)
   const addTeamManual = () => {
     if (!pick1 || !pick2) { message.error("Chọn 2 người chơi để ghép đội"); return; }
-    const m1 = allMembers.find(m => m.id === pick1);
-    const m2 = allMembers.find(m => m.id === pick2);
+    const n1 = keyToName(pick1);
+    const n2 = keyToName(pick2);
+    const p1 = parseKey(pick1);
+    const p2 = parseKey(pick2);
     setTeams(t => [...t, {
-      member_id: pick1, partner_member_id: pick2,
-      team_name: `${m1?.full_name} / ${m2?.full_name}`,
+      ...p1,
+      partner_member_id: p2.member_id, partner_player_id: p2.player_id,
+      team_name: `${n1} / ${n2}`,
+      _key1: pick1, _key2: pick2,
     }]);
     setPick1(null); setPick2(null);
   };
@@ -92,24 +132,26 @@ function CreateWizard({ onCreated, onClose }) {
   const autoTeamByRank = () => {
     const newTeams = [];
     const used = new Set();
+    // Chỉ áp dụng ghép theo rank cho thành viên CLB (có rank)
+    const memberPool = selectedMembers;
 
     for (const rule of rankRules) {
       if (!rule.rank1 || !rule.rank2) continue;
 
       if (rule.rank1 === rule.rank2) {
-        const pool = shuffle(selectedMembers.filter(m => m.rank === rule.rank1 && !used.has(m.id)));
+        const pool = shuffle(memberPool.filter(m => m.rank === rule.rank1 && !used.has(m.id)));
         for (let i = 0; i + 1 < pool.length; i += 2) {
           const a = pool[i], b = pool[i + 1];
-          newTeams.push({ member_id: a.id, partner_member_id: b.id, team_name: `${a.full_name} / ${b.full_name}` });
+          newTeams.push({ member_id: a.id, partner_member_id: b.id, team_name: `${a.full_name} / ${b.full_name}`, _key1: `m-${a.id}`, _key2: `m-${b.id}` });
           used.add(a.id); used.add(b.id);
         }
       } else {
-        const p1s = shuffle(selectedMembers.filter(m => m.rank === rule.rank1 && !used.has(m.id)));
-        const p2s = shuffle(selectedMembers.filter(m => m.rank === rule.rank2 && !used.has(m.id)));
+        const p1s = shuffle(memberPool.filter(m => m.rank === rule.rank1 && !used.has(m.id)));
+        const p2s = shuffle(memberPool.filter(m => m.rank === rule.rank2 && !used.has(m.id)));
         for (const a of p1s) {
           const b = p2s.find(x => !used.has(x.id));
           if (!b) break;
-          newTeams.push({ member_id: a.id, partner_member_id: b.id, team_name: `${a.full_name} / ${b.full_name}` });
+          newTeams.push({ member_id: a.id, partner_member_id: b.id, team_name: `${a.full_name} / ${b.full_name}`, _key1: `m-${a.id}`, _key2: `m-${b.id}` });
           used.add(a.id); used.add(b.id);
         }
       }
@@ -119,20 +161,20 @@ function CreateWizard({ onCreated, onClose }) {
       message.warning("Không tìm được cặp nào phù hợp với quy tắc đã đặt"); return;
     }
     setTeams(newTeams);
-    const unpairedCount = selectedMembers.filter(m => !used.has(m.id)).length;
+    const unpairedCount = memberPool.filter(m => !used.has(m.id)).length + guestPlayers.length;
     message.success(`Đã ghép ${newTeams.length} đội${unpairedCount > 0 ? ` · ${unpairedCount} người chưa có đội` : ""}`);
   };
 
   const removeTeam = (i) => setTeams(t => t.filter((_, j) => j !== i));
 
-  const totalTeams = teamType === "singles" ? selectedIds.length : teams.length;
+  const totalTeams = teamType === "singles" ? totalSelected : teams.length;
 
   const handleNext = async () => {
     if (step === 0) {
       try { await form.validateFields(); setFormat(form.getFieldValue("format")); }
       catch { return; }
     }
-    if (step === 1 && selectedIds.length < 2) {
+    if (step === 1 && totalSelected < 2) {
       message.error("Cần chọn ít nhất 2 người chơi"); return;
     }
     if (step === 2 && totalTeams < 2) {
@@ -157,9 +199,11 @@ function CreateWizard({ onCreated, onClose }) {
         pairing_mode: "random",
       };
       if (teamType === "doubles") {
-        payload.teams = teams;
+        // Gửi teams không kèm _key1/_key2 (internal tracking only)
+        payload.teams = teams.map(({ _key1, _key2, ...rest }) => rest);
       } else {
         payload.member_ids = selectedIds;
+        payload.player_ids = guestPlayers.map(g => g.id);
       }
       const res = await tournamentsApi.create(payload);
       message.success("Đã tạo giải đấu!");
@@ -212,22 +256,84 @@ function CreateWizard({ onCreated, onClose }) {
       {step === 1 && (
         <>
           <Alert
-            message={selectedIds.length >= 2
-              ? `Đã chọn ${selectedIds.length} người chơi`
+            message={totalSelected >= 2
+              ? `Đã chọn ${totalSelected} người chơi (${selectedIds.length} thành viên, ${guestPlayers.length} khách mời)`
               : "Chọn ít nhất 2 người chơi tham gia giải"}
-            type={selectedIds.length >= 2 ? "info" : "warning"}
+            type={totalSelected >= 2 ? "info" : "warning"}
             showIcon style={{ marginBottom: 12 }}
           />
-          <Table
-            rowSelection={{
-              selectedRowKeys: selectedIds,
-              onChange: keys => setSelectedIds(keys),
-            }}
-            columns={memberCols}
-            dataSource={allMembers}
-            rowKey="id"
-            size="small"
-            pagination={{ pageSize: 12 }}
+          <Tabs
+            defaultActiveKey="member"
+            items={[
+              {
+                key: "member",
+                label: <span><UserOutlined /> Thành viên CLB ({selectedIds.length})</span>,
+                children: (
+                  <Table
+                    rowSelection={{
+                      selectedRowKeys: selectedIds,
+                      onChange: keys => setSelectedIds(keys),
+                    }}
+                    columns={memberCols}
+                    dataSource={allMembers}
+                    rowKey="id"
+                    size="small"
+                    pagination={{ pageSize: 10 }}
+                  />
+                ),
+              },
+              {
+                key: "guest",
+                label: <span><UserAddOutlined /> Khách mời ({guestPlayers.length})</span>,
+                children: (
+                  <>
+                    <Card size="small" style={{ marginBottom: 12, background: "#fafafa" }}
+                      title={<span style={{ fontSize: 13 }}>Thêm người chơi ngoài CLB</span>}
+                    >
+                      <Form form={guestForm} layout="inline" style={{ flexWrap: "wrap", gap: 8 }}>
+                        <Form.Item name="name" rules={[{ required: true, message: "Nhập tên" }]} style={{ marginBottom: 8 }}>
+                          <Input placeholder="Họ và tên *" style={{ width: 180 }} />
+                        </Form.Item>
+                        <Form.Item name="phone" style={{ marginBottom: 8 }}>
+                          <Input placeholder="Số điện thoại" style={{ width: 140 }} />
+                        </Form.Item>
+                        <Form.Item style={{ marginBottom: 8 }}>
+                          <Button
+                            type="primary" icon={<PlusOutlined />}
+                            loading={addingGuest} onClick={handleAddGuest}
+                          >
+                            Thêm khách mời
+                          </Button>
+                        </Form.Item>
+                      </Form>
+                    </Card>
+
+                    {guestPlayers.length === 0 ? (
+                      <Empty description="Chưa có khách mời nào" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+                    ) : (
+                      <Table
+                        size="small"
+                        pagination={false}
+                        dataSource={guestPlayers}
+                        rowKey="id"
+                        columns={[
+                          { title: "#", render: (_, __, i) => i + 1, width: 40, align: "center" },
+                          { title: "Họ và tên", dataIndex: "name",
+                            render: v => <><Tag color="orange" style={{ marginRight: 6 }}>Khách</Tag>{v}</> },
+                          { title: "SĐT", dataIndex: "phone", render: v => v || "—" },
+                          {
+                            title: "", width: 60, align: "center",
+                            render: (_, r) => (
+                              <Button danger size="small" onClick={() => removeGuest(r.id)}>Xóa</Button>
+                            ),
+                          },
+                        ]}
+                      />
+                    )}
+                  </>
+                ),
+              },
+            ]}
           />
         </>
       )}
@@ -274,7 +380,7 @@ function CreateWizard({ onCreated, onClose }) {
           {teamType === "singles" && (
             <Alert
               type="success" showIcon
-              message={`${selectedIds.length} người chơi → ${selectedIds.length} đội thi đấu`}
+              message={`${totalSelected} người chơi → ${totalSelected} đội thi đấu`}
               description="Mỗi người chơi được xem là 1 đội. Lịch thi đấu sẽ được ghép ngẫu nhiên khi bấm 'Sinh lịch'."
             />
           )}
@@ -313,8 +419,9 @@ function CreateWizard({ onCreated, onClose }) {
                       <Select value={pick1} onChange={setPick1} placeholder="Người 1"
                         style={{ width: "100%" }} allowClear showSearch
                         filterOption={(inp, opt) => opt.label?.toLowerCase().includes(inp.toLowerCase())}
-                        options={availableForTeam.map(m => ({
-                          value: m.id, label: `${m.full_name}${m.rank ? ` (${m.rank})` : ""}`,
+                        options={availablePool.map(p => ({
+                          value: p.key,
+                          label: `${p.name}${p.rank ? ` (${p.rank})` : ""}${p.type === "guest" ? " [Khách]" : ""}`,
                         }))}
                       />
                     </Col>
@@ -325,8 +432,9 @@ function CreateWizard({ onCreated, onClose }) {
                       <Select value={pick2} onChange={setPick2} placeholder="Người 2"
                         style={{ width: "100%" }} allowClear showSearch
                         filterOption={(inp, opt) => opt.label?.toLowerCase().includes(inp.toLowerCase())}
-                        options={availableForTeam.filter(m => m.id !== pick1).map(m => ({
-                          value: m.id, label: `${m.full_name}${m.rank ? ` (${m.rank})` : ""}`,
+                        options={availablePool.filter(p => p.key !== pick1).map(p => ({
+                          value: p.key,
+                          label: `${p.name}${p.rank ? ` (${p.rank})` : ""}${p.type === "guest" ? " [Khách]" : ""}`,
                         }))}
                       />
                     </Col>
@@ -397,36 +505,34 @@ function CreateWizard({ onCreated, onClose }) {
 
               {/* Trạng thái ghép đội của từng người */}
               <Divider orientation="left" style={{ marginTop: 12, fontSize: 12 }}>
-                Trạng thái ({selectedMembers.length} người)
+                Trạng thái ({allPool.length} người)
               </Divider>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                {selectedMembers.map(m => {
-                  const paired = usedIds.has(m.id);
-                  const partner = paired
-                    ? teams.find(t => t.member_id === m.id || t.partner_member_id === m.id)
+                {allPool.map(p => {
+                  const paired = usedKeys.has(p.key);
+                  const partnerKey = paired
+                    ? teams.find(t => t._key1 === p.key || t._key2 === p.key)
                     : null;
-                  const partnerName = partner
-                    ? (partner.member_id === m.id
-                        ? selectedMembers.find(x => x.id === partner.partner_member_id)?.full_name
-                        : selectedMembers.find(x => x.id === partner.member_id)?.full_name)
+                  const partnerName = partnerKey
+                    ? keyToName(partnerKey._key1 === p.key ? partnerKey._key2 : partnerKey._key1)
                     : null;
                   return (
                     <Tag
-                      key={m.id}
-                      color={paired ? "green" : "orange"}
+                      key={p.key}
+                      color={paired ? "green" : p.type === "guest" ? "orange" : "gold"}
                       style={{ marginBottom: 4 }}
-                      title={paired ? `Đã ghép với: ${partnerName}` : "Chưa có đội"}
                     >
-                      {paired ? "✓ " : ""}{m.full_name}{m.rank ? ` (${m.rank})` : ""}
+                      {paired ? "✓ " : ""}{p.name}{p.rank ? ` (${p.rank})` : ""}
+                      {p.type === "guest" && <span style={{ opacity: 0.75 }}> [Khách]</span>}
                       {paired && partnerName && <Text style={{ color: "inherit", fontSize: 11 }}> + {partnerName}</Text>}
                     </Tag>
                   );
                 })}
               </div>
-              {availableForTeam.length > 0 && (
+              {availablePool.length > 0 && (
                 <Alert
                   type="warning" showIcon style={{ marginTop: 8 }}
-                  message={`${availableForTeam.length} người chưa có đội — mỗi người chỉ được ghép với 1 người khác`}
+                  message={`${availablePool.length} người chưa có đội — mỗi người chỉ được ghép với 1 người khác`}
                 />
               )}
             </>
@@ -458,7 +564,10 @@ function CreateWizard({ onCreated, onClose }) {
                   </Col>
                   <Col span={12} style={{ marginTop: 12 }}>
                     <div style={{ marginBottom: 8 }}><Text type="secondary">Số đội tham gia</Text></div>
-                    <div style={{ fontWeight: 600, fontSize: 15, color: "#1677ff" }}>{totalTeams} đội</div>
+                    <div style={{ fontWeight: 600, fontSize: 15, color: "#1677ff" }}>
+                      {totalTeams} đội
+                      {guestPlayers.length > 0 && <Tag color="orange" style={{ marginLeft: 8 }}>{guestPlayers.length} khách mời</Tag>}
+                    </div>
                   </Col>
                   {vals.format === "combined" && (
                     <Col span={12} style={{ marginTop: 12 }}>

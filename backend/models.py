@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Date, DateTime, Numeric, Boolean, Enum, ForeignKey, Text, JSON
+from sqlalchemy import Column, Integer, String, Date, DateTime, Numeric, Boolean, Enum, ForeignKey, Text, JSON, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 import enum
@@ -149,6 +149,32 @@ class ClubMembership(Base):
     club = relationship("Club")
 
 
+# ── PLAYER MODEL (thành viên CLB + khách mời) ─────────────
+
+class Player(Base):
+    """Đại diện cho mọi người có thể tham gia giải đấu.
+    member_id=NULL  → khách mời (ngoài CLB)
+    member_id!=NULL → thành viên CLB
+    """
+    __tablename__ = "players"
+
+    id         = Column(Integer, primary_key=True, index=True)
+    name       = Column(String(100), nullable=False)
+    phone      = Column(String(20), nullable=True)
+    email      = Column(String(100), nullable=True)
+    member_id  = Column(Integer, ForeignKey("members.id", ondelete="SET NULL"), nullable=True)
+    club_id    = Column(Integer, ForeignKey("clubs.id", ondelete="CASCADE"), nullable=False)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    member = relationship("Member")
+
+    __table_args__ = (
+        # 1 thành viên chỉ có 1 player record trong cùng CLB
+        UniqueConstraint("club_id", "member_id", name="uq_player_club_member"),
+    )
+
+
 # ── TOURNAMENT MODELS ─────────────────────────────────────
 
 class Tournament(Base):
@@ -171,20 +197,26 @@ class Tournament(Base):
 
 
 class TournamentParticipant(Base):
-    """Mỗi record = 1 đội thi đấu (đơn: 1 người, đôi: 2 người)."""
+    """Mỗi record = 1 đội thi đấu (đơn: 1 người, đôi: 2 người).
+    Hỗ trợ cả thành viên CLB (member_id) và khách mời (player_id).
+    """
     __tablename__ = "tournament_participants"
 
-    id = Column(Integer, primary_key=True, index=True)
-    tournament_id = Column(Integer, ForeignKey("tournaments.id"), nullable=False)
-    member_id = Column(Integer, ForeignKey("members.id"), nullable=False)          # người 1 (hoặc duy nhất)
-    partner_member_id = Column(Integer, ForeignKey("members.id"), nullable=True)   # người 2 (chỉ với đôi)
-    team_name = Column(String(200), nullable=True)    # tên đội (tự động hoặc tùy chỉnh)
-    seed = Column(Integer, nullable=True)
-    group_name = Column(String(10), nullable=True)    # A, B, C… bảng đấu
+    id                = Column(Integer, primary_key=True, index=True)
+    tournament_id     = Column(Integer, ForeignKey("tournaments.id"), nullable=False)
+    member_id         = Column(Integer, ForeignKey("members.id"), nullable=True)         # người 1 — thành viên
+    player_id         = Column(Integer, ForeignKey("players.id"), nullable=True)         # người 1 — khách mời
+    partner_member_id = Column(Integer, ForeignKey("members.id"), nullable=True)         # người 2 — thành viên (đôi)
+    partner_player_id = Column(Integer, ForeignKey("players.id"), nullable=True)         # người 2 — khách mời (đôi)
+    team_name         = Column(String(200), nullable=True)
+    seed              = Column(Integer, nullable=True)
+    group_name        = Column(String(10), nullable=True)
 
     tournament = relationship("Tournament", back_populates="participants")
-    member = relationship("Member", foreign_keys=[member_id], back_populates="tournament_participations")
-    partner = relationship("Member", foreign_keys=[partner_member_id])
+    member     = relationship("Member", foreign_keys=[member_id], back_populates="tournament_participations")
+    partner    = relationship("Member", foreign_keys=[partner_member_id])
+    player     = relationship("Player", foreign_keys=[player_id])
+    partner_player = relationship("Player", foreign_keys=[partner_player_id])
 
 
 class TournamentMatch(Base):

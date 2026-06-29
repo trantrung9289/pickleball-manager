@@ -99,6 +99,16 @@ export const reportsApi = {
   feeStatus: (month, year, fee_type_id) => api.get("/api/reports/fee-status", { params: { month, year, fee_type_id } }),
 };
 
+export const playersApi = {
+  list: (type) => api.get("/api/players", { params: type ? { type } : {} }),
+  create: (data) => api.post("/api/players", data),
+  update: (id, data) => api.put(`/api/players/${id}`, data),
+  delete: (id) => api.delete(`/api/players/${id}`),
+  /** Tạo player từ member CLB (tự động lấy tên từ member) */
+  createFromMember: (memberId, memberName) =>
+    api.post("/api/players", { member_id: memberId, name: memberName }),
+};
+
 export const tournamentsApi = {
   list: () => api.get("/api/tournaments"),
   get: (id) => api.get(`/api/tournaments/${id}`),

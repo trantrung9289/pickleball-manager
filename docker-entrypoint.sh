@@ -1,5 +1,14 @@
 #!/bin/sh
-# Entrypoint: khởi động backend FastAPI trước, sau đó khởi động bot
+# Entrypoint: chạy migration → khởi động backend FastAPI → khởi động bot
+
+# ── Database migration (idempotent, an toàn) ────────────────────────────────
+echo "🔄 Chạy database migration..."
+cd /app && python migrations/add_players_tables.py
+if [ $? -ne 0 ]; then
+  echo "❌ Migration thất bại — dừng khởi động"
+  exit 1
+fi
+echo "✅ Migration hoàn tất"
 
 # Khởi động backend (background tạm thời để đợi)
 echo "🚀 Khởi động backend FastAPI..."
