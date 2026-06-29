@@ -12,6 +12,7 @@ import {
   UserOutlined, TeamOutlined, UserAddOutlined,
 } from "@ant-design/icons";
 import { tournamentsApi, membersApi, playersApi } from "../api";
+import ResponsiveTable from "../components/ResponsiveTable";
 
 const { Title, Text } = Typography;
 
@@ -271,7 +272,7 @@ function CreateWizard({ onCreated, onClose }) {
                 key: "member",
                 label: <span><UserOutlined /> Thành viên CLB ({selectedIds.length})</span>,
                 children: (
-                  <Table
+                  <ResponsiveTable
                     rowSelection={{
                       selectedRowKeys: selectedIds,
                       onChange: keys => setSelectedIds(keys),
@@ -320,7 +321,7 @@ function CreateWizard({ onCreated, onClose }) {
                     {guestPlayers.length === 0 ? (
                       <Empty description="Chưa có khách mời nào" image={Empty.PRESENTED_IMAGE_SIMPLE} />
                     ) : (
-                      <Table
+                      <ResponsiveTable
                         size="small"
                         pagination={false}
                         dataSource={guestPlayers}
@@ -506,7 +507,7 @@ function CreateWizard({ onCreated, onClose }) {
               {teams.length > 0 && (
                 <>
                   <Divider orientation="left" style={{ marginTop: 8 }}>Danh sách đội ({teams.length})</Divider>
-                  <Table
+                  <ResponsiveTable
                     size="small" pagination={false}
                     dataSource={teams.map((t, i) => ({ ...t, key: i }))}
                     columns={[
@@ -757,9 +758,16 @@ function StandingsTable({ tournament, group }) {
   ];
 
   return (
-    <Table columns={cols} dataSource={rows} rowKey="participant_id" size="small"
+    <ResponsiveTable columns={cols} dataSource={rows} rowKey="participant_id" size="small"
       pagination={false}
       rowClassName={(_, i) => i < 2 ? "ant-table-row-selected" : ""}
+      mobileTitle={(r) => (
+        <span>
+          <b style={{ color: r.rank === 1 ? "#faad14" : r.rank === 2 ? "#1677ff" : "inherit", marginRight: 6 }}>#{r.rank}</b>
+          {r.team_name || r.full_name}
+        </span>
+      )}
+      mobileHideColumns={["#", "Đội"]}
     />
   );
 }
@@ -889,7 +897,7 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated }) {
     tabItems.push({
       key: "schedule",
       label: `Lịch thi đấu (${doneCount}/${matches.length})`,
-      children: <Table columns={matchTableCols} dataSource={matches} rowKey="id" size="small" pagination={{ pageSize: 15 }} />,
+      children: <ResponsiveTable columns={matchTableCols} dataSource={matches} rowKey="id" size="small" pagination={{ pageSize: 15 }} />,
     });
     if (fmt === "round_robin") {
       tabItems.push({
@@ -909,7 +917,7 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated }) {
     tabItems.push({
       key: "schedule",
       label: `Danh sách trận (${doneCount}/${matches.length})`,
-      children: <Table columns={matchTableCols} dataSource={matches} rowKey="id" size="small" pagination={false} />,
+      children: <ResponsiveTable columns={matchTableCols} dataSource={matches} rowKey="id" size="small" pagination={false} />,
     });
   }
 
@@ -940,7 +948,7 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated }) {
               label: `Bảng ${g}`,
               children: (
                 <>
-                  <Table
+                  <ResponsiveTable
                     columns={matchTableCols}
                     dataSource={groupMatches.filter(m => m.group_name === g)}
                     rowKey="id" size="small" pagination={false}
@@ -962,7 +970,7 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated }) {
           <>
             <KnockoutBracket matches={koMatches} />
             <Divider />
-            <Table columns={matchTableCols} dataSource={koMatches} rowKey="id" size="small" pagination={false} />
+            <ResponsiveTable columns={matchTableCols} dataSource={koMatches} rowKey="id" size="small" pagination={false} />
           </>
         ),
       });
@@ -1140,7 +1148,7 @@ export default function Tournament() {
         </Button>
       </Row>
 
-      <Table
+      <ResponsiveTable
         columns={columns}
         dataSource={tournaments}
         rowKey="id"

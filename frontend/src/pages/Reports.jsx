@@ -10,6 +10,7 @@ import {
 } from "@ant-design/icons";
 import dayjs from "dayjs";
 import { reportsApi, feeTypesApi, transactionsApi } from "../api";
+import ResponsiveTable from "../components/ResponsiveTable";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
   ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell, LabelList,
@@ -130,12 +131,13 @@ function YearlySummary({ year }) {
         </ResponsiveContainer>
       </Card>
 
-      <Table
+      <ResponsiveTable
         columns={monthCols}
         dataSource={monthly}
         rowKey="month"
         size="small"
         pagination={false}
+        mobileTitle={(r) => r.name}
         summary={(rows) => {
           const tIncome = rows.reduce((s, r) => s + r.total_income, 0);
           const tExpense = rows.reduce((s, r) => s + r.total_expense, 0);
@@ -147,6 +149,15 @@ function YearlySummary({ year }) {
               <Table.Summary.Cell align="right"><b style={{ color: tIncome >= tExpense ? "#1677ff" : "#ff4d4f" }}>{fmt(tIncome - tExpense)}</b></Table.Summary.Cell>
             </Table.Summary.Row>
           );
+        }}
+        mobileSummary={(rows) => {
+          const tIncome = rows.reduce((s, r) => s + r.total_income, 0);
+          const tExpense = rows.reduce((s, r) => s + r.total_expense, 0);
+          return [
+            { label: "Tổng thu", value: <span style={{ color: "#52c41a" }}>{fmt(tIncome)}</span> },
+            { label: "Tổng chi", value: <span style={{ color: "#ff4d4f" }}>{fmt(tExpense)}</span> },
+            { label: "Chênh lệch", value: <b style={{ color: tIncome >= tExpense ? "#1677ff" : "#ff4d4f" }}>{fmt(tIncome - tExpense)}</b> },
+          ];
         }}
       />
     </>
@@ -372,12 +383,14 @@ function MonthlyStats({ year }) {
                 >
                   {renderPie(detail.income_breakdown, INCOME_COLORS, "thu")}
                   {detail.income_breakdown?.length > 0 && (
-                    <Table
+                    <ResponsiveTable
                       dataSource={detail.income_breakdown}
                       rowKey="fee_type"
                       size="small"
                       pagination={false}
                       style={{ marginTop: 8 }}
+                      mobileTitle={(r) => r.fee_type}
+                      mobileHideColumns={["Khoản thu"]}
                       columns={[
                         { title: "Khoản thu", dataIndex: "fee_type" },
                         { title: "Lần", dataIndex: "count", align: "center", width: 60 },
@@ -399,12 +412,14 @@ function MonthlyStats({ year }) {
                 >
                   {renderPie(detail.expense_breakdown, EXPENSE_COLORS, "chi")}
                   {detail.expense_breakdown?.length > 0 && (
-                    <Table
+                    <ResponsiveTable
                       dataSource={detail.expense_breakdown}
                       rowKey="fee_type"
                       size="small"
                       pagination={false}
                       style={{ marginTop: 8 }}
+                      mobileTitle={(r) => r.fee_type}
+                      mobileHideColumns={["Khoản chi"]}
                       columns={[
                         { title: "Khoản chi", dataIndex: "fee_type" },
                         { title: "Lần", dataIndex: "count", align: "center", width: 60 },
@@ -424,12 +439,21 @@ function MonthlyStats({ year }) {
               {txs.length === 0
                 ? <Empty description="Chưa có giao dịch nào trong tháng này" image={Empty.PRESENTED_IMAGE_SIMPLE} />
                 : (
-                  <Table
+                  <ResponsiveTable
                     columns={txCols}
                     dataSource={txs}
                     rowKey="id"
                     size="small"
                     pagination={{ pageSize: 15 }}
+                    mobileTitle={(r) => (
+                      <span>
+                        <Tag color={r.type === "income" ? "green" : "red"} style={{ marginRight: 6 }}>
+                          {r.type === "income" ? "Thu" : "Chi"}
+                        </Tag>
+                        {r.fee_type?.name || "Giao dịch"}
+                      </span>
+                    )}
+                    mobileHideColumns={["Loại", "Khoản"]}
                     summary={(rows) => {
                       const tIn = rows.filter((r) => r.type === "income").reduce((s, r) => s + parseFloat(r.amount), 0);
                       const tEx = rows.filter((r) => r.type === "expense").reduce((s, r) => s + parseFloat(r.amount), 0);
@@ -443,6 +467,14 @@ function MonthlyStats({ year }) {
                           <Table.Summary.Cell colSpan={2} />
                         </Table.Summary.Row>
                       );
+                    }}
+                    mobileSummary={(rows) => {
+                      const tIn = rows.filter((r) => r.type === "income").reduce((s, r) => s + parseFloat(r.amount), 0);
+                      const tEx = rows.filter((r) => r.type === "expense").reduce((s, r) => s + parseFloat(r.amount), 0);
+                      return [
+                        { label: "Tổng thu", value: <span style={{ color: "#52c41a" }}>+{fmt(tIn)}</span> },
+                        { label: "Tổng chi", value: <span style={{ color: "#ff4d4f" }}>-{fmt(tEx)}</span> },
+                      ];
                     }}
                   />
                 )
@@ -507,12 +539,14 @@ function MemberContributions({ year }) {
           </Tag>
         </Col>
       </Row>
-      <Table
+      <ResponsiveTable
         columns={contribCols}
         dataSource={contributions}
         rowKey={(r) => `${r.member_id}-${r.fee_type_name}`}
         size="small"
         pagination={{ pageSize: 20 }}
+        mobileTitle={(r) => r.full_name}
+        mobileHideColumns={["Họ và tên"]}
         summary={(rows) => {
           const total = rows.reduce((s, r) => s + r.total_amount, 0);
           return (
@@ -524,6 +558,9 @@ function MemberContributions({ year }) {
             </Table.Summary.Row>
           );
         }}
+        mobileSummary={(rows) => [
+          { label: "Tổng cộng", value: <b style={{ color: "#52c41a" }}>{fmt(rows.reduce((s, r) => s + r.total_amount, 0))}</b> },
+        ]}
       />
     </>
   );
@@ -667,13 +704,20 @@ function FeeStatusTracker({ year }) {
               />
             )}
 
-            <Table
+            <ResponsiveTable
               columns={paidCols}
               dataSource={data.members}
               rowKey="member_id"
               size="small"
               pagination={{ pageSize: 20 }}
               rowClassName={(r) => r.paid ? "" : "ant-table-row-danger"}
+              mobileTitle={(r) => (
+                <span>
+                  {r.full_name}
+                  {r.rank && <Tag color="purple" style={{ marginLeft: 6 }}>{r.rank}</Tag>}
+                </span>
+              )}
+              mobileHideColumns={["Họ và tên", "Hạng"]}
             />
           </>
         ) : (

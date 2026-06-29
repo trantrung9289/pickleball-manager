@@ -11,6 +11,7 @@ import {
 } from "@ant-design/icons";
 import { adminApi } from "../api";
 import { useAuth } from "../context/AuthContext";
+import ResponsiveTable from "../components/ResponsiveTable";
 
 const { Header, Content, Sider } = Layout;
 const { Title, Text } = Typography;
@@ -350,7 +351,7 @@ export default function AdminPortal({ onBack }) {
                   Tạo tài khoản
                 </Button>
               </Row>
-              <Table dataSource={users} columns={userColumns} rowKey="id" loading={loading} size="middle" />
+              <ResponsiveTable dataSource={users} columns={userColumns} rowKey="id" loading={loading} size="middle" mobileTitle={(r) => <span><b>{r.full_name || "—"}</b> <span style={{ color: "#888", fontWeight: 400 }}>@{r.username}</span></span>} mobileHideColumns={["ID", "Tài khoản"]} />
             </div>
           )}
 
@@ -363,7 +364,7 @@ export default function AdminPortal({ onBack }) {
                   Tạo CLB
                 </Button>
               </Row>
-              <Table dataSource={clubs} columns={clubColumns} rowKey="id" loading={loading} size="middle" />
+              <ResponsiveTable dataSource={clubs} columns={clubColumns} rowKey="id" loading={loading} size="middle" mobileTitle={(r) => <span><b>{r.name}</b>{r.sport && <span style={{ color: "#888", fontWeight: 400 }}> · {r.sport}</span>}</span>} mobileHideColumns={["ID", "Tên CLB"]} />
             </div>
           )}
 
@@ -376,7 +377,7 @@ export default function AdminPortal({ onBack }) {
                   Gán tài khoản quản trị CLB
                 </Button>
               </Row>
-              <Table dataSource={memberships} columns={assignColumns} rowKey="id" loading={loading} size="middle" />
+              <ResponsiveTable dataSource={memberships} columns={assignColumns} rowKey="id" loading={loading} size="middle" />
             </div>
           )}
         </Content>

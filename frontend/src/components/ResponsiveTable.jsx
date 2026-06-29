@@ -20,8 +20,10 @@ export default function ResponsiveTable({
   loading = false,
   pagination,
   rowSelection,
+  summary,
   mobileTitle,
   mobileHideColumns = [],
+  mobileSummary,
   ...rest
 }) {
   const { isMobileView } = useViewMode();
@@ -37,6 +39,7 @@ export default function ResponsiveTable({
         loading={loading}
         pagination={pagination}
         rowSelection={rowSelection}
+        summary={summary}
         scroll={{ x: "max-content" }}
         {...rest}
       />
@@ -164,6 +167,32 @@ export default function ResponsiveTable({
             onChange={setPage}
           />
         </div>
+      )}
+
+      {mobileSummary && (
+        <Card
+          size="small"
+          style={{ marginTop: 4, borderRadius: 12, background: "#fafafa" }}
+          styles={{ body: { padding: 12 } }}
+        >
+          {mobileSummary(dataSource).map((row, i) => (
+            <div
+              key={i}
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "flex-start",
+                gap: 12,
+                padding: "3px 0",
+                fontSize: 14,
+                fontWeight: 600,
+              }}
+            >
+              <span style={{ color: "#595959", flexShrink: 0 }}>{row.label}</span>
+              <span style={{ textAlign: "right", wordBreak: "break-word" }}>{row.value}</span>
+            </div>
+          ))}
+        </Card>
       )}
     </div>
   );
