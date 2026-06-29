@@ -15,3 +15,4 @@ backend/clb.db
 
 # Claude Code local settings
 .claude/settings.local.json
+handoff.md
