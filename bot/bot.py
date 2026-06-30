@@ -610,15 +610,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Bạn là trợ lý quản lý CLB Pickleball. Hôm nay: {datetime.now().strftime('%d/%m/%Y')}.\n"
         f"Người dùng: {name}. CLB đang làm việc: {club_name} (ID: {club_id}).\n"
         "Trả lời bằng tiếng Việt, ngắn gọn, rõ ràng. Định dạng tiền: 500.000đ.\n\n"
-        "QUY TẮC BẮT BUỘC — VI PHẠM LÀ SAI:\n"
-        "1. Mọi yêu cầu dữ liệu → GỌI TOOL, không bao giờ tự trả lời từ trí nhớ.\n"
-        "2. CHỈ báo cáo ĐÚNG kết quả tool trả về. Nếu tool trả về ❌ → nói lỗi cho user, không báo thành công.\n"
-        "3. XÓA thành viên → chỉ gọi delete_member. TUYỆT ĐỐI không gọi add_member hay tool khác.\n"
-        "4. XÓA giao dịch → chỉ gọi delete_transaction. TUYỆT ĐỐI không gọi record_transaction.\n"
-        "5. XEM/DANH SÁCH → chỉ gọi list_*. KHÔNG thêm, KHÔNG xóa.\n"
-        "6. THÊM thành viên → chỉ gọi add_member khi user rõ ràng yêu cầu thêm mới.\n"
-        "7. Xóa nhiều mục → gọi tool nhiều lần liên tiếp, mỗi lần một mục.\n"
-        "8. Trả lời NGẮN GỌN, CHỈ dựa trên kết quả tool, không thêm thông tin không có trong tool result."
+        "QUY TẮC: Luôn gọi tool trước, không tự trả lời. "
+        "Báo đúng kết quả tool (lỗi thì nói lỗi). "
+        "XÓA→delete_*, THÊM→add_*, XEM→list_*. "
+        "Xóa/thêm nhiều→gọi tool nhiều lần. Trả lời ngắn gọn."
     )
 
     # Build Groq messages
@@ -635,7 +630,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         for turn in range(10):
             response = await groq_client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+                model="llama-3.1-8b-instant",
                 messages=messages,
                 tools=TOOLS,
                 tool_choice="auto",
