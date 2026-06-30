@@ -32,6 +32,7 @@ _user_club_name: dict[int, str] = {}   # user_id → club_name
 _pending_username: dict[int, str] = {} # tạm thời khi login
 _wizard: dict[int, dict] = {}          # user_id → {name, step, data}
 _ft_name_cache: dict[int, dict] = {}   # user_id → {str(ft_id): ft_name} — cho category delete
+_tx_cache: dict[int, dict] = {}        # user_id → {tx_id: tx_dict} — cho confirm xóa GD
 _menu_cfg: dict[int, dict] = {}        # user_id → {"menu": {checkedKeys}, "welcome": str}
 _welcomed: set[int] = set()            # user_ids đã thấy tin nhắn chào mừng trong session này
 
@@ -1027,6 +1028,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await reply(update, f"Không có giao dịch tháng {m}/{y}.",
                         kb([back_btn(f"gdlist:{m}:{y}")[0]]))
             return
+        # Cache lại để dùng ở bước confirm (tránh gọi API lần nữa)
+        _tx_cache[user_id] = {t["id"]: t for t in txs}
         rows = []
         for t in txs[:20]:
             icon = "💚" if t["type"] == "income" else "🔴"
@@ -1042,11 +1045,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("deltx_confirm:"):
         parts = data.split(":")
         tx_id, m, y = int(parts[1]), int(parts[2]), int(parts[3])
-        try:
-            tx = await call_backend("get", f"/api/transactions/{tx_id}",
-                                    token=session["token"], club_id=club_id)
-        except ValueError as e:
-            await reply(update, f"❌ {e}")
+        tx = (_tx_cache.get(user_id) or {}).get(tx_id)
+        if not tx:
+            await reply(update, "❌ Không tìm thấy giao dịch. Vui lòng thử lại.",
+                        kb([back_btn(f"gdlist_del:{m}:{y}")[0]]))
             return
         fee_name = (tx.get("fee_type") or {}).get("name", "?") if isinstance(tx.get("fee_type"), dict) else "?"
         member_name = (tx.get("member") or {}).get("full_name", "") if isinstance(tx.get("member"), dict) else ""
