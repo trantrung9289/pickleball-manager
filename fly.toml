@@ -1,5 +1,5 @@
 app = "pickleball-manager"
-primary_region = "sin"
+primary_region = "iad"
 
 [build]
   dockerfile = "Dockerfile"
