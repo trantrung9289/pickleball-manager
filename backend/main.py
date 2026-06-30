@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, Query, UploadFile, File
+from fastapi import FastAPI, Depends, HTTPException, Query, UploadFile, File, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
@@ -9,6 +9,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 import io
+import secrets
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 import models, schemas
@@ -135,6 +136,14 @@ def _setup_bot_user():
 _setup_bot_user()
 
 app = FastAPI(title="Quản lý CLB Thể thao", version="1.0.0")
+
+# ── Rate limiting (public report endpoints) ──
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
@@ -1387,6 +1396,318 @@ def fee_status(
         "unpaid": len(result) - paid_count,
         "members": result,
     }
+
+
+# ── PUBLIC REPORT LINKS (CRUD — yêu cầu auth) ────────────
+
+@app.post("/api/report-links")
+def create_report_link(
+    data: dict,
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+    current_user: models.User = Depends(get_current_user),
+):
+    perms.require_view()
+    token_str = secrets.token_urlsafe(32)
+    expires_at_val = None
+    if data.get("expires_at"):
+        try:
+            expires_at_val = datetime.fromisoformat(data["expires_at"])
+        except Exception:
+            expires_at_val = None
+    rec = models.PublicReportToken(
+        token=token_str,
+        club_id=perms.club_id,
+        label=data.get("label", "Báo cáo công khai"),
+        expires_at=expires_at_val,
+        created_by=current_user.username,
+    )
+    db.add(rec)
+    db.commit()
+    db.refresh(rec)
+    return {
+        "id": rec.id,
+        "token": rec.token,
+        "label": rec.label,
+        "expires_at": rec.expires_at.isoformat() if rec.expires_at else None,
+        "is_active": rec.is_active,
+        "view_count": rec.view_count,
+        "created_at": rec.created_at.isoformat() if rec.created_at else None,
+    }
+
+
+@app.get("/api/report-links")
+def list_report_links(
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    perms.require_view()
+    recs = db.query(models.PublicReportToken).filter(
+        models.PublicReportToken.club_id == perms.club_id
+    ).order_by(models.PublicReportToken.created_at.desc()).all()
+    return [
+        {
+            "id": r.id,
+            "token": r.token,
+            "label": r.label,
+            "expires_at": r.expires_at.isoformat() if r.expires_at else None,
+            "is_active": r.is_active,
+            "view_count": r.view_count,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        }
+        for r in recs
+    ]
+
+
+@app.patch("/api/report-links/{link_id}/toggle")
+def toggle_report_link(
+    link_id: int,
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    perms.require_view()
+    rec = db.query(models.PublicReportToken).filter(
+        models.PublicReportToken.id == link_id,
+        models.PublicReportToken.club_id == perms.club_id,
+    ).first()
+    if not rec:
+        raise HTTPException(404, "Link không tồn tại")
+    rec.is_active = not rec.is_active
+    db.commit()
+    return {"id": rec.id, "is_active": rec.is_active}
+
+
+@app.delete("/api/report-links/{link_id}")
+def delete_report_link(
+    link_id: int,
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    perms.require_view()
+    rec = db.query(models.PublicReportToken).filter(
+        models.PublicReportToken.id == link_id,
+        models.PublicReportToken.club_id == perms.club_id,
+    ).first()
+    if not rec:
+        raise HTTPException(404, "Link không tồn tại")
+    db.delete(rec)
+    db.commit()
+    return {"ok": True}
+
+
+# ── PUBLIC REPORT ENDPOINTS (không cần auth) ─────────────
+
+def _validate_token(token: str, db: Session, increment_view: bool = False):
+    rec = db.query(models.PublicReportToken).filter(
+        models.PublicReportToken.token == token,
+        models.PublicReportToken.is_active == True,
+    ).first()
+    if not rec:
+        raise HTTPException(404, "Link không tồn tại hoặc đã bị vô hiệu hóa")
+    if rec.expires_at and rec.expires_at < datetime.now():
+        raise HTTPException(410, "Link đã hết hạn")
+    if increment_view:
+        rec.view_count += 1
+        db.commit()
+    return rec
+
+
+@app.get("/api/public/report/{token}")
+@limiter.limit("30/minute")
+def public_report_meta(request: Request, token: str, db: Session = Depends(get_db)):
+    rec = _validate_token(token, db, increment_view=True)
+    club = db.query(models.Club).filter(models.Club.id == rec.club_id).first()
+    return {
+        "label": rec.label,
+        "club_name": club.name if club else "",
+        "club_sport": club.sport if club else "",
+        "expires_at": rec.expires_at.isoformat() if rec.expires_at else None,
+        "view_count": rec.view_count,
+    }
+
+
+@app.get("/api/public/report/{token}/summary")
+@limiter.limit("60/minute")
+def public_report_summary(request: Request, token: str, year: int = None, db: Session = Depends(get_db)):
+    rec = _validate_token(token, db)
+    if not year:
+        year = datetime.now().year
+    results = []
+    for month in range(1, 13):
+        q = db.query(models.Transaction).filter(
+            models.Transaction.club_id == rec.club_id,
+            extract("year", models.Transaction.transaction_date) == year,
+            extract("month", models.Transaction.transaction_date) == month
+        )
+        income = sum(float(t.amount) for t in q.filter(models.Transaction.type == "income").all())
+        expense = sum(float(t.amount) for t in q.filter(models.Transaction.type == "expense").all())
+        results.append({
+            "month": month, "year": year,
+            "total_income": income, "total_expense": expense, "balance": income - expense,
+        })
+    return results
+
+
+@app.get("/api/public/report/{token}/monthly-detail")
+@limiter.limit("60/minute")
+def public_report_monthly_detail(request: Request, token: str, month: int, year: int, db: Session = Depends(get_db)):
+    rec = _validate_token(token, db)
+    from datetime import date as date_type
+    start_of_month = date_type(year, month, 1)
+    end_of_month = date_type(year + 1, 1, 1) if month == 12 else date_type(year, month + 1, 1)
+    opening_income = db.query(func.sum(models.Transaction.amount)).filter(
+        models.Transaction.club_id == rec.club_id,
+        models.Transaction.transaction_date < start_of_month,
+        models.Transaction.type == "income",
+    ).scalar() or 0
+    opening_expense = db.query(func.sum(models.Transaction.amount)).filter(
+        models.Transaction.club_id == rec.club_id,
+        models.Transaction.transaction_date < start_of_month,
+        models.Transaction.type == "expense",
+    ).scalar() or 0
+    opening_balance = float(opening_income) - float(opening_expense)
+    txs = db.query(models.Transaction).filter(
+        models.Transaction.club_id == rec.club_id,
+        models.Transaction.transaction_date >= start_of_month,
+        models.Transaction.transaction_date < end_of_month,
+    ).all()
+    income_by_fee: dict = {}
+    expense_by_fee: dict = {}
+    for t in txs:
+        name = t.fee_type.name if t.fee_type else "Khác"
+        bucket = income_by_fee if t.type == "income" else expense_by_fee
+        if name not in bucket:
+            bucket[name] = {"fee_type": name, "count": 0, "amount": 0}
+        bucket[name]["count"] += 1
+        bucket[name]["amount"] += float(t.amount)
+    total_income = sum(v["amount"] for v in income_by_fee.values())
+    total_expense = sum(v["amount"] for v in expense_by_fee.values())
+    closing_balance = opening_balance + total_income - total_expense
+    return {
+        "month": month, "year": year,
+        "opening_balance": opening_balance,
+        "total_income": total_income, "total_expense": total_expense,
+        "closing_balance": closing_balance,
+        "balance": total_income - total_expense,
+        "transaction_count": len(txs),
+        "income_breakdown": sorted(income_by_fee.values(), key=lambda x: -x["amount"]),
+        "expense_breakdown": sorted(expense_by_fee.values(), key=lambda x: -x["amount"]),
+    }
+
+
+@app.get("/api/public/report/{token}/member-contributions")
+@limiter.limit("60/minute")
+def public_report_member_contributions(
+    request: Request, token: str,
+    fee_type_id: Optional[int] = None,
+    year: Optional[int] = None,
+    db: Session = Depends(get_db),
+):
+    rec = _validate_token(token, db)
+    q = db.query(
+        models.Member.id,
+        models.Member.member_code,
+        models.Member.full_name,
+        models.FeeType.name.label("fee_type_name"),
+        func.count(models.Transaction.id).label("transaction_count"),
+        func.sum(models.Transaction.amount).label("total_amount"),
+    ).join(models.Transaction, models.Transaction.member_id == models.Member.id)\
+     .join(models.FeeType, models.FeeType.id == models.Transaction.fee_type_id)\
+     .filter(models.Transaction.type == "income", models.Transaction.club_id == rec.club_id)
+    if fee_type_id:
+        q = q.filter(models.Transaction.fee_type_id == fee_type_id)
+    if year:
+        q = q.filter(extract("year", models.Transaction.transaction_date) == year)
+    rows = q.group_by(models.Member.id, models.FeeType.id).order_by(models.Member.full_name).all()
+    return [
+        {
+            "member_id": r.id, "member_code": r.member_code, "full_name": r.full_name,
+            "fee_type_name": r.fee_type_name,
+            "transaction_count": r.transaction_count,
+            "total_amount": float(r.total_amount or 0),
+        }
+        for r in rows
+    ]
+
+
+@app.get("/api/public/report/{token}/fee-status")
+@limiter.limit("60/minute")
+def public_report_fee_status(
+    request: Request, token: str, month: int, year: int, fee_type_id: int,
+    db: Session = Depends(get_db),
+):
+    rec = _validate_token(token, db)
+    members = db.query(models.Member).filter(
+        models.Member.club_id == rec.club_id,
+        models.Member.status == "active",
+    ).order_by(models.Member.full_name).all()
+    paid_ids = set(
+        r[0] for r in db.query(models.Transaction.member_id).filter(
+            models.Transaction.club_id == rec.club_id,
+            models.Transaction.fee_type_id == fee_type_id,
+            extract("month", models.Transaction.transaction_date) == month,
+            extract("year", models.Transaction.transaction_date) == year,
+            models.Transaction.member_id.isnot(None),
+        ).all()
+    )
+    result = [
+        {
+            "member_id": m.id, "member_code": m.member_code, "full_name": m.full_name,
+            "phone": m.phone, "rank": m.rank, "paid": m.id in paid_ids,
+        }
+        for m in members
+    ]
+    paid_count = sum(1 for r in result if r["paid"])
+    return {
+        "month": month, "year": year,
+        "total": len(result), "paid": paid_count, "unpaid": len(result) - paid_count,
+        "members": result,
+    }
+
+
+@app.get("/api/public/report/{token}/fee-types")
+@limiter.limit("60/minute")
+def public_report_fee_types(
+    request: Request, token: str,
+    type: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    rec = _validate_token(token, db)
+    q = db.query(models.FeeType).filter(models.FeeType.club_id == rec.club_id)
+    if type:
+        q = q.filter(models.FeeType.type == type)
+    fts = q.order_by(models.FeeType.name).all()
+    return [{"id": f.id, "name": f.name, "type": f.type} for f in fts]
+
+
+@app.get("/api/public/report/{token}/transactions")
+@limiter.limit("60/minute")
+def public_report_transactions(
+    request: Request, token: str,
+    month: Optional[int] = None,
+    year: Optional[int] = None,
+    db: Session = Depends(get_db),
+):
+    rec = _validate_token(token, db)
+    q = db.query(models.Transaction).filter(models.Transaction.club_id == rec.club_id)
+    if month:
+        q = q.filter(extract("month", models.Transaction.transaction_date) == month)
+    if year:
+        q = q.filter(extract("year", models.Transaction.transaction_date) == year)
+    txs = q.order_by(models.Transaction.transaction_date.desc()).all()
+    return [
+        {
+            "id": t.id,
+            "type": t.type,
+            "amount": float(t.amount),
+            "transaction_date": t.transaction_date.isoformat() if t.transaction_date else None,
+            "description": t.description,
+            "payment_method": t.payment_method,
+            "fee_type": {"id": t.fee_type.id, "name": t.fee_type.name} if t.fee_type else None,
+            "member": {"id": t.member.id, "full_name": t.member.full_name} if t.member else None,
+        }
+        for t in txs
+    ]
 
 
 # ── TOURNAMENTS ───────────────────────────────────────────

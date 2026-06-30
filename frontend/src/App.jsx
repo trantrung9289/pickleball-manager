@@ -24,6 +24,7 @@ import Setup from "./pages/Setup";
 import Landing from "./pages/Landing";
 import AdminPortal from "./pages/AdminPortal";
 import ClubSelect from "./pages/ClubSelect";
+import PublicReport from "./pages/PublicReport";
 
 const { Header, Sider, Content } = Layout;
 const { Title } = Typography;
@@ -269,6 +270,12 @@ function AppShell() {
 }
 
 export default function App() {
+  // Trang công khai — không cần đăng nhập
+  const publicMatch = window.location.pathname.match(/^\/public\/report\/([^/]+)/);
+  if (publicMatch) {
+    return <PublicReport token={publicMatch[1]} />;
+  }
+
   return (
     <AuthProvider>
       <ViewModeProvider>

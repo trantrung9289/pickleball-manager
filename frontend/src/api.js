@@ -1,5 +1,7 @@
 import axios from "axios";
 
+const BASE_URL = import.meta.env.VITE_API_URL || "";
+
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL || "",
 });
@@ -119,6 +121,34 @@ export const tournamentsApi = {
   startKnockout: (id) => api.post(`/api/tournaments/${id}/start-knockout`),
   score: (tid, mid, data) => api.post(`/api/tournaments/${tid}/matches/${mid}/score`, data),
   standings: (tid, group) => api.get(`/api/tournaments/${tid}/standings`, { params: group ? { group } : {} }),
+};
+
+export const reportLinksApi = {
+  list: () => api.get("/api/report-links"),
+  create: (data) => api.post("/api/report-links", data),
+  toggle: (id) => api.patch(`/api/report-links/${id}/toggle`),
+  delete: (id) => api.delete(`/api/report-links/${id}`),
+};
+
+// Factory trả về api object cho một public token (không cần auth)
+export const createPublicReportApi = (token) => {
+  const base = `${BASE_URL}/api/public/report/${token}`;
+  const pub = axios.create({ baseURL: BASE_URL });
+  return {
+    meta: () => pub.get(`/api/public/report/${token}`),
+    reports: {
+      summary: (year) => pub.get(`${base}/summary`, { params: { year } }),
+      monthlyDetail: (month, year) => pub.get(`${base}/monthly-detail`, { params: { month, year } }),
+      memberContributions: (params) => pub.get(`${base}/member-contributions`, { params }),
+      feeStatus: (month, year, fee_type_id) => pub.get(`${base}/fee-status`, { params: { month, year, fee_type_id } }),
+    },
+    transactions: {
+      list: (params) => pub.get(`${base}/transactions`, { params }),
+    },
+    feeTypes: {
+      list: (params) => pub.get(`${base}/fee-types`, { params }),
+    },
+  };
 };
 
 export default api;

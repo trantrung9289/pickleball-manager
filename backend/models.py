@@ -220,6 +220,23 @@ class TournamentParticipant(Base):
     partner_player = relationship("Player", foreign_keys=[partner_player_id])
 
 
+class PublicReportToken(Base):
+    """Token chia sẻ báo cáo tài chính công khai — không cần đăng nhập."""
+    __tablename__ = "public_report_tokens"
+
+    id = Column(Integer, primary_key=True, index=True)
+    token = Column(String(64), unique=True, index=True, nullable=False)
+    club_id = Column(Integer, ForeignKey("clubs.id"), nullable=False)
+    label = Column(String(200), nullable=False)
+    expires_at = Column(DateTime, nullable=True)   # NULL = vĩnh viễn
+    is_active = Column(Boolean, default=True)
+    view_count = Column(Integer, default=0)
+    created_at = Column(DateTime, server_default=func.now())
+    created_by = Column(String(50), nullable=True)
+
+    club = relationship("Club")
+
+
 class TournamentMatch(Base):
     __tablename__ = "tournament_matches"
 
