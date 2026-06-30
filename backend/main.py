@@ -2193,34 +2193,44 @@ def get_standings(
 
 
 # ── BOT CONFIG ────────────────────────────────────────────
+def _get_bot_config_club_id(
+    x_club_id: Optional[int] = Header(default=None, alias="X-Club-ID"),
+    current_user: models.User = Depends(get_current_user),
+) -> int:
+    """Chỉ superuser được dùng endpoint này; club_id lấy từ header."""
+    if not current_user.is_superuser:
+        raise HTTPException(403, "Chỉ Quản trị viên hệ thống mới được cấu hình Bot")
+    if not x_club_id:
+        raise HTTPException(400, "Thiếu header X-Club-ID")
+    return x_club_id
+
+
 @app.get("/api/bot-config")
 def get_bot_config(
+    club_id: int = Depends(_get_bot_config_club_id),
     db: Session = Depends(get_db),
-    perms: ClubPermissions = Depends(get_club_permission),
 ):
-    perms.require_view()
-    rows = db.query(models.BotConfig).filter(models.BotConfig.club_id == perms.club_id).all()
+    rows = db.query(models.BotConfig).filter(models.BotConfig.club_id == club_id).all()
     return {r.key: r.value for r in rows}
 
 
 @app.put("/api/bot-config")
 def put_bot_config(
     body: dict,
+    club_id: int = Depends(_get_bot_config_club_id),
     db: Session = Depends(get_db),
-    perms: ClubPermissions = Depends(get_club_permission),
 ):
-    perms.require_edit()
     for key, value in body.items():
         row = db.query(models.BotConfig).filter(
-            models.BotConfig.club_id == perms.club_id,
+            models.BotConfig.club_id == club_id,
             models.BotConfig.key == key,
         ).first()
         if row:
             row.value = str(value) if value is not None else None
         else:
-            db.add(models.BotConfig(club_id=perms.club_id, key=key, value=str(value) if value is not None else None))
+            db.add(models.BotConfig(club_id=club_id, key=key, value=str(value) if value is not None else None))
     db.commit()
-    rows = db.query(models.BotConfig).filter(models.BotConfig.club_id == perms.club_id).all()
+    rows = db.query(models.BotConfig).filter(models.BotConfig.club_id == club_id).all()
     return {r.key: r.value for r in rows}
 
 

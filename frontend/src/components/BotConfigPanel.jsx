@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import {
   Card, Form, Input, Switch, Button, message,
-  Divider, Typography, Space, Tag, Alert, Select,
+  Typography, Space, Alert, Select,
 } from "antd";
 import { SaveOutlined, ReloadOutlined } from "@ant-design/icons";
 import { adminApi } from "../api";
@@ -146,31 +146,6 @@ export default function BotConfigPanel() {
         </Form>
       )}
 
-      <Divider />
-
-      <Card title="Hướng dẫn kết nối Bot" size="small">
-        <Space direction="vertical" style={{ width: "100%" }}>
-          <div>
-            <Text strong>Bot hiện tại: </Text>
-            <Text>Dùng lại bot token đã cài — không cần tạo bot mới.</Text>
-          </div>
-          <div>
-            <Text strong>Xóa key cũ không dùng:</Text>
-            <br />
-            <Text code>fly secrets unset GROQ_API_KEY GEMINI_API_KEY ANTHROPIC_API_KEY</Text>
-          </div>
-          <div>
-            <Text strong>Kiểm tra bot đang chạy:</Text>
-            <br />
-            <Text code>fly logs --app pickleball-manager</Text>
-          </div>
-          <div>
-            <Text strong>Thành viên dùng Bot:</Text>
-            <br />
-            <Text>Tìm bot → gõ <Tag>/start</Tag> → đăng nhập tài khoản CLB → bấm nút menu.</Text>
-          </div>
-        </Space>
-      </Card>
     </div>
   );
 }
