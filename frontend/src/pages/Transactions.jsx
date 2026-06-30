@@ -210,7 +210,7 @@ export default function Transactions() {
     { title: "Loại", dataIndex: "type", render: (v) => <Tag color={v === "income" ? "green" : "red"}>{v === "income" ? "Thu" : "Chi"}</Tag> },
     { title: "Khoản", render: (_, r) => r.fee_type?.name || "—" },
     { title: "Thành viên", render: (_, r) => r.member?.full_name || "—" },
-    { title: "Số tiền", dataIndex: "amount", render: (v) => <b style={{ color: "#333" }}>{fmt(v)}</b>, align: "right" },
+    { title: "Số tiền", dataIndex: "amount", render: (v, r) => <b style={{ color: r.type === "income" ? "#52c41a" : "#ff4d4f" }}>{fmt(v)}</b>, align: "right" },
     { title: "PT thanh toán", dataIndex: "payment_method" },
     { title: "Ghi chú", dataIndex: "description", ellipsis: true },
     {

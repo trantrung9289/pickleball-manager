@@ -2,10 +2,12 @@
 Telegram Bot CLB Pickleball — Menu-driven với Inline Buttons
 Không dùng AI — hoàn toàn miễn phí, không rate limit
 """
+import json
 import logging
 import os
 import time
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import httpx
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -29,6 +31,9 @@ _user_club: dict[int, int] = {}        # user_id → club_id
 _user_club_name: dict[int, str] = {}   # user_id → club_name
 _pending_username: dict[int, str] = {} # tạm thời khi login
 _wizard: dict[int, dict] = {}          # user_id → {name, step, data}
+_ft_name_cache: dict[int, dict] = {}   # user_id → {str(ft_id): ft_name} — cho category delete
+_menu_cfg: dict[int, dict] = {}        # user_id → {"menu": {checkedKeys}, "welcome": str}
+_welcomed: set[int] = set()            # user_ids đã thấy tin nhắn chào mừng trong session này
 
 SESSION_TTL = 7 * 24 * 3600
 
@@ -69,8 +74,13 @@ def fmt(amount) -> str:
         return str(amount)
 
 
+_VN_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
+
+def _now_vn() -> datetime:
+    return datetime.now(_VN_TZ).replace(tzinfo=None)
+
 def today_str() -> str:
-    return datetime.now().strftime("%Y-%m-%d")
+    return _now_vn().strftime("%Y-%m-%d")
 
 
 def parse_date(text: str) -> str | None:
@@ -100,6 +110,81 @@ async def reply(update: Update, text: str, keyboard=None):
         await safe_edit(update.callback_query, text, keyboard)
     else:
         await update.message.reply_text(text, reply_markup=keyboard, parse_mode="Markdown")
+
+
+# ── Menu config mapping: tree key → (label, callback_data) ───────────────────
+KEY_TO_ACTION: dict[str, tuple[str, str]] = {
+    "members":            ("👥 Thành viên",        "menu:members"),
+    "thu":                ("💰 Thu tiền",           "menu:thu"),
+    "chi":                ("📤 Chi tiền",           "menu:chi"),
+    "report":             ("📊 Báo cáo",            "menu:report"),
+    "gdlist":             ("📋 Giao dịch",          "menu:gdlist"),
+    "category":           ("🗂 Danh mục",           "menu:category"),
+    "help":               ("❓ Hướng dẫn",          "menu:help"),
+    "members_list":       ("📋 Danh sách",          "member:list"),
+    "members_add":        ("➕ Thêm mới",           "wiz:add_member"),
+    "members_upd_rank":   ("🏆 Cập nhật hạng",     "wiz:upd_member_rank"),
+    "members_upd_status": ("🔄 Cập nhật T.Thái",   "wiz:upd_member_status"),
+    "members_delete":     ("🗑 Xóa thành viên",     "wiz:del_member"),
+    "report_overview":    ("📈 Tổng quan",          "report:overview"),
+    "report_monthly":     ("📅 Theo tháng",         "report:monthly"),
+    "report_fee_status":  ("💳 Trạng thái phí",     "report:fee_status"),
+    "category_add":       ("➕ Thêm khoản",         "wiz:add_fee_type"),
+    "category_delete":    ("🗑 Xóa khoản",          "category:delete"),
+}
+
+DEFAULT_TOP_KEYS     = ["members", "thu", "chi", "report", "gdlist", "category", "help"]
+DEFAULT_MEMBER_KEYS  = ["members_list", "members_add", "members_upd_rank", "members_upd_status", "members_delete"]
+DEFAULT_REPORT_KEYS  = ["report_overview", "report_monthly", "report_fee_status"]
+DEFAULT_CATEGORY_KEYS = ["category_add", "category_delete"]
+
+
+async def fetch_and_cache_menu_cfg(user_id: int, token: str, club_id: int):
+    """Tải toàn bộ bot-config từ API, cache cả menu_config lẫn welcome_message."""
+    try:
+        cfg_data = await call_backend("get", "/api/bot-config", token=token, club_id=club_id)
+        menu_cfg = json.loads(cfg_data["menu_config"]) if "menu_config" in cfg_data else None
+        _menu_cfg[user_id] = {
+            "menu": menu_cfg,
+            "welcome": cfg_data.get("welcome_message", "").strip(),
+        }
+    except Exception as e:
+        logger.warning(f"fetch_menu_cfg lỗi user {user_id}: {e}")
+        _menu_cfg[user_id] = None
+
+
+def _menu_buttons(user_id: int, keys: list[str], cols: int = 2) -> list[list[tuple]]:
+    """
+    Tạo danh sách hàng nút dựa trên menu_config của user.
+    - cfg không tồn tại (user mới login, chưa fetch) → dùng mặc định
+    - cfg là None → chưa có config trong DB → dùng mặc định
+    - cfg là dict với checkedKeys → lọc theo danh sách đó
+    """
+    sentinel = object()
+    wrapper = _menu_cfg.get(user_id, sentinel)
+
+    if wrapper is sentinel or wrapper is None:
+        ordered_keys = keys
+        enabled = None
+    else:
+        menu_cfg = wrapper.get("menu") if isinstance(wrapper, dict) else None
+        if menu_cfg is None:
+            ordered_keys = keys
+            enabled = None
+        else:
+            enabled = set(menu_cfg.get("checkedKeys", keys))
+            ordered_keys = keys
+
+    buttons = [
+        KEY_TO_ACTION[k]
+        for k in ordered_keys
+        if k in KEY_TO_ACTION and (enabled is None or k in enabled)
+    ]
+
+    rows = []
+    for i in range(0, len(buttons), cols):
+        rows.append(buttons[i:i + cols])
+    return rows
 
 
 def back_btn(target: str = "menu:main") -> list:
@@ -134,7 +219,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
 
     await update.message.reply_text(
-        "👋 Xin chào! Bot quản lý CLB Pickleball.\n\n🔐 Nhập *tên đăng nhập*:",
+        "🔐 *Đăng nhập vào CLB*\n\nNhập *tên đăng nhập*:",
         parse_mode="Markdown",
     )
     return WAIT_USERNAME
@@ -173,19 +258,27 @@ async def _after_login(update: Update, user_id: int, session: dict):
     """Sau login: nếu 1 CLB → vào thẳng main menu. Nhiều CLB → chọn."""
     memberships = await call_backend("get", "/api/my-memberships", token=session["token"])
     if not memberships:
-        await update.message.reply_text("❌ Tài khoản chưa được thêm vào CLB nào.")
+        await reply(update, "❌ Tài khoản chưa được thêm vào CLB nào.")
         return
     if len(memberships) == 1:
         m = memberships[0]
         _user_club[user_id] = m["club_id"]
         _user_club_name[user_id] = m["club"]["name"] if m.get("club") else f"CLB #{m['club_id']}"
+        await fetch_and_cache_menu_cfg(user_id, session["token"], m["club_id"])
         await show_main_menu(update, session, _user_club_name[user_id])
         return
     rows = [
-        [("🏸 " + m["club"]["name"], f"club:{m['club_id']}:{m['club']['name']}")]
+        [("🏸 " + m["club"]["name"], f"club:{m['club_id']}")]
         for m in memberships if m.get("club")
     ]
-    await update.message.reply_text("Chọn CLB muốn làm việc:", reply_markup=kb(*rows))
+    # Lưu tên CLB vào cache để dùng khi callback
+    if not hasattr(_after_login, "_club_cache"):
+        _after_login._club_cache = {}
+    _after_login._club_cache[user_id] = {
+        str(m["club_id"]): m["club"]["name"]
+        for m in memberships if m.get("club")
+    }
+    await reply(update, "Chọn CLB muốn làm việc:", kb(*rows))
 
 
 async def cmd_logout(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -194,6 +287,7 @@ async def cmd_logout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     _user_club.pop(user_id, None)
     _user_club_name.pop(user_id, None)
     _wizard.pop(user_id, None)
+    _welcomed.discard(user_id)
     await update.message.reply_text("👋 Đã đăng xuất. Gõ /start để đăng nhập lại.")
 
 
@@ -211,15 +305,33 @@ async def cmd_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def show_main_menu(update: Update, session: dict, club_name: str):
     user_id = update.effective_user.id
     _wizard.pop(user_id, None)
+    club_id = _user_club.get(user_id)
+    if club_id:
+        await fetch_and_cache_menu_cfg(user_id, session["token"], club_id)
+
+    # Hiện tin nhắn chào mừng một lần duy nhất sau khi vào CLB
+    # Dùng send_new_message (không edit) để tin nhắn không bị ghi đè bởi menu
+    wrapper = _menu_cfg.get(user_id)
+    if user_id not in _welcomed:
+        custom = (wrapper.get("welcome", "") if isinstance(wrapper, dict) else "").strip()
+        welcome = custom if custom else (
+            f"👋 Xin chào! Tôi là Bot quản lý CLB *{club_name}* của các bạn, "
+            f"chúc các bạn có một buổi thể thao vui vẻ!"
+        )
+        # Hỗ trợ placeholder {club_name} trong tin nhắn tùy chỉnh
+        welcome = welcome.replace("{club_name}", club_name)
+        # Gửi như tin nhắn MỚI (không edit), để không bị menu ghi đè
+        if update.callback_query:
+            await update.callback_query.message.reply_text(welcome, parse_mode="Markdown")
+        else:
+            await update.message.reply_text(welcome, parse_mode="Markdown")
+        _welcomed.add(user_id)
+
     name = session.get("full_name") or session["username"]
     text = f"🏸 *{club_name}*\n👤 {name}\n\nChọn chức năng:"
-    keyboard = kb(
-        [("👥 Thành viên",  "menu:members"),  ("💰 Thu tiền",   "menu:thu")],
-        [("📤 Chi tiền",    "menu:chi"),       ("📊 Báo cáo",   "menu:report")],
-        [("📋 Giao dịch",   "menu:gdlist"),    ("🗂 Danh mục",  "menu:category")],
-        [("🔄 Đổi CLB",     "menu:club"),      ("❓ Hướng dẫn", "menu:help")],
-    )
-    await reply(update, text, keyboard)
+    rows = _menu_buttons(user_id, DEFAULT_TOP_KEYS, cols=2)
+    rows.append([("🔄 Đổi CLB", "menu:club")])
+    await reply(update, text, kb(*rows))
 
 
 # ── GUARD: kiểm tra đăng nhập & CLB ──────────────────────────────────────────
@@ -239,11 +351,10 @@ async def _guard(update: Update) -> tuple[dict, int] | None:
 
 # ── MEMBER FLOWS ──────────────────────────────────────────────────────────────
 async def show_member_menu(update: Update):
-    await reply(update, "👥 *Thành viên* — Chọn thao tác:", kb(
-        [("📋 Danh sách",  "member:list"),   ("➕ Thêm mới",  "wiz:add_member")],
-        [("✏️ Cập nhật",   "wiz:upd_member"), ("🗑 Xóa",       "wiz:del_member")],
-        [back_btn("menu:main")[0]],
-    ))
+    user_id = update.effective_user.id
+    rows = _menu_buttons(user_id, DEFAULT_MEMBER_KEYS, cols=2)
+    rows.append([back_btn("menu:main")[0]])
+    await reply(update, "👥 *Thành viên* — Chọn thao tác:", kb(*rows))
 
 
 async def member_list(update: Update, session: dict, club_id: int, status_filter: str = ""):
@@ -284,6 +395,7 @@ Bước có thể là:
 WIZARDS: dict[str, dict] = {
 
     "add_member": {
+        "back_to": "members",
         "title": "➕ *Thêm thành viên mới*",
         "steps": [
             {"key": "full_name", "prompt": "① Nhập *họ và tên* thành viên:"},
@@ -299,6 +411,7 @@ WIZARDS: dict[str, dict] = {
     },
 
     "add_thu": {
+        "back_to": "main",
         "title": "💰 *Ghi khoản thu*",
         "steps": [
             {"key": "_fee_type_id", "prompt": "① Chọn *khoản thu*:",
@@ -315,6 +428,7 @@ WIZARDS: dict[str, dict] = {
     },
 
     "add_chi": {
+        "back_to": "main",
         "title": "📤 *Ghi khoản chi*",
         "steps": [
             {"key": "_fee_type_id", "prompt": "① Chọn *khoản chi*:",
@@ -330,18 +444,20 @@ WIZARDS: dict[str, dict] = {
     },
 
     "del_member": {
+        "back_to": "members",
         "title": "🗑 *Xóa thành viên*",
         "steps": [
             {"key": "_member_id", "prompt": "Chọn *thành viên cần xóa*:",
-             "dynamic": "members"},
+             "dynamic": "members", "all_members": True},
         ],
         "confirm_template": "⚠️ Xác nhận xóa thành viên *{_member_name}*?\nThao tác này không thể hoàn tác!",
     },
 
     "upd_member_rank": {
+        "back_to": "members",
         "title": "✏️ *Cập nhật hạng thành viên*",
         "steps": [
-            {"key": "_member_id", "prompt": "Chọn *thành viên*:", "dynamic": "members"},
+            {"key": "_member_id", "prompt": "Chọn *thành viên*:", "dynamic": "members", "all_members": True},
             {"key": "rank", "prompt": "Chọn *hạng mới*:", "buttons": [
                 [("🏆 A", "A"), ("🥈 B", "B"), ("🥉 C", "C"), ("🌱 Mới", "Mới")],
             ]},
@@ -349,9 +465,10 @@ WIZARDS: dict[str, dict] = {
     },
 
     "upd_member_status": {
+        "back_to": "members",
         "title": "✏️ *Cập nhật trạng thái thành viên*",
         "steps": [
-            {"key": "_member_id", "prompt": "Chọn *thành viên*:", "dynamic": "members"},
+            {"key": "_member_id", "prompt": "Chọn *thành viên*:", "dynamic": "members", "all_members": True},
             {"key": "status", "prompt": "Chọn *trạng thái mới*:", "buttons": [
                 [("✅ Hoạt động", "active"), ("⏸ Tạm nghỉ", "inactive")],
             ]},
@@ -359,6 +476,7 @@ WIZARDS: dict[str, dict] = {
     },
 
     "add_fee_type": {
+        "back_to": "category",
         "title": "🗂 *Thêm khoản thu/chi*",
         "steps": [
             {"key": "name", "prompt": "① Nhập *tên khoản*:"},
@@ -369,6 +487,19 @@ WIZARDS: dict[str, dict] = {
         ],
     },
 }
+
+
+async def _go_back_from_wizard(update: Update, wiz_name: str | None,
+                               session: dict, club_id: int):
+    """Điều hướng về màn hình ngay trước wizard dựa vào back_to."""
+    back_to = WIZARDS.get(wiz_name, {}).get("back_to", "main") if wiz_name else "main"
+    if back_to == "members":
+        await show_member_menu(update)
+    elif back_to == "category":
+        await show_category_menu(update, session, club_id)
+    else:
+        await show_main_menu(update, session, _user_club_name.get(
+            update.effective_user.id, ""))
 
 
 async def wizard_start(update: Update, name: str, session: dict, club_id: int):
@@ -413,6 +544,7 @@ async def wizard_show_step(update: Update, user_id: int, session: dict, club_id:
         except Exception:
             fee_types = []
         filtered = [f for f in fee_types if not ftype_filter or f["type"] == ftype_filter]
+        ft_cache = {}
         for i in range(0, len(filtered), 2):
             chunk = filtered[i:i+2]
             row = []
@@ -420,39 +552,52 @@ async def wizard_show_step(update: Update, user_id: int, session: dict, club_id:
                 label = f["name"]
                 if f.get("default_amount"):
                     label += f" ({fmt(f['default_amount'])})"
-                row.append((label, f"wiz_ft:{f['id']}:{f['name']}:{f.get('default_amount') or 0}"))
+                ft_cache[str(f["id"])] = {"name": f["name"], "default": str(f.get("default_amount") or 0)}
+                row.append((label, f"wiz_ft:{f['id']}"))
             rows.append(row)
+        w["data"]["_ft_cache"] = ft_cache
         if not rows:
             rows = [[("(Chưa có khoản nào)", "wiz:noop")]]
 
     elif step.get("dynamic") == "members":
+        params = {} if step.get("all_members") else {"status": "active"}
         try:
             members = await call_backend("get", "/api/members", token=session["token"],
-                                         club_id=club_id, params={"status": "active"})
+                                         club_id=club_id, params=params)
         except Exception:
             members = []
+        m_cache = {}
         for i in range(0, len(members), 2):
             chunk = members[i:i+2]
-            row = [(f"{m['full_name']} ({m['member_code']})",
-                    f"wiz_m:{m['id']}:{m['full_name']}") for m in chunk]
+            row = []
+            for m in chunk:
+                status_icon = "✅" if m.get("status") == "active" else "⏸"
+                label = f"{status_icon} {m['full_name']} ({m['member_code']})"
+                m_cache[str(m["id"])] = m["full_name"]
+                row.append((label, f"wiz_m:{m['id']}"))
             rows.append(row)
+        w["data"]["_m_cache"] = m_cache
         if not rows:
             rows = [[("(Không có thành viên)", "wiz:noop")]]
 
     elif step.get("buttons"):
-        rows = step["buttons"]
+        rows = list(step["buttons"])  # Tạo bản sao để không mutate WIZARDS dict
 
-    # Thêm nút mặc định nếu có
-    if step.get("has_default") and w["data"].get("_fee_default"):
-        rows.append([
-            (f"📋 Dùng mặc định ({fmt(w['data']['_fee_default'])})", "wiz_default:amount")
-        ])
+    # Thêm nút mặc định nếu có (chỉ khi default > 0)
+    if step.get("has_default"):
+        try:
+            _def_val = float(w["data"].get("_fee_default") or 0)
+        except Exception:
+            _def_val = 0
+        if _def_val > 0:
+            rows.append([(f"📋 Dùng mặc định ({fmt(_def_val)})", "wiz_default:amount")])
 
     # Nút bỏ qua
     if step.get("skippable"):
         rows.append([("⏭ Bỏ qua", "wiz:skip")])
 
-    rows.append([("❌ Hủy wizard", "wiz:cancel")])
+    # Hủy + Menu — luôn ở dưới cùng
+    rows.append([("❌ Hủy", "wiz:cancel"), ("🏠 Menu", "menu:exit")])
     await reply(update, prompt, kb(*rows))
 
 
@@ -551,21 +696,23 @@ async def wizard_submit(update: Update, user_id: int, session: dict, club_id: in
 
 # ── REPORT FLOWS ──────────────────────────────────────────────────────────────
 async def show_report_menu(update: Update):
-    await reply(update, "📊 *Báo cáo* — Chọn loại:", kb(
-        [("📈 Tổng quan", "report:overview"), ("📅 Theo tháng", "report:monthly")],
-        [("💳 Trạng thái phí", "report:fee_status")],
-        [back_btn("menu:main")[0]],
-    ))
+    user_id = update.effective_user.id
+    rows = _menu_buttons(user_id, DEFAULT_REPORT_KEYS, cols=2)
+    rows.append([back_btn("menu:main")[0]])
+    await reply(update, "📊 *Báo cáo* — Chọn loại:", kb(*rows))
 
 
-async def _period_menu(update: Update, prefix: str, label: str):
-    now = datetime.now()
+async def _period_menu(update: Update, prefix: str, label: str, back: str = "menu:main"):
+    now = _now_vn()
     prev_m = now.month - 1 if now.month > 1 else 12
     prev_y = now.year if now.month > 1 else now.year - 1
+    next_m = now.month + 1 if now.month < 12 else 1
+    next_y = now.year if now.month < 12 else now.year + 1
     await reply(update, f"Chọn kỳ {label}:", kb(
-        [(f"📅 Tháng này ({now.month}/{now.year})", f"{prefix}:{now.month}:{now.year}"),
-         (f"⬅ Tháng trước ({prev_m}/{prev_y})", f"{prefix}:{prev_m}:{prev_y}")],
-        [back_btn("menu:report")[0]],
+        [(f"⬅ Tháng trước ({prev_m}/{prev_y})",  f"{prefix}:{prev_m}:{prev_y}")],
+        [(f"📅 Tháng này ({now.month}/{now.year})", f"{prefix}:{now.month}:{now.year}")],
+        [(f"➡ Tháng sau ({next_m}/{next_y})",     f"{prefix}:{next_m}:{next_y}")],
+        [back_btn(back)[0]],
     ))
 
 
@@ -610,17 +757,39 @@ async def report_monthly(update: Update, session: dict, club_id: int, month: int
     await reply(update, "\n".join(lines), kb([back_btn("menu:report")[0]]))
 
 
-async def report_fee_status(update: Update, session: dict, club_id: int, month: int, year: int):
+async def report_fee_status_select_ft(update: Update, session: dict, club_id: int,
+                                       month: int, year: int):
+    """Bước 2: chọn khoản thu cần kiểm tra trạng thái đóng phí."""
     try:
-        data = await call_backend("get", "/api/reports/fee-status", token=session["token"],
-                                  club_id=club_id, params={"month": month, "year": year})
+        fee_types = await call_backend("get", "/api/fee-types", token=session["token"], club_id=club_id)
     except ValueError as e:
         await reply(update, f"❌ {e}")
         return
-    paid = [m for m in data if m.get("paid")]
-    unpaid = [m for m in data if not m.get("paid")]
+    income = [f for f in fee_types if f["type"] == "income"]
+    if not income:
+        await reply(update, "Chưa có khoản thu nào để kiểm tra.",
+                    kb([back_btn("menu:report")[0]]))
+        return
+    rows = [[(f["name"], f"rpt_fee_ft:{month}:{year}:{f['id']}")] for f in income]
+    rows.append([back_btn("menu:report")[0]])
+    await reply(update, f"💳 Chọn *khoản thu* cần kiểm tra tháng *{month}/{year}*:", kb(*rows))
+
+
+async def report_fee_status(update: Update, session: dict, club_id: int,
+                             month: int, year: int, fee_type_id: int):
+    try:
+        data = await call_backend("get", "/api/reports/fee-status", token=session["token"],
+                                  club_id=club_id,
+                                  params={"month": month, "year": year, "fee_type_id": fee_type_id})
+    except ValueError as e:
+        await reply(update, f"❌ {e}")
+        return
+    paid   = [m for m in data.get("members", data) if m.get("paid")]
+    unpaid = [m for m in data.get("members", data) if not m.get("paid")]
+    total  = data.get("total", len(paid) + len(unpaid))
     lines = [
         f"💳 *Trạng thái phí tháng {month}/{year}*\n",
+        f"👥 Tổng thành viên: {total}",
         f"✅ Đã đóng: {len(paid)} người",
         f"❌ Chưa đóng: {len(unpaid)} người",
     ]
@@ -636,7 +805,7 @@ async def report_fee_status(update: Update, session: dict, club_id: int, month: 
 # ── GDLIST FLOW ───────────────────────────────────────────────────────────────
 async def gdlist_show(update: Update, session: dict, club_id: int,
                       month: int | None = None, year: int | None = None, tx_type: str = ""):
-    now = datetime.now()
+    now = _now_vn()
     m = month or now.month
     y = year or now.year
     params = {"month": m, "year": y}
@@ -650,7 +819,7 @@ async def gdlist_show(update: Update, session: dict, club_id: int,
         return
     if not txs:
         await reply(update, f"Không có giao dịch tháng {m}/{y}.",
-                    kb([back_btn("menu:gdlist")[0]]))
+                    kb([back_btn("menu:gdlist")[0], ("🏠 Menu", "menu:exit")]))
         return
     total_in = sum(float(t["amount"]) for t in txs if t["type"] == "income")
     total_ex = sum(float(t["amount"]) for t in txs if t["type"] == "expense")
@@ -669,12 +838,13 @@ async def gdlist_show(update: Update, session: dict, club_id: int,
     lines.append("\n_Nhập ID giao dịch để xóa (vd: `xoa 15`)_")
     await reply(update, "\n".join(lines), kb(
         [("💚 Chỉ thu", f"gdlist:{m}:{y}:income"), ("🔴 Chỉ chi", f"gdlist:{m}:{y}:expense"), ("Tất cả", f"gdlist:{m}:{y}:")],
-        [back_btn("menu:gdlist")[0]],
+        [back_btn("menu:gdlist")[0], ("🏠 Menu", "menu:exit")],
     ))
 
 
 # ── CATEGORY FLOW ─────────────────────────────────────────────────────────────
 async def show_category_menu(update: Update, session: dict, club_id: int):
+    user_id = update.effective_user.id
     try:
         fee_types = await call_backend("get", "/api/fee-types", token=session["token"], club_id=club_id)
     except ValueError as e:
@@ -693,22 +863,24 @@ async def show_category_menu(update: Update, session: dict, club_id: int):
         for f in expense:
             amt = f" — {fmt(f['default_amount'])}" if f.get("default_amount") else ""
             lines.append(f"  • {f['name']}{amt}")
-    await reply(update, "\n".join(lines), kb(
-        [("➕ Thêm khoản", "wiz:add_fee_type"), ("🗑 Xóa khoản", "category:delete")],
-        [back_btn("menu:main")[0]],
-    ))
+    action_rows = _menu_buttons(user_id, DEFAULT_CATEGORY_KEYS, cols=2)
+    action_rows.append([back_btn("menu:main")[0]])
+    await reply(update, "\n".join(lines), kb(*action_rows))
 
 
 async def category_delete_menu(update: Update, session: dict, club_id: int):
+    user_id = update.effective_user.id
     try:
         fee_types = await call_backend("get", "/api/fee-types", token=session["token"], club_id=club_id)
     except ValueError as e:
         await reply(update, f"❌ {e}")
         return
+    # Lưu cache tên khoản để tránh callback_data > 64 bytes
+    _ft_name_cache[user_id] = {str(f["id"]): f["name"] for f in fee_types}
     rows = []
     for f in fee_types:
         icon = "💚" if f["type"] == "income" else "🔴"
-        rows.append([(f"{icon} {f['name']}", f"category:del_confirm:{f['id']}:{f['name']}")])
+        rows.append([(f"{icon} {f['name']}", f"category:del_confirm:{f['id']}")])
     rows.append([back_btn("menu:category")[0]])
     await reply(update, "Chọn khoản cần xóa:", kb(*rows))
 
@@ -745,10 +917,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not session:
             await safe_edit(query, "🔐 Phiên hết hạn. Gõ /start để đăng nhập lại.")
             return
-        parts = data.split(":", 2)
-        _user_club[user_id] = int(parts[1])
-        _user_club_name[user_id] = parts[2]
-        await show_main_menu(update, session, parts[2])
+        club_id_str = data[5:]
+        new_club_id = int(club_id_str)
+        _user_club[user_id] = new_club_id
+        cache = getattr(_after_login, "_club_cache", {})
+        club_name = cache.get(user_id, {}).get(club_id_str, f"CLB #{club_id_str}")
+        _user_club_name[user_id] = club_name
+        _welcomed.discard(user_id)  # Reset để hiện welcome message CLB mới
+        await fetch_and_cache_menu_cfg(user_id, session["token"], new_club_id)
+        await show_main_menu(update, session, club_name)
         return
 
     guard = await _guard(update)
@@ -773,8 +950,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_report_menu(update)
         return
     if data == "menu:gdlist":
-        now = datetime.now()
-        await gdlist_show(update, session, club_id, now.month, now.year)
+        await _period_menu(update, "gdlist", "giao dịch", back="menu:main")
         return
     if data == "menu:category":
         await show_category_menu(update, session, club_id)
@@ -785,6 +961,18 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if data == "menu:help":
         await reply(update, HELP_TEXT, kb([back_btn("menu:main")[0]]))
+        return
+    if data == "menu:exit":
+        if _wizard.get(user_id):
+            await reply(update, "⚠️ Bạn đang thao tác dở. Hủy và về menu chính?", kb(
+                [("✅ Hủy & về Menu", "menu:exit_confirm"), ("↩ Tiếp tục", "wiz:resume")],
+            ))
+        else:
+            await show_main_menu(update, session, _user_club_name.get(user_id, ""))
+        return
+    if data == "menu:exit_confirm":
+        _wizard.pop(user_id, None)
+        await show_main_menu(update, session, _user_club_name.get(user_id, ""))
         return
 
     # ── Member actions ──
@@ -799,18 +987,23 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await report_overview(update, session, club_id)
         return
     if data == "report:monthly":
-        await _period_menu(update, "rpt_monthly", "báo cáo")
+        await _period_menu(update, "rpt_monthly", "báo cáo", back="menu:report")
         return
     if data.startswith("rpt_monthly:"):
         _, m, y = data.split(":")
         await report_monthly(update, session, club_id, int(m), int(y))
         return
     if data == "report:fee_status":
-        await _period_menu(update, "rpt_fee", "trạng thái phí")
+        await _period_menu(update, "rpt_fee", "trạng thái phí", back="menu:report")
         return
-    if data.startswith("rpt_fee:"):
+    if data.startswith("rpt_fee:") and not data.startswith("rpt_fee_ft:"):
         _, m, y = data.split(":")
-        await report_fee_status(update, session, club_id, int(m), int(y))
+        await report_fee_status_select_ft(update, session, club_id, int(m), int(y))
+        return
+    if data.startswith("rpt_fee_ft:"):
+        parts = data.split(":")
+        m, y, ft_id = int(parts[1]), int(parts[2]), int(parts[3])
+        await report_fee_status(update, session, club_id, m, y, ft_id)
         return
 
     # ── Gdlist ──
@@ -826,16 +1019,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await category_delete_menu(update, session, club_id)
         return
     if data.startswith("category:del_confirm:"):
-        parts = data.split(":", 3)
-        ft_id, ft_name = parts[2], parts[3]
+        ft_id = data[21:]
+        ft_name = _ft_name_cache.get(user_id, {}).get(ft_id, f"ID {ft_id}")
         await reply(update,
             f"⚠️ Xác nhận xóa khoản *{ft_name}*?",
-            kb([("✅ Xóa", f"category:del_exec:{ft_id}:{ft_name}"), ("❌ Hủy", "menu:category")])
+            kb([("✅ Xóa", f"category:del_exec:{ft_id}"), ("❌ Hủy", "menu:category")])
         )
         return
     if data.startswith("category:del_exec:"):
-        parts = data.split(":", 3)
-        ft_id, ft_name = parts[2], parts[3]
+        ft_id = data[18:]
+        ft_name = _ft_name_cache.get(user_id, {}).get(ft_id, f"ID {ft_id}")
         try:
             await call_backend("delete", f"/api/fee-types/{ft_id}", token=session["token"], club_id=club_id)
             await reply(update, f"✅ Đã xóa khoản *{ft_name}*.", kb([back_btn("menu:category")[0]]))
@@ -855,8 +1048,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "wiz:noop":
         return
     if data == "wiz:cancel":
-        _wizard.pop(user_id, None)
-        await show_main_menu(update, session, _user_club_name.get(user_id, ""))
+        w = _wizard.pop(user_id, None)
+        await _go_back_from_wizard(update, w["name"] if w else None, session, club_id)
+        return
+    if data == "wiz:resume":
+        w = _wizard.get(user_id)
+        if w:
+            await wizard_show_step(update, user_id, session, club_id)
+        else:
+            await show_main_menu(update, session, _user_club_name.get(user_id, ""))
         return
     if data == "wiz:skip":
         w = _wizard.get(user_id)
@@ -891,12 +1091,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         w = _wizard.get(user_id)
         if not w:
             return
-        parts = data.split(":", 3)
-        ft_id, ft_name, ft_default = parts[1], parts[2], parts[3]
+        ft_id = data[7:]
+        ft_info = w["data"].get("_ft_cache", {}).get(ft_id, {})
         w["data"]["_fee_type_id"] = ft_id
-        w["data"]["_fee_type_name"] = ft_name
-        w["data"]["_fee_default"] = ft_default
-        # Detect type từ wizard name
+        w["data"]["_fee_type_name"] = ft_info.get("name", ft_id)
+        w["data"]["_fee_default"] = ft_info.get("default", "0")
         w["data"]["_fee_type_kind"] = "income" if w["name"] == "add_thu" else "expense"
         w["step"] += 1
         await wizard_show_step(update, user_id, session, club_id)
@@ -907,8 +1106,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         w = _wizard.get(user_id)
         if not w:
             return
-        parts = data.split(":", 2)
-        m_id, m_name = parts[1], parts[2]
+        m_id = data[6:]
+        m_name = w["data"].get("_m_cache", {}).get(m_id, f"ID {m_id}")
         steps = WIZARDS[w["name"]]["steps"]
         step = steps[w["step"]]
         w["data"][step["key"]] = m_id

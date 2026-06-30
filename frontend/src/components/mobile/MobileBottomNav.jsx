@@ -1,21 +1,10 @@
 import React from "react";
-import { MoreOutlined } from "@ant-design/icons";
+import { AppstoreOutlined } from "@ant-design/icons";
 
-/**
- * Thanh điều hướng dưới cùng cho mobile.
- * Wire trực tiếp vào state navigation hiện có (current/onSelect) — KHÔNG dùng react-router.
- *
- * Props:
- *  - items: [{ key, label, icon }]  — các tab chính (tối đa 4)
- *  - current: string                — key trang đang chọn
- *  - onSelect: (key) => void
- *  - onMore: () => void             — mở sheet "Thêm"
- *  - moreActive: boolean            — sheet đang mở / trang hiện tại nằm trong "Thêm"
- */
 export default function MobileBottomNav({ items, current, onSelect, onMore, moreActive }) {
   const tabs = [
     ...items.map((it) => ({ ...it, type: "page" })),
-    { key: "__more__", label: "Thêm", icon: <MoreOutlined />, type: "more" },
+    { key: "__more__", label: "Thêm", icon: <AppstoreOutlined />, type: "more" },
   ];
 
   return (
@@ -27,8 +16,8 @@ export default function MobileBottomNav({ items, current, onSelect, onMore, more
         right: 0,
         zIndex: 1000,
         background: "#fff",
-        borderTop: "1px solid #f0f0f0",
-        boxShadow: "0 -2px 8px rgba(0,0,0,0.06)",
+        borderTop: "1px solid #d9d9d9",
+        boxShadow: "0 -2px 12px rgba(0,0,0,0.10)",
         display: "flex",
         paddingBottom: "env(safe-area-inset-bottom, 0px)",
       }}
@@ -48,15 +37,32 @@ export default function MobileBottomNav({ items, current, onSelect, onMore, more
               flexDirection: "column",
               alignItems: "center",
               justifyContent: "center",
-              gap: 2,
-              padding: "8px 0",
-              minHeight: 56,
-              color: active ? "#1677ff" : "#8c8c8c",
-              transition: "color 0.2s",
+              gap: 3,
+              padding: "6px 0 8px",
+              minHeight: 58,
+              color: active ? "#1677ff" : "#434343",
+              transition: "color 0.15s",
+              position: "relative",
             }}
           >
-            <span style={{ fontSize: 20, lineHeight: 1 }}>{tab.icon}</span>
-            <span style={{ fontSize: 10, fontWeight: active ? 600 : 400, lineHeight: 1.2 }}>
+            {active && (
+              <span
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  left: "50%",
+                  transform: "translateX(-50%)",
+                  width: 32,
+                  height: 3,
+                  borderRadius: "0 0 3px 3px",
+                  background: "#1677ff",
+                }}
+              />
+            )}
+            <span style={{ fontSize: 24, lineHeight: 1, display: "flex" }}>
+              {tab.icon}
+            </span>
+            <span style={{ fontSize: 11, fontWeight: active ? 700 : 500, lineHeight: 1.2 }}>
               {tab.label}
             </span>
           </button>

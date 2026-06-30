@@ -6,6 +6,12 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, extract
 from typing import Optional, List
 from datetime import date, datetime
+from zoneinfo import ZoneInfo
+
+_VN_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
+
+def _now_vn() -> datetime:
+    return datetime.now(_VN_TZ).replace(tzinfo=None)
 from decimal import Decimal
 from pathlib import Path
 import io
@@ -379,8 +385,15 @@ def my_memberships(
 
 
 def auto_member_code(db: Session, club_id: int) -> str:
-    count = db.query(func.count(models.Member.id)).filter(models.Member.club_id == club_id).scalar() or 0
-    return f"TV{str(count + 1).zfill(4)}"
+    existing = db.query(models.Member.member_code).filter(models.Member.club_id == club_id).all()
+    used = set()
+    for (code,) in existing:
+        if code and code.startswith("TV") and code[2:].isdigit():
+            used.add(int(code[2:]))
+    n = 1
+    while n in used:
+        n += 1
+    return f"TV{str(n).zfill(4)}"
 
 
 # ── MEMBERS ──────────────────────────────────────────────
@@ -1204,7 +1217,7 @@ def report_summary(
 ):
     perms.require_view()
     if not year:
-        year = datetime.now().year
+        year = _now_vn().year
     results = []
     for month in range(1, 13):
         q = db.query(models.Transaction).filter(
@@ -1527,7 +1540,7 @@ def _validate_token(slug_or_token: str, db: Session, increment_view: bool = Fals
     ).first()
     if not rec:
         raise HTTPException(404, "Link không tồn tại hoặc đã bị vô hiệu hóa")
-    if rec.expires_at and rec.expires_at < datetime.now():
+    if rec.expires_at and rec.expires_at < _now_vn():
         raise HTTPException(410, "Link đã hết hạn")
     if increment_view:
         rec.view_count += 1
@@ -1554,7 +1567,7 @@ def public_report_meta(request: Request, slug: str, db: Session = Depends(get_db
 def public_report_summary(request: Request, slug: str, year: int = None, db: Session = Depends(get_db)):
     rec = _validate_token(slug, db)
     if not year:
-        year = datetime.now().year
+        year = _now_vn().year
     results = []
     for month in range(1, 13):
         q = db.query(models.Transaction).filter(
@@ -2193,11 +2206,11 @@ def get_standings(
 
 
 # ── BOT CONFIG ────────────────────────────────────────────
-def _get_bot_config_club_id(
+def _require_superuser_club_id(
     x_club_id: Optional[int] = Header(default=None, alias="X-Club-ID"),
     current_user: models.User = Depends(get_current_user),
 ) -> int:
-    """Chỉ superuser được dùng endpoint này; club_id lấy từ header."""
+    """Chỉ superuser được ghi bot-config; club_id lấy từ header."""
     if not current_user.is_superuser:
         raise HTTPException(403, "Chỉ Quản trị viên hệ thống mới được cấu hình Bot")
     if not x_club_id:
@@ -2207,17 +2220,28 @@ def _get_bot_config_club_id(
 
 @app.get("/api/bot-config")
 def get_bot_config(
-    club_id: int = Depends(_get_bot_config_club_id),
+    x_club_id: Optional[int] = Header(default=None, alias="X-Club-ID"),
+    current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    rows = db.query(models.BotConfig).filter(models.BotConfig.club_id == club_id).all()
+    """Đọc bot-config: superuser được đọc mọi CLB; thành viên thường đọc CLB của mình."""
+    if not x_club_id:
+        raise HTTPException(400, "Thiếu header X-Club-ID")
+    if not current_user.is_superuser:
+        membership = db.query(models.ClubMembership).filter(
+            models.ClubMembership.user_id == current_user.id,
+            models.ClubMembership.club_id == x_club_id,
+        ).first()
+        if not membership:
+            raise HTTPException(403, "Không có quyền truy cập CLB này")
+    rows = db.query(models.BotConfig).filter(models.BotConfig.club_id == x_club_id).all()
     return {r.key: r.value for r in rows}
 
 
 @app.put("/api/bot-config")
 def put_bot_config(
     body: dict,
-    club_id: int = Depends(_get_bot_config_club_id),
+    club_id: int = Depends(_require_superuser_club_id),
     db: Session = Depends(get_db),
 ):
     for key, value in body.items():

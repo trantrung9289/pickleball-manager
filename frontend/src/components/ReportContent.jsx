@@ -8,7 +8,7 @@
 import React, { useEffect, useState } from "react";
 import {
   Table, Select, Typography, Row, Col, Card, Tabs, Statistic,
-  Tag, Empty, Spin, Progress, Alert, Button, Space,
+  Tag, Empty, Spin, Progress, Alert, Button, Space, theme,
 } from "antd";
 import {
   RiseOutlined, FallOutlined, WalletOutlined, SwapOutlined,
@@ -34,6 +34,7 @@ const EXPENSE_COLORS = ["#ff4d4f","#ff7875","#ffa39e","#ffccc7","#fff1f0"];
 // ── Tab 1: Tổng hợp năm ──────────────────────────────────────────────────────
 export function YearlySummary({ year, api }) {
   const [monthly, setMonthly] = useState([]);
+  const { token: antToken } = theme.useToken();
 
   useEffect(() => {
     api.reports.summary(year).then((r) =>
@@ -125,11 +126,11 @@ export function YearlySummary({ year, api }) {
           const tIncome = rows.reduce((s, r) => s + r.total_income, 0);
           const tExpense = rows.reduce((s, r) => s + r.total_expense, 0);
           return (
-            <Table.Summary.Row style={{ background: "#fafafa", fontWeight: 600 }}>
+            <Table.Summary.Row style={{ background: antToken.colorFillAlter, fontWeight: 600 }}>
               <Table.Summary.Cell>Cộng</Table.Summary.Cell>
-              <Table.Summary.Cell align="right"><span style={{ color: "#52c41a" }}>{fmt(tIncome)}</span></Table.Summary.Cell>
-              <Table.Summary.Cell align="right"><span style={{ color: "#ff4d4f" }}>{fmt(tExpense)}</span></Table.Summary.Cell>
-              <Table.Summary.Cell align="right"><b style={{ color: tIncome >= tExpense ? "#1677ff" : "#ff4d4f" }}>{fmt(tIncome - tExpense)}</b></Table.Summary.Cell>
+              <Table.Summary.Cell align="right"><span style={{ color: antToken.colorSuccess }}>{fmt(tIncome)}</span></Table.Summary.Cell>
+              <Table.Summary.Cell align="right"><span style={{ color: antToken.colorError }}>{fmt(tExpense)}</span></Table.Summary.Cell>
+              <Table.Summary.Cell align="right"><b style={{ color: tIncome >= tExpense ? antToken.colorPrimary : antToken.colorError }}>{fmt(tIncome - tExpense)}</b></Table.Summary.Cell>
             </Table.Summary.Row>
           );
         }}
@@ -153,6 +154,7 @@ export function MonthlyStats({ year, api }) {
   const [detail, setDetail] = useState(null);
   const [txs, setTxs] = useState([]);
   const [loading, setLoading] = useState(false);
+  const { token: antToken } = theme.useToken();
 
   useEffect(() => {
     setLoading(true);
@@ -219,44 +221,44 @@ export function MonthlyStats({ year, api }) {
         {detail && (
           <>
             <Card size="small" title={<span><WalletOutlined /> Cân đối quỹ tháng {month}/{year}</span>}
-              style={{ marginBottom: 16, borderLeft: "4px solid #1677ff" }}>
+              style={{ marginBottom: 16, borderLeft: `4px solid ${antToken.colorPrimary}` }}>
               <Row gutter={[16, 12]} align="middle">
                 <Col xs={24} sm={6}>
-                  <Card size="small" bordered={false} style={{ background: "#e6f4ff", borderRadius: 8 }}>
+                  <Card size="small" style={{ background: antToken.colorPrimaryBg, borderRadius: 8, border: `1px solid ${antToken.colorPrimaryBorder}` }}>
                     <Statistic
                       title={<span style={{ fontSize: 12 }}>Tồn quỹ đầu kỳ<br/><Text type="secondary" style={{ fontSize: 11 }}>(Chuyển từ tháng trước)</Text></span>}
                       value={detail.opening_balance ?? 0} formatter={fmt}
-                      prefix={<ArrowRightOutlined style={{ color: "#1677ff" }} />}
-                      styles={{ content: { color: (detail.opening_balance ?? 0) >= 0 ? "#1677ff" : "#ff4d4f", fontSize: 16 } }}
+                      prefix={<ArrowRightOutlined style={{ color: antToken.colorPrimary }} />}
+                      styles={{ content: { color: (detail.opening_balance ?? 0) >= 0 ? antToken.colorPrimary : antToken.colorError, fontSize: 16 } }}
                     />
                   </Card>
                 </Col>
                 <Col xs={12} sm={5}>
-                  <Card size="small" bordered={false} style={{ background: "#f6ffed", borderRadius: 8 }}>
+                  <Card size="small" style={{ background: antToken.colorSuccessBg, borderRadius: 8, border: `1px solid ${antToken.colorSuccessBorder}` }}>
                     <Statistic title={<span style={{ fontSize: 12 }}>Tổng thu trong kỳ</span>}
                       value={detail.total_income} formatter={fmt}
-                      prefix={<RiseOutlined style={{ color: "#52c41a" }} />}
-                      styles={{ content: { color: "#52c41a", fontSize: 16 } }}
+                      prefix={<RiseOutlined style={{ color: antToken.colorSuccess }} />}
+                      styles={{ content: { color: antToken.colorSuccess, fontSize: 16 } }}
                     />
                   </Card>
                 </Col>
                 <Col xs={12} sm={5}>
-                  <Card size="small" bordered={false} style={{ background: "#fff2f0", borderRadius: 8 }}>
+                  <Card size="small" style={{ background: antToken.colorErrorBg, borderRadius: 8, border: `1px solid ${antToken.colorErrorBorder}` }}>
                     <Statistic title={<span style={{ fontSize: 12 }}>Tổng chi trong kỳ</span>}
                       value={detail.total_expense} formatter={fmt}
-                      prefix={<FallOutlined style={{ color: "#ff4d4f" }} />}
-                      styles={{ content: { color: "#ff4d4f", fontSize: 16 } }}
+                      prefix={<FallOutlined style={{ color: antToken.colorError }} />}
+                      styles={{ content: { color: antToken.colorError, fontSize: 16 } }}
                     />
                   </Card>
                 </Col>
                 <Col xs={24} sm={8}>
-                  <Card size="small" bordered={false}
-                    style={{ background: (detail.closing_balance ?? detail.opening_balance + detail.balance) >= 0 ? "#e6f4ff" : "#fff2f0", borderRadius: 8, border: "2px solid #1677ff" }}>
+                  <Card size="small"
+                    style={{ background: (detail.closing_balance ?? detail.opening_balance + detail.balance) >= 0 ? antToken.colorPrimaryBg : antToken.colorErrorBg, borderRadius: 8, border: `2px solid ${antToken.colorPrimary}` }}>
                     <Statistic
                       title={<span style={{ fontSize: 12 }}>Tồn quỹ cuối kỳ<br/><Text type="secondary" style={{ fontSize: 11 }}>(Chuyển sang tháng sau)</Text></span>}
                       value={detail.closing_balance ?? (detail.opening_balance + detail.balance)} formatter={fmt}
                       prefix={<WalletOutlined />}
-                      styles={{ content: { color: (detail.closing_balance ?? (detail.opening_balance + detail.balance)) >= 0 ? "#1677ff" : "#ff4d4f", fontSize: 18, fontWeight: 700 } }}
+                      styles={{ content: { color: (detail.closing_balance ?? (detail.opening_balance + detail.balance)) >= 0 ? antToken.colorPrimary : antToken.colorError, fontSize: 18, fontWeight: 700 } }}
                     />
                   </Card>
                 </Col>
@@ -265,19 +267,19 @@ export function MonthlyStats({ year, api }) {
 
             <Row gutter={16} style={{ marginBottom: 16 }}>
               <Col xs={12} sm={8}>
-                <Card size="small" style={{ borderTop: "3px solid #52c41a" }}>
+                <Card size="small" style={{ borderTop: `3px solid ${antToken.colorSuccess}` }}>
                   <Statistic title="Tổng thu" value={detail.total_income} formatter={fmt}
-                    styles={{ content: { color: "#52c41a", fontSize: 18 } }} />
+                    styles={{ content: { color: antToken.colorSuccess, fontSize: 18 } }} />
                 </Card>
               </Col>
               <Col xs={12} sm={8}>
-                <Card size="small" style={{ borderTop: "3px solid #ff4d4f" }}>
+                <Card size="small" style={{ borderTop: `3px solid ${antToken.colorError}` }}>
                   <Statistic title="Tổng chi" value={detail.total_expense} formatter={fmt}
-                    styles={{ content: { color: "#ff4d4f", fontSize: 18 } }} />
+                    styles={{ content: { color: antToken.colorError, fontSize: 18 } }} />
                 </Card>
               </Col>
               <Col xs={24} sm={8}>
-                <Card size="small" style={{ borderTop: "3px solid #faad14" }}>
+                <Card size="small" style={{ borderTop: `3px solid ${antToken.colorWarning}` }}>
                   <Statistic title="Số giao dịch" value={detail.transaction_count} suffix="GD"
                     prefix={<SwapOutlined />} styles={{ content: { fontSize: 18 } }} />
                 </Card>
@@ -342,11 +344,11 @@ export function MonthlyStats({ year, api }) {
                       const tIn = rows.filter((r) => r.type === "income").reduce((s, r) => s + parseFloat(r.amount), 0);
                       const tEx = rows.filter((r) => r.type === "expense").reduce((s, r) => s + parseFloat(r.amount), 0);
                       return (
-                        <Table.Summary.Row style={{ background: "#fafafa", fontWeight: 600 }}>
+                        <Table.Summary.Row style={{ background: antToken.colorFillAlter, fontWeight: 600 }}>
                           <Table.Summary.Cell colSpan={4} align="right">Tổng:</Table.Summary.Cell>
                           <Table.Summary.Cell align="right">
-                            <div style={{ color: "#52c41a" }}>+{fmt(tIn)}</div>
-                            <div style={{ color: "#ff4d4f" }}>-{fmt(tEx)}</div>
+                            <div style={{ color: antToken.colorSuccess }}>+{fmt(tIn)}</div>
+                            <div style={{ color: antToken.colorError }}>-{fmt(tEx)}</div>
                           </Table.Summary.Cell>
                           <Table.Summary.Cell colSpan={2} />
                         </Table.Summary.Row>
@@ -376,6 +378,7 @@ export function MemberContributions({ year, api }) {
   const [contributions, setContributions] = useState([]);
   const [feeTypes, setFeeTypes] = useState([]);
   const [feeTypeFilter, setFeeTypeFilter] = useState(null);
+  const { token: antToken } = theme.useToken();
 
   useEffect(() => {
     api.feeTypes.list({ type: "income" }).then((r) => setFeeTypes(r.data));
@@ -428,9 +431,9 @@ export function MemberContributions({ year, api }) {
         summary={(rows) => {
           const total = rows.reduce((s, r) => s + r.total_amount, 0);
           return (
-            <Table.Summary.Row style={{ background: "#fafafa", fontWeight: 600 }}>
+            <Table.Summary.Row style={{ background: antToken.colorFillAlter, fontWeight: 600 }}>
               <Table.Summary.Cell colSpan={4} align="right">Tổng cộng:</Table.Summary.Cell>
-              <Table.Summary.Cell align="right"><b style={{ color: "#52c41a" }}>{fmt(total)}</b></Table.Summary.Cell>
+              <Table.Summary.Cell align="right"><b style={{ color: antToken.colorSuccess }}>{fmt(total)}</b></Table.Summary.Cell>
             </Table.Summary.Row>
           );
         }}

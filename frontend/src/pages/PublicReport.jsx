@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import {
-  Typography, Select, Tabs, Spin, Result, Card, Tag, Space, Row, Col,
+  Typography, Select, Tabs, Spin, Result, Card, Tag, Space, Row, Col, theme,
 } from "antd";
 import {
   LockOutlined, EyeOutlined, CalendarOutlined, TrophyOutlined,
@@ -11,6 +11,7 @@ import { YearlySummary, MonthlyStats, MemberContributions, FeeStatusTracker } fr
 import { ViewModeProvider } from "../contexts/ViewModeContext";
 import ViewModeSwitcher from "../components/ViewModeSwitcher";
 import ThemeSwitcher from "../components/ThemeSwitcher";
+import { useAppTheme } from "../contexts/ThemeContext";
 
 const { Title, Text } = Typography;
 
@@ -19,6 +20,9 @@ function PublicReportInner({ token }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [year, setYear] = useState(dayjs().year());
+  const { token: antToken } = theme.useToken();
+  const { themeConfig, themeName } = useAppTheme();
+  const isDark = themeName === "dark-pro";
 
   const api = createPublicReportApi(token);
 
@@ -42,7 +46,7 @@ function PublicReportInner({ token }) {
 
   if (loading) {
     return (
-      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: antToken.colorBgLayout }}>
         <Spin size="large" tip="Đang tải báo cáo..." />
       </div>
     );
@@ -50,7 +54,7 @@ function PublicReportInner({ token }) {
 
   if (error) {
     return (
-      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#f5f5f5" }}>
+      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: antToken.colorBgLayout }}>
         <Result
           icon={<LockOutlined style={{ color: "#faad14" }} />}
           title="Không thể xem báo cáo"
@@ -60,23 +64,33 @@ function PublicReportInner({ token }) {
     );
   }
 
+  // Màu label bar theo theme
+  const labelBarStyle = isDark
+    ? { background: "rgba(124,58,237,0.15)", borderBottom: `1px solid rgba(124,58,237,0.3)`, padding: "8px 24px" }
+    : { background: "#e6f4ff", borderBottom: "1px solid #bae0ff", padding: "8px 24px" };
+  const labelTextColor = isDark ? themeConfig.sidebarActive : "#0958d9";
+
   return (
-    <div style={{ minHeight: "100vh", background: "#f0f2f5" }}>
+    <div style={{ minHeight: "100vh", background: antToken.colorBgLayout }}>
       {/* Header */}
-      <div style={{ background: "#fff", borderBottom: "1px solid #f0f0f0", padding: "12px 24px" }}>
+      <div style={{
+        background: antToken.colorBgContainer,
+        borderBottom: `1px solid ${antToken.colorBorderSecondary}`,
+        padding: "12px 24px",
+      }}>
         <Row justify="space-between" align="middle">
           <Col>
             <Space align="center">
-              <TrophyOutlined style={{ fontSize: 22, color: "#1677ff" }} />
+              <TrophyOutlined style={{ fontSize: 22, color: themeConfig.sidebarActive }} />
               <div>
-                <Title level={4} style={{ margin: 0, lineHeight: 1.2 }}>{meta.club_name}</Title>
-                <Text type="secondary" style={{ fontSize: 12 }}>{meta.club_sport} · Báo cáo tài chính</Text>
+                <Title level={4} style={{ margin: 0, lineHeight: 1.2, color: antToken.colorText }}>{meta.club_name}</Title>
+                <Text style={{ fontSize: 12, color: antToken.colorTextSecondary }}>{meta.club_sport} · Báo cáo tài chính</Text>
               </div>
             </Space>
           </Col>
           <Col>
             <Space wrap>
-              <ThemeSwitcher dark={false} />
+              <ThemeSwitcher dark={isDark} />
               <ViewModeSwitcher />
               <Tag icon={<EyeOutlined />} color="blue">{meta.view_count} lượt xem</Tag>
               {meta.expires_at && (
@@ -91,17 +105,17 @@ function PublicReportInner({ token }) {
       </div>
 
       {/* Nhãn link */}
-      <div style={{ background: "#e6f4ff", padding: "8px 24px", borderBottom: "1px solid #bae0ff" }}>
-        <Text style={{ color: "#0958d9", fontSize: 13 }}>
+      <div style={labelBarStyle}>
+        <Text style={{ color: labelTextColor, fontSize: 13 }}>
           <LockOutlined /> {meta.label} · Chỉ xem — không thể chỉnh sửa
         </Text>
       </div>
 
       {/* Nội dung */}
       <div style={{ maxWidth: 1200, margin: "0 auto", padding: "24px 16px" }}>
-        <Card bordered={false} style={{ marginBottom: 16, borderRadius: 12 }}>
+        <Card bordered={false} style={{ marginBottom: 16, borderRadius: 12, background: antToken.colorBgContainer }}>
           <Row justify="space-between" align="middle">
-            <Title level={5} style={{ margin: 0 }}>Năm tài chính</Title>
+            <Title level={5} style={{ margin: 0, color: antToken.colorText }}>Năm tài chính</Title>
             <Select value={year} onChange={setYear} style={{ width: 100 }}>
               {YEARS.map((y) => (
                 <Select.Option key={y} value={y}>{y}</Select.Option>
@@ -122,7 +136,7 @@ function PublicReportInner({ token }) {
       </div>
 
       {/* Footer */}
-      <div style={{ textAlign: "center", padding: "16px 0 32px", color: "#8c8c8c", fontSize: 12 }}>
+      <div style={{ textAlign: "center", padding: "16px 0 32px", color: antToken.colorTextQuaternary, fontSize: 12 }}>
         Báo cáo này chỉ dành cho xem — mọi dữ liệu là READ-ONLY
       </div>
     </div>
