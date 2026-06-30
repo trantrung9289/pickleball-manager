@@ -10,6 +10,7 @@ import { createPublicReportApi } from "../api";
 import { YearlySummary, MonthlyStats, MemberContributions, FeeStatusTracker } from "../components/ReportContent";
 import { ViewModeProvider } from "../contexts/ViewModeContext";
 import ViewModeSwitcher from "../components/ViewModeSwitcher";
+import ThemeSwitcher from "../components/ThemeSwitcher";
 
 const { Title, Text } = Typography;
 
@@ -75,6 +76,7 @@ function PublicReportInner({ token }) {
           </Col>
           <Col>
             <Space wrap>
+              <ThemeSwitcher dark={false} />
               <ViewModeSwitcher />
               <Tag icon={<EyeOutlined />} color="blue">{meta.view_count} lượt xem</Tag>
               {meta.expires_at && (

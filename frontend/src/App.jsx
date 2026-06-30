@@ -10,7 +10,7 @@ import {
 } from "@ant-design/icons";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { ViewModeProvider, useViewMode } from "./contexts/ViewModeContext";
-import { useAppTheme } from "./contexts/ThemeContext";
+import { useAppTheme, THEMES } from "./contexts/ThemeContext";
 import ViewModeSwitcher from "./components/ViewModeSwitcher";
 import ThemeSwitcher from "./components/ThemeSwitcher";
 import MobileBottomNav from "./components/mobile/MobileBottomNav";
@@ -64,7 +64,7 @@ function AppShell() {
   const [moreOpen, setMoreOpen] = useState(false);
   const { token } = theme.useToken();
   const { isMobileView } = useViewMode();
-  const { themeConfig } = useAppTheme();
+  const { themeConfig, themeName, setThemeName } = useAppTheme();
 
   // Cập nhật Page Title theo mode
   React.useEffect(() => {
@@ -267,6 +267,23 @@ function AppShell() {
                 { key: "logout", label: "Đăng xuất", icon: <LogoutOutlined />, danger: true },
               ]}
             />
+            {/* Theme picker — chỉ hiện trong Drawer mobile */}
+            <div style={{ padding: "10px 16px 16px", borderTop: "1px solid rgba(0,0,0,0.06)" }}>
+              <div style={{ fontSize: 12, color: "#888", marginBottom: 8 }}>Giao diện</div>
+              <Space wrap>
+                {Object.values(THEMES).map((t) => (
+                  <Button
+                    key={t.name}
+                    size="small"
+                    type={themeName === t.name ? "primary" : "default"}
+                    onClick={() => setThemeName(t.name)}
+                    style={{ borderRadius: 20 }}
+                  >
+                    {t.icon} {t.label}
+                  </Button>
+                ))}
+              </Space>
+            </div>
           </Drawer>
         </>
       )}

@@ -3,7 +3,9 @@ import { Button, Dropdown, Space } from "antd";
 import { DownOutlined } from "@ant-design/icons";
 import { useAppTheme, THEMES } from "../contexts/ThemeContext";
 
-export default function ThemeSwitcher() {
+// dark=true  → nút trắng (dùng trên header sidebar tối)
+// dark=false → nút tối  (dùng trên header nền sáng)
+export default function ThemeSwitcher({ dark = true }) {
   const { themeName, setThemeName, themeConfig } = useAppTheme();
 
   const items = Object.values(THEMES).map((t) => ({
@@ -18,16 +20,26 @@ export default function ThemeSwitcher() {
     onClick: () => setThemeName(t.name),
   }));
 
+  const darkStyle = {
+    border: "1px solid rgba(255,255,255,0.25)",
+    color: "rgba(255,255,255,0.85)",
+    background: "rgba(255,255,255,0.08)",
+  };
+
+  const lightStyle = {
+    border: `1px solid ${themeConfig.sidebarActive || "#d9d9d9"}`,
+    color: themeConfig.sidebarActive || "#555",
+    background: "transparent",
+  };
+
   return (
     <Dropdown menu={{ items }} placement="bottomRight" trigger={["click"]}>
       <Button
         type="text"
         size="small"
         style={{
-          border: "1px solid rgba(255,255,255,0.25)",
+          ...(dark ? darkStyle : lightStyle),
           borderRadius: 8,
-          color: "rgba(255,255,255,0.85)",
-          background: "rgba(255,255,255,0.08)",
           display: "flex",
           alignItems: "center",
           gap: 4,

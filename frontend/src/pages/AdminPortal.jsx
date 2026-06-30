@@ -11,7 +11,9 @@ import {
 } from "@ant-design/icons";
 import { adminApi } from "../api";
 import { useAuth } from "../context/AuthContext";
+import { useAppTheme } from "../contexts/ThemeContext";
 import ResponsiveTable from "../components/ResponsiveTable";
+import ThemeSwitcher from "../components/ThemeSwitcher";
 
 const { Header, Content, Sider } = Layout;
 const { Title, Text } = Typography;
@@ -19,6 +21,7 @@ const { Title, Text } = Typography;
 export default function AdminPortal({ onBack }) {
   const { user, logout, refreshAll } = useAuth();
   const { token } = theme.useToken();
+  const { themeConfig } = useAppTheme();
   const [section, setSection] = useState("users");
 
   const [users, setUsers] = useState([]);
@@ -304,9 +307,9 @@ export default function AdminPortal({ onBack }) {
 
   return (
     <Layout style={{ minHeight: "100vh" }}>
-      <Sider width={220} style={{ background: "#0a0a1a" }}>
+      <Sider width={220} style={{ background: themeConfig.sidebar }}>
         <div style={{ padding: "20px 20px 16px", borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
-          <SettingOutlined style={{ fontSize: 20, color: "#faad14" }} />
+          <SettingOutlined style={{ fontSize: 20, color: themeConfig.avatar }} />
           <div style={{ color: "#fff", fontWeight: 700, fontSize: 15, marginTop: 8 }}>Quản trị hệ thống</div>
           <div style={{ color: "rgba(255,255,255,0.4)", fontSize: 12 }}>System Admin Portal</div>
         </div>
@@ -315,7 +318,7 @@ export default function AdminPortal({ onBack }) {
           mode="inline"
           selectedKeys={[section]}
           onClick={({ key }) => setSection(key)}
-          style={{ background: "#0a0a1a", marginTop: 8 }}
+          style={{ background: themeConfig.sidebar, marginTop: 8 }}
           items={[
             { key: "users", icon: <TeamOutlined />, label: "Tài khoản" },
             { key: "clubs", icon: <TrophyOutlined />, label: "Câu lạc bộ" },
@@ -334,9 +337,12 @@ export default function AdminPortal({ onBack }) {
         <Header style={{ background: token.colorBgContainer, padding: "0 24px", borderBottom: `1px solid ${token.colorBorderSecondary}` }}>
           <Row justify="space-between" align="middle" style={{ height: "100%" }}>
             <Title level={4} style={{ margin: 0 }}>{sectionTitles[section]}</Title>
-            <Dropdown menu={userMenu} placement="bottomRight">
-              <Avatar style={{ background: "#faad14", cursor: "pointer" }} icon={<UserOutlined />} />
-            </Dropdown>
+            <Space>
+              <ThemeSwitcher />
+              <Dropdown menu={userMenu} placement="bottomRight">
+                <Avatar style={{ background: themeConfig.avatar, cursor: "pointer" }} icon={<UserOutlined />} />
+              </Dropdown>
+            </Space>
           </Row>
         </Header>
 
