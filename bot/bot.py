@@ -635,7 +635,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         for turn in range(10):
             response = await groq_client.chat.completions.create(
-                model="mixtral-8x7b-32768",
+                model="llama-3.3-70b-versatile",
                 messages=messages,
                 tools=TOOLS,
                 tool_choice="auto",
@@ -691,7 +691,7 @@ def main():
     app.add_handler(CallbackQueryHandler(handle_club_selection, pattern=r"^sel_club:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    logger.info("Bot đang chạy (Groq Mixtral 8x7B — đa CLB + auth)...")
+    logger.info("Bot đang chạy (Groq Llama 3.3 70B — đa CLB + auth)...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
