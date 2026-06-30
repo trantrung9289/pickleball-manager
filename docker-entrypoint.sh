@@ -26,7 +26,7 @@ for i in $(seq 1 30); do
 done
 
 # Khởi động bot nếu có đủ biến môi trường
-if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$GROQ_API_KEY" ] && [ -n "$BOT_USERNAME" ] && [ -n "$BOT_PASSWORD" ]; then
+if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$GEMINI_API_KEY" ]; then
   echo "🤖 Khởi động Telegram bot..."
   cd /bot && python bot.py &
   BOT_PID=$!
