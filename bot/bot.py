@@ -657,7 +657,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         chat = gemini_client.chats.create(
-            model="gemini-2.0-flash",
+            model="gemini-1.5-flash",
             config=gtypes.GenerateContentConfig(
                 system_instruction=system_prompt,
                 tools=[TOOLS],
@@ -730,7 +730,7 @@ def main():
     app.add_handler(CallbackQueryHandler(handle_club_selection, pattern=r"^sel_club:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    logger.info("Bot đang chạy (Gemini 2.0 Flash — đa CLB + auth)...")
+    logger.info("Bot đang chạy (Gemini 1.5 Flash — đa CLB + auth)...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
