@@ -42,7 +42,7 @@ _history: dict[int, list] = {}
 # user_id -> username đang nhập (tạm thời trong flow đăng nhập)
 _pending_username: dict[int, str] = {}
 
-MAX_HISTORY = 20
+MAX_HISTORY = 6
 SESSION_TTL = 7 * 24 * 3600  # session tự hết sau 7 ngày
 
 
@@ -610,13 +610,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Bạn là trợ lý quản lý CLB Pickleball. Hôm nay: {datetime.now().strftime('%d/%m/%Y')}.\n"
         f"Người dùng: {name}. CLB đang làm việc: {club_name} (ID: {club_id}).\n"
         "Trả lời bằng tiếng Việt, ngắn gọn, rõ ràng. Định dạng tiền: 500.000đ.\n\n"
-        "QUY TẮC BẮT BUỘC:\n"
-        "1. Mọi yêu cầu liên quan dữ liệu CLB → gọi tool tương ứng, KHÔNG trả lời từ trí nhớ.\n"
-        "2. Khi user nói XÓA thành viên: chỉ gọi delete_member với member_code (TV0001) hoặc member_id. KHÔNG gọi add_member.\n"
-        "3. Khi user nói XÓA giao dịch: chỉ gọi delete_transaction. KHÔNG gọi record_transaction.\n"
-        "4. Khi user nói XEM/DANH SÁCH: chỉ gọi list_members hoặc list_transactions. KHÔNG thêm/xóa.\n"
-        "5. Xóa nhiều thành viên (TV0003, TV0004): gọi delete_member nhiều lần, mỗi lần một member_code.\n"
-        "6. Nếu tool báo lỗi → trả lỗi thực tế, không đoán mò, không tự làm hành động khác."
+        "QUY TẮC BẮT BUỘC — VI PHẠM LÀ SAI:\n"
+        "1. Mọi yêu cầu dữ liệu → GỌI TOOL, không bao giờ tự trả lời từ trí nhớ.\n"
+        "2. CHỈ báo cáo ĐÚNG kết quả tool trả về. Nếu tool trả về ❌ → nói lỗi cho user, không báo thành công.\n"
+        "3. XÓA thành viên → chỉ gọi delete_member. TUYỆT ĐỐI không gọi add_member hay tool khác.\n"
+        "4. XÓA giao dịch → chỉ gọi delete_transaction. TUYỆT ĐỐI không gọi record_transaction.\n"
+        "5. XEM/DANH SÁCH → chỉ gọi list_*. KHÔNG thêm, KHÔNG xóa.\n"
+        "6. THÊM thành viên → chỉ gọi add_member khi user rõ ràng yêu cầu thêm mới.\n"
+        "7. Xóa nhiều mục → gọi tool nhiều lần liên tiếp, mỗi lần một mục.\n"
+        "8. Trả lời NGẮN GỌN, CHỈ dựa trên kết quả tool, không thêm thông tin không có trong tool result."
     )
 
     # Build Groq messages
@@ -633,7 +635,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         for turn in range(10):
             response = await groq_client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+                model="mixtral-8x7b-32768",
                 messages=messages,
                 tools=TOOLS,
                 tool_choice="auto",
@@ -689,7 +691,7 @@ def main():
     app.add_handler(CallbackQueryHandler(handle_club_selection, pattern=r"^sel_club:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    logger.info("Bot đang chạy (Groq Llama 3.3 70B — đa CLB + auth)...")
+    logger.info("Bot đang chạy (Groq Mixtral 8x7B — đa CLB + auth)...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
