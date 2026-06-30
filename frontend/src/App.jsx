@@ -6,7 +6,7 @@ import {
 import {
   DashboardOutlined, TeamOutlined, DollarOutlined,
   SwapOutlined, BarChartOutlined, TrophyOutlined,
-  UserOutlined, LogoutOutlined, LockOutlined,
+  UserOutlined, LogoutOutlined, LockOutlined, RobotOutlined,
 } from "@ant-design/icons";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { ViewModeProvider, useViewMode } from "./contexts/ViewModeContext";
@@ -20,6 +20,7 @@ import FeeTypes from "./pages/FeeTypes";
 import Transactions from "./pages/Transactions";
 import Reports from "./pages/Reports";
 import Tournament from "./pages/Tournament";
+import BotConfig from "./pages/BotConfig";
 import ShortcutHelp from "./components/ShortcutHelp";
 import Login from "./pages/Login";
 import Setup from "./pages/Setup";
@@ -38,6 +39,7 @@ const ALL_PAGES = {
   transactions: { label: "Giao dịch", icon: <SwapOutlined />, comp: Transactions, requireView: true },
   reports:   { label: "Báo cáo", icon: <BarChartOutlined />, comp: Reports, requireView: true },
   tournaments: { label: "Giải đấu", icon: <TrophyOutlined />, comp: Tournament, requireView: true },
+  bot_config: { label: "Bot Telegram", icon: <RobotOutlined />, comp: BotConfig, requireView: false },
 };
 
 function NoMembership({ onLogout }) {
@@ -172,16 +174,16 @@ function AppShell() {
 
   const sidebarContent = (
     <>
-      <div style={{ padding: "16px 24px", borderBottom: "1px solid rgba(255,255,255,0.1)", background: themeConfig.sidebar }}>
-        <Title level={5} style={{ color: "#fff", margin: 0, fontSize: 14 }}>
+      <div style={{ padding: "16px 24px", borderBottom: `1px solid ${themeConfig.sidebarBorder}`, background: themeConfig.sidebar }}>
+        <Title level={5} style={{ color: themeConfig.sidebarText, margin: 0, fontSize: 14 }}>
           🏸 {selectedClub?.name || "Quản lý CLB"}
         </Title>
-        <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 12 }}>
+        <div style={{ color: themeConfig.sidebarSubText, fontSize: 12 }}>
           {selectedClub?.sport || "Thể thao Pickleball"}
         </div>
       </div>
       <Menu
-        theme="dark"
+        theme={themeConfig.menuTheme || "dark"}
         mode="inline"
         selectedKeys={[safeKey]}
         onClick={({ key }) => setCurrent(key)}

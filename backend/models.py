@@ -264,3 +264,13 @@ class TournamentMatch(Base):
     p1 = relationship("TournamentParticipant", foreign_keys=[p1_id])
     p2 = relationship("TournamentParticipant", foreign_keys=[p2_id])
     winner = relationship("TournamentParticipant", foreign_keys=[winner_id])
+
+
+class BotConfig(Base):
+    __tablename__ = "bot_config"
+    id = Column(Integer, primary_key=True, index=True)
+    club_id = Column(Integer, ForeignKey("clubs.id"), nullable=False)
+    key = Column(String(100), nullable=False)
+    value = Column(Text, nullable=True)
+
+    club = relationship("Club")

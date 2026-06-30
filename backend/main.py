@@ -2192,6 +2192,38 @@ def get_standings(
     return compute_standings(m_dicts, p_dicts, group=group)
 
 
+# ── BOT CONFIG ────────────────────────────────────────────
+@app.get("/api/bot-config")
+def get_bot_config(
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    perms.require_view()
+    rows = db.query(models.BotConfig).filter(models.BotConfig.club_id == perms.club_id).all()
+    return {r.key: r.value for r in rows}
+
+
+@app.put("/api/bot-config")
+def put_bot_config(
+    body: dict,
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    perms.require_edit()
+    for key, value in body.items():
+        row = db.query(models.BotConfig).filter(
+            models.BotConfig.club_id == perms.club_id,
+            models.BotConfig.key == key,
+        ).first()
+        if row:
+            row.value = str(value) if value is not None else None
+        else:
+            db.add(models.BotConfig(club_id=perms.club_id, key=key, value=str(value) if value is not None else None))
+    db.commit()
+    rows = db.query(models.BotConfig).filter(models.BotConfig.club_id == perms.club_id).all()
+    return {r.key: r.value for r in rows}
+
+
 # ── SERVE REACT FRONTEND ──────────────────────────────────
 if STATIC_DIR.exists():
     app.mount("/assets", StaticFiles(directory=STATIC_DIR / "assets"), name="assets")
