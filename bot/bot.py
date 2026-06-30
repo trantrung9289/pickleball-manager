@@ -344,10 +344,11 @@ TOOLS = [
     }},
     {"type": "function", "function": {
         "name": "delete_member",
-        "description": "Xóa thành viên theo ID. Phải gọi list_members trước để lấy ID thực.",
+        "description": "Xóa thành viên theo ID số hoặc mã thành viên (TV0003). Truyền member_id là số nguyên hoặc member_code là chuỗi.",
         "parameters": {"type": "object", "properties": {
-            "member_id": {"type": "integer"},
-        }, "required": ["member_id"]},
+            "member_id": {"type": "integer", "description": "ID số nguyên của thành viên"},
+            "member_code": {"type": "string", "description": "Mã thành viên dạng TV0001"},
+        }},
     }},
     {"type": "function", "function": {
         "name": "update_member_status",
@@ -537,7 +538,21 @@ async def execute_tool(name: str, inputs: dict, token: str, club_id: int) -> str
             return f"✅ Đã xóa giao dịch [ID:{tx_id}] — {fee_name}: {amount} ngày {date}"
 
         elif name == "delete_member":
-            member_id = inputs["member_id"]
+            member_id = inputs.get("member_id")
+            member_code = inputs.get("member_code")
+
+            # Resolve member_code → member_id nếu chỉ có code
+            if not member_id and member_code:
+                members = await call_backend("get", "/api/members", token=token, club_id=club_id,
+                                             params={"search": member_code})
+                matched = [m for m in members if m.get("member_code") == member_code]
+                if not matched:
+                    return f"❌ Không tìm thấy thành viên có mã {member_code}."
+                member_id = matched[0]["id"]
+
+            if not member_id:
+                return "❌ Cần cung cấp member_id hoặc member_code để xóa."
+
             try:
                 member = await call_backend("get", f"/api/members/{member_id}", token=token, club_id=club_id)
                 name_member = member.get("full_name", f"ID {member_id}")
@@ -596,11 +611,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Người dùng: {name}. CLB đang làm việc: {club_name} (ID: {club_id}).\n"
         "Trả lời bằng tiếng Việt, ngắn gọn, rõ ràng. Định dạng tiền: 500.000đ.\n\n"
         "QUY TẮC BẮT BUỘC:\n"
-        "1. BẤT KỲ câu hỏi/yêu cầu nào liên quan đến dữ liệu CLB → LUÔN gọi tool tương ứng TRƯỚC.\n"
-        "2. Xóa giao dịch: gọi list_transactions trước để lấy ID thực, rồi mới gọi delete_transaction.\n"
-        "3. Xóa thành viên: gọi list_members trước để lấy ID thực, rồi mới gọi delete_member.\n"
-        "4. KHÔNG gọi record_transaction / add_member khi user muốn xóa hoặc xem.\n"
-        "5. Nếu tool báo lỗi → trả lỗi thực tế, không đoán mò."
+        "1. Mọi yêu cầu liên quan dữ liệu CLB → gọi tool tương ứng, KHÔNG trả lời từ trí nhớ.\n"
+        "2. Khi user nói XÓA thành viên: chỉ gọi delete_member với member_code (TV0001) hoặc member_id. KHÔNG gọi add_member.\n"
+        "3. Khi user nói XÓA giao dịch: chỉ gọi delete_transaction. KHÔNG gọi record_transaction.\n"
+        "4. Khi user nói XEM/DANH SÁCH: chỉ gọi list_members hoặc list_transactions. KHÔNG thêm/xóa.\n"
+        "5. Xóa nhiều thành viên (TV0003, TV0004): gọi delete_member nhiều lần, mỗi lần một member_code.\n"
+        "6. Nếu tool báo lỗi → trả lỗi thực tế, không đoán mò, không tự làm hành động khác."
     )
 
     # Build Groq messages
