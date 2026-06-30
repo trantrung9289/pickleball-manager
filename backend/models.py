@@ -226,6 +226,7 @@ class PublicReportToken(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     token = Column(String(64), unique=True, index=True, nullable=False)
+    slug = Column(String(120), unique=True, index=True, nullable=True)   # tên CLB-viết-liền-không-dấu + 8 ký tự token
     club_id = Column(Integer, ForeignKey("clubs.id"), nullable=False)
     label = Column(String(200), nullable=False)
     expires_at = Column(DateTime, nullable=True)   # NULL = vĩnh viễn

@@ -130,12 +130,12 @@ export const reportLinksApi = {
   delete: (id) => api.delete(`/api/report-links/${id}`),
 };
 
-// Factory trả về api object cho một public token (không cần auth)
-export const createPublicReportApi = (token) => {
-  const base = `${BASE_URL}/api/public/report/${token}`;
+// Factory trả về api object cho một public slug/token (không cần auth)
+export const createPublicReportApi = (slug) => {
+  const base = `${BASE_URL}/api/public/report/${slug}`;
   const pub = axios.create({ baseURL: BASE_URL });
   return {
-    meta: () => pub.get(`/api/public/report/${token}`),
+    meta: () => pub.get(`/api/public/report/${slug}`),
     reports: {
       summary: (year) => pub.get(`${base}/summary`, { params: { year } }),
       monthlyDetail: (month, year) => pub.get(`${base}/monthly-detail`, { params: { month, year } }),

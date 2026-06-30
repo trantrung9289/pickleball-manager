@@ -49,6 +49,8 @@ def _run_migration():
         # Bảng tournaments — thêm club_id
         ("tournaments", "club_id", "INTEGER REFERENCES clubs(id)",
             "UPDATE tournaments SET club_id = (SELECT id FROM clubs LIMIT 1) WHERE club_id IS NULL"),
+        # Bảng public_report_tokens — thêm cột slug
+        ("public_report_tokens", "slug", "VARCHAR(120)", None),
     ]
 
     with engine.connect() as conn:
@@ -1398,6 +1400,19 @@ def fee_status(
     }
 
 
+# ── PUBLIC REPORT LINKS ──────────────────────────────────
+
+def _make_slug(club_name: str, token: str) -> str:
+    """Tạo slug dạng: ten-clb-viet-lien-khong-dau-XXXXXXXX"""
+    import unicodedata, re
+    text = unicodedata.normalize("NFD", club_name)
+    text = "".join(c for c in text if unicodedata.category(c) != "Mn")
+    text = text.lower()
+    text = re.sub(r"[^a-z0-9]+", "-", text).strip("-")
+    text = text[:40]  # giới hạn độ dài phần tên
+    return f"{text}-{token[:8]}"
+
+
 # ── PUBLIC REPORT LINKS (CRUD — yêu cầu auth) ────────────
 
 @app.post("/api/report-links")
@@ -1415,8 +1430,11 @@ def create_report_link(
             expires_at_val = datetime.fromisoformat(data["expires_at"])
         except Exception:
             expires_at_val = None
+    club = db.query(models.Club).filter(models.Club.id == perms.club_id).first()
+    slug = _make_slug(club.name if club else "clb", token_str)
     rec = models.PublicReportToken(
         token=token_str,
+        slug=slug,
         club_id=perms.club_id,
         label=data.get("label", "Báo cáo công khai"),
         expires_at=expires_at_val,
@@ -1428,6 +1446,7 @@ def create_report_link(
     return {
         "id": rec.id,
         "token": rec.token,
+        "slug": rec.slug,
         "label": rec.label,
         "expires_at": rec.expires_at.isoformat() if rec.expires_at else None,
         "is_active": rec.is_active,
@@ -1449,6 +1468,7 @@ def list_report_links(
         {
             "id": r.id,
             "token": r.token,
+            "slug": r.slug,
             "label": r.label,
             "expires_at": r.expires_at.isoformat() if r.expires_at else None,
             "is_active": r.is_active,
@@ -1497,10 +1517,13 @@ def delete_report_link(
 
 # ── PUBLIC REPORT ENDPOINTS (không cần auth) ─────────────
 
-def _validate_token(token: str, db: Session, increment_view: bool = False):
+def _validate_token(slug_or_token: str, db: Session, increment_view: bool = False):
+    """Tìm token theo slug (mới) hoặc token đầy đủ (cũ — backward compat)."""
     rec = db.query(models.PublicReportToken).filter(
-        models.PublicReportToken.token == token,
         models.PublicReportToken.is_active == True,
+    ).filter(
+        (models.PublicReportToken.slug == slug_or_token) |
+        (models.PublicReportToken.token == slug_or_token)
     ).first()
     if not rec:
         raise HTTPException(404, "Link không tồn tại hoặc đã bị vô hiệu hóa")
@@ -1512,10 +1535,10 @@ def _validate_token(token: str, db: Session, increment_view: bool = False):
     return rec
 
 
-@app.get("/api/public/report/{token}")
+@app.get("/api/public/report/{slug}")
 @limiter.limit("30/minute")
-def public_report_meta(request: Request, token: str, db: Session = Depends(get_db)):
-    rec = _validate_token(token, db, increment_view=True)
+def public_report_meta(request: Request, slug: str, db: Session = Depends(get_db)):
+    rec = _validate_token(slug, db, increment_view=True)
     club = db.query(models.Club).filter(models.Club.id == rec.club_id).first()
     return {
         "label": rec.label,
@@ -1526,10 +1549,10 @@ def public_report_meta(request: Request, token: str, db: Session = Depends(get_d
     }
 
 
-@app.get("/api/public/report/{token}/summary")
+@app.get("/api/public/report/{slug}/summary")
 @limiter.limit("60/minute")
-def public_report_summary(request: Request, token: str, year: int = None, db: Session = Depends(get_db)):
-    rec = _validate_token(token, db)
+def public_report_summary(request: Request, slug: str, year: int = None, db: Session = Depends(get_db)):
+    rec = _validate_token(slug, db)
     if not year:
         year = datetime.now().year
     results = []
@@ -1548,10 +1571,10 @@ def public_report_summary(request: Request, token: str, year: int = None, db: Se
     return results
 
 
-@app.get("/api/public/report/{token}/monthly-detail")
+@app.get("/api/public/report/{slug}/monthly-detail")
 @limiter.limit("60/minute")
-def public_report_monthly_detail(request: Request, token: str, month: int, year: int, db: Session = Depends(get_db)):
-    rec = _validate_token(token, db)
+def public_report_monthly_detail(request: Request, slug: str, month: int, year: int, db: Session = Depends(get_db)):
+    rec = _validate_token(slug, db)
     from datetime import date as date_type
     start_of_month = date_type(year, month, 1)
     end_of_month = date_type(year + 1, 1, 1) if month == 12 else date_type(year, month + 1, 1)
@@ -1595,15 +1618,15 @@ def public_report_monthly_detail(request: Request, token: str, month: int, year:
     }
 
 
-@app.get("/api/public/report/{token}/member-contributions")
+@app.get("/api/public/report/{slug}/member-contributions")
 @limiter.limit("60/minute")
 def public_report_member_contributions(
-    request: Request, token: str,
+    request: Request, slug: str,
     fee_type_id: Optional[int] = None,
     year: Optional[int] = None,
     db: Session = Depends(get_db),
 ):
-    rec = _validate_token(token, db)
+    rec = _validate_token(slug, db)
     q = db.query(
         models.Member.id,
         models.Member.member_code,
@@ -1630,13 +1653,13 @@ def public_report_member_contributions(
     ]
 
 
-@app.get("/api/public/report/{token}/fee-status")
+@app.get("/api/public/report/{slug}/fee-status")
 @limiter.limit("60/minute")
 def public_report_fee_status(
-    request: Request, token: str, month: int, year: int, fee_type_id: int,
+    request: Request, slug: str, month: int, year: int, fee_type_id: int,
     db: Session = Depends(get_db),
 ):
-    rec = _validate_token(token, db)
+    rec = _validate_token(slug, db)
     members = db.query(models.Member).filter(
         models.Member.club_id == rec.club_id,
         models.Member.status == "active",
@@ -1665,14 +1688,14 @@ def public_report_fee_status(
     }
 
 
-@app.get("/api/public/report/{token}/fee-types")
+@app.get("/api/public/report/{slug}/fee-types")
 @limiter.limit("60/minute")
 def public_report_fee_types(
-    request: Request, token: str,
+    request: Request, slug: str,
     type: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
-    rec = _validate_token(token, db)
+    rec = _validate_token(slug, db)
     q = db.query(models.FeeType).filter(models.FeeType.club_id == rec.club_id)
     if type:
         q = q.filter(models.FeeType.type == type)
@@ -1680,15 +1703,15 @@ def public_report_fee_types(
     return [{"id": f.id, "name": f.name, "type": f.type} for f in fts]
 
 
-@app.get("/api/public/report/{token}/transactions")
+@app.get("/api/public/report/{slug}/transactions")
 @limiter.limit("60/minute")
 def public_report_transactions(
-    request: Request, token: str,
+    request: Request, slug: str,
     month: Optional[int] = None,
     year: Optional[int] = None,
     db: Session = Depends(get_db),
 ):
-    rec = _validate_token(token, db)
+    rec = _validate_token(slug, db)
     q = db.query(models.Transaction).filter(models.Transaction.club_id == rec.club_id)
     if month:
         q = q.filter(extract("month", models.Transaction.transaction_date) == month)

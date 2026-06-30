@@ -23,7 +23,10 @@ function PublicReportInner({ token }) {
 
   useEffect(() => {
     api.meta()
-      .then((r) => setMeta(r.data))
+      .then((r) => {
+        setMeta(r.data);
+        document.title = `${r.data.club_name} | Báo cáo tài chính`;
+      })
       .catch((err) => {
         const status = err.response?.status;
         if (status === 404) setError("Link không tồn tại hoặc đã bị vô hiệu hóa.");

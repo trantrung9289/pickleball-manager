@@ -83,8 +83,9 @@ function PublicLinksManager() {
     });
   };
 
-  const copyLink = (token) => {
-    const url = `${window.location.origin}/public/report/${token}`;
+  const copyLink = (slug, token) => {
+    const id = slug || token;
+    const url = `${window.location.origin}/public/report/${id}`;
     navigator.clipboard.writeText(url).then(() => message.success("Đã sao chép link"));
   };
 
@@ -118,7 +119,7 @@ function PublicLinksManager() {
       render: (_, r) => (
         <Space>
           <Tooltip title="Sao chép link">
-            <Button size="small" icon={<CopyOutlined />} onClick={() => copyLink(r.token)} />
+            <Button size="small" icon={<CopyOutlined />} onClick={() => copyLink(r.slug, r.token)} />
           </Tooltip>
           <Tooltip title={r.is_active ? "Tắt link" : "Bật link"}>
             <Button
@@ -164,7 +165,7 @@ function PublicLinksManager() {
             <div key={r.id} style={{ fontSize: 12, color: "#8c8c8c", padding: "2px 0", display: "flex", alignItems: "center", gap: 8 }}>
               <Tag color={r.is_active ? "blue" : "default"} style={{ fontSize: 11 }}>{r.label}</Tag>
               <span style={{ fontFamily: "monospace", wordBreak: "break-all" }}>
-                {window.location.origin}/public/report/{r.token}
+                {window.location.origin}/public/report/{r.slug || r.token}
               </span>
             </div>
           ))}

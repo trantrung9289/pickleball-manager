@@ -10,7 +10,9 @@ import {
 } from "@ant-design/icons";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { ViewModeProvider, useViewMode } from "./contexts/ViewModeContext";
+import { useAppTheme } from "./contexts/ThemeContext";
 import ViewModeSwitcher from "./components/ViewModeSwitcher";
+import ThemeSwitcher from "./components/ThemeSwitcher";
 import MobileBottomNav from "./components/mobile/MobileBottomNav";
 import Dashboard from "./pages/Dashboard";
 import Members from "./pages/Members";
@@ -62,6 +64,7 @@ function AppShell() {
   const [moreOpen, setMoreOpen] = useState(false);
   const { token } = theme.useToken();
   const { isMobileView } = useViewMode();
+  const { themeConfig } = useAppTheme();
 
   // Cập nhật Page Title theo mode
   React.useEffect(() => {
@@ -169,7 +172,7 @@ function AppShell() {
 
   const sidebarContent = (
     <>
-      <div style={{ padding: "16px 24px", borderBottom: "1px solid rgba(255,255,255,0.1)" }}>
+      <div style={{ padding: "16px 24px", borderBottom: "1px solid rgba(255,255,255,0.1)", background: themeConfig.sidebar }}>
         <Title level={5} style={{ color: "#fff", margin: 0, fontSize: 14 }}>
           🏸 {selectedClub?.name || "Quản lý CLB"}
         </Title>
@@ -183,6 +186,7 @@ function AppShell() {
         selectedKeys={[safeKey]}
         onClick={({ key }) => setCurrent(key)}
         items={menuItems}
+        style={{ background: themeConfig.sidebar }}
       />
     </>
   );
@@ -191,7 +195,7 @@ function AppShell() {
     <Layout style={{ minHeight: "100vh" }}>
       {/* Desktop: sidebar cố định. Mobile: dùng bottom navigation thay thế. */}
       {!isMobileView && (
-        <Sider style={{ background: "#001529" }}>
+        <Sider style={{ background: themeConfig.sidebar }}>
           {sidebarContent}
         </Sider>
       )}
@@ -210,9 +214,10 @@ function AppShell() {
             </Space>
             <Space size={isMobileView ? "small" : "middle"}>
               <ViewModeSwitcher />
+              {!isMobileView && <ThemeSwitcher />}
               {!isMobileView && <ShortcutHelp />}
               <Dropdown menu={userMenu} placement="bottomRight">
-                <Avatar style={{ background: "#1677ff", cursor: "pointer" }} icon={<UserOutlined />} />
+                <Avatar style={{ background: themeConfig.avatar, cursor: "pointer" }} icon={<UserOutlined />} />
               </Dropdown>
             </Space>
           </Row>
