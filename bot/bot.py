@@ -739,18 +739,22 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
     data = query.data
 
-    guard = await _guard(update)
-    if not guard:
-        return
-    session, club_id = guard
-
-    # ── Club selection ──
+    # ── Club selection — xử lý trước _guard vì chưa có club_id ──
     if data.startswith("club:"):
+        session = get_session(user_id)
+        if not session:
+            await safe_edit(query, "🔐 Phiên hết hạn. Gõ /start để đăng nhập lại.")
+            return
         parts = data.split(":", 2)
         _user_club[user_id] = int(parts[1])
         _user_club_name[user_id] = parts[2]
         await show_main_menu(update, session, parts[2])
         return
+
+    guard = await _guard(update)
+    if not guard:
+        return
+    session, club_id = guard
 
     # ── Menu navigation ──
     if data == "menu:main":
