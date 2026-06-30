@@ -6,7 +6,7 @@ import {
 import {
   DashboardOutlined, TeamOutlined, DollarOutlined,
   SwapOutlined, BarChartOutlined, TrophyOutlined,
-  UserOutlined, LogoutOutlined, LockOutlined, RobotOutlined,
+  UserOutlined, LogoutOutlined, LockOutlined,
 } from "@ant-design/icons";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { ViewModeProvider, useViewMode } from "./contexts/ViewModeContext";
@@ -20,7 +20,6 @@ import FeeTypes from "./pages/FeeTypes";
 import Transactions from "./pages/Transactions";
 import Reports from "./pages/Reports";
 import Tournament from "./pages/Tournament";
-import BotConfig from "./pages/BotConfig";
 import ShortcutHelp from "./components/ShortcutHelp";
 import Login from "./pages/Login";
 import Setup from "./pages/Setup";
@@ -39,7 +38,6 @@ const ALL_PAGES = {
   transactions: { label: "Giao dịch", icon: <SwapOutlined />, comp: Transactions, requireView: true },
   reports:   { label: "Báo cáo", icon: <BarChartOutlined />, comp: Reports, requireView: true },
   tournaments: { label: "Giải đấu", icon: <TrophyOutlined />, comp: Tournament, requireView: true },
-  bot_config: { label: "Bot Telegram", icon: <RobotOutlined />, comp: BotConfig, requireView: false },
 };
 
 function NoMembership({ onLogout }) {

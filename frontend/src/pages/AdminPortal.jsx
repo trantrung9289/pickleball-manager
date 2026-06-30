@@ -7,13 +7,14 @@ import {
 import {
   TeamOutlined, TrophyOutlined, LinkOutlined, LogoutOutlined,
   PlusOutlined, EditOutlined, DeleteOutlined, SettingOutlined,
-  UserOutlined, ArrowLeftOutlined, CrownOutlined,
+  UserOutlined, ArrowLeftOutlined, CrownOutlined, RobotOutlined,
 } from "@ant-design/icons";
 import { adminApi } from "../api";
 import { useAuth } from "../context/AuthContext";
 import { useAppTheme } from "../contexts/ThemeContext";
 import ResponsiveTable from "../components/ResponsiveTable";
 import ThemeSwitcher from "../components/ThemeSwitcher";
+import BotConfigPanel from "../components/BotConfigPanel";
 
 const { Header, Content, Sider } = Layout;
 const { Title, Text } = Typography;
@@ -300,6 +301,7 @@ export default function AdminPortal({ onBack }) {
     users: "Quản lý tài khoản",
     clubs: "Quản lý câu lạc bộ",
     memberships: "Phân quyền quản trị CLB",
+    bot: "Cấu hình Telegram Bot",
   };
 
   // Danh sách user chưa phải superuser (superuser không cần assign CLB)
@@ -308,13 +310,13 @@ export default function AdminPortal({ onBack }) {
   return (
     <Layout style={{ minHeight: "100vh" }}>
       <Sider width={220} style={{ background: themeConfig.sidebar }}>
-        <div style={{ padding: "20px 20px 16px", borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
+        <div style={{ padding: "20px 20px 16px", borderBottom: `1px solid ${themeConfig.sidebarBorder || "rgba(255,255,255,0.08)"}` }}>
           <SettingOutlined style={{ fontSize: 20, color: themeConfig.avatar }} />
-          <div style={{ color: "#fff", fontWeight: 700, fontSize: 15, marginTop: 8 }}>Quản trị hệ thống</div>
-          <div style={{ color: "rgba(255,255,255,0.4)", fontSize: 12 }}>System Admin Portal</div>
+          <div style={{ color: themeConfig.sidebarText || "#fff", fontWeight: 700, fontSize: 15, marginTop: 8 }}>Quản trị hệ thống</div>
+          <div style={{ color: themeConfig.sidebarSubText || "rgba(255,255,255,0.4)", fontSize: 12 }}>System Admin Portal</div>
         </div>
         <Menu
-          theme="dark"
+          theme={themeConfig.menuTheme || "dark"}
           mode="inline"
           selectedKeys={[section]}
           onClick={({ key }) => setSection(key)}
@@ -323,11 +325,16 @@ export default function AdminPortal({ onBack }) {
             { key: "users", icon: <TeamOutlined />, label: "Tài khoản" },
             { key: "clubs", icon: <TrophyOutlined />, label: "Câu lạc bộ" },
             { key: "memberships", icon: <LinkOutlined />, label: "Phân quyền" },
+            { key: "bot", icon: <RobotOutlined />, label: "Telegram Bot" },
           ]}
         />
         <div style={{ position: "absolute", bottom: 20, left: 0, right: 0, padding: "0 16px" }}>
           <Button block icon={<ArrowLeftOutlined />} onClick={onBack}
-            style={{ color: "rgba(255,255,255,0.5)", borderColor: "rgba(255,255,255,0.15)", background: "transparent" }}>
+            style={{
+              color: themeConfig.sidebarSubText || "rgba(255,255,255,0.5)",
+              borderColor: themeConfig.sidebarBorder || "rgba(255,255,255,0.15)",
+              background: "transparent",
+            }}>
             Quay lại
           </Button>
         </div>
@@ -373,6 +380,9 @@ export default function AdminPortal({ onBack }) {
               <ResponsiveTable dataSource={clubs} columns={clubColumns} rowKey="id" loading={loading} size="middle" mobileTitle={(r) => <span><b>{r.name}</b>{r.sport && <span style={{ color: "#888", fontWeight: 400 }}> · {r.sport}</span>}</span>} mobileHideColumns={["ID", "Tên CLB"]} />
             </div>
           )}
+
+          {/* ── BOT CONFIG ── */}
+          {section === "bot" && <BotConfigPanel />}
 
           {/* ── MEMBERSHIPS ── */}
           {section === "memberships" && (
