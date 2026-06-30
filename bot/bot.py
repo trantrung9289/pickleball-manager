@@ -630,7 +630,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         for turn in range(10):
             response = await groq_client.chat.completions.create(
-                model="llama-3.1-8b-instant",
+                model="llama-3.3-70b-versatile",
                 messages=messages,
                 tools=TOOLS,
                 tool_choice="auto",
@@ -651,7 +651,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 for tc, result in zip(msg.tool_calls, results):
                     messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
             else:
-                reply = msg.content or "Xin lỗi, tôi không hiểu yêu cầu này."
+                reply = (msg.content or "").strip() or "Xin lỗi, tôi không hiểu yêu cầu này."
                 history.append({"role": "assistant", "content": reply})
                 if len(history) > MAX_HISTORY:
                     _history[user_id] = history[-MAX_HISTORY:]
