@@ -166,9 +166,9 @@ export default function FeeTypes() {
 
   return (
     <div>
-      <Row justify="space-between" align="middle" style={{ marginBottom: 16 }}>
+      <Row justify="space-between" align="middle" gutter={[8, 8]} style={{ marginBottom: 16 }}>
         <Title level={3} style={{ margin: 0 }}>Danh mục khoản thu/chi</Title>
-        <Space>
+        <Space wrap>
           <Button icon={<DownloadOutlined />} onClick={handleDownloadTemplate}>File mẫu</Button>
           <Button icon={<FileExcelOutlined />} onClick={handleExportExcel}>Xuất Excel</Button>
           <Button icon={<UploadOutlined />} style={{ background: "#52c41a", borderColor: "#52c41a", color: "#fff" }} onClick={() => { setImportOpen(true); setImportResult(null); }}>Nhập từ Excel</Button>

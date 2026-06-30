@@ -3,7 +3,7 @@ import {
   Table, Button, Space, Tag, Modal, Form, Input, Select,
   message, Typography, Row, Col, Card, Steps,
   InputNumber, Tabs, Badge, Statistic, Empty,
-  Divider, Alert, Transfer, Tooltip,
+  Divider, Alert, Transfer, Tooltip, Checkbox,
 } from "antd";
 import {
   PlusOutlined, ThunderboltOutlined, TrophyOutlined,
@@ -272,17 +272,40 @@ function CreateWizard({ onCreated, onClose }) {
                 key: "member",
                 label: <span><UserOutlined /> Thành viên CLB ({selectedIds.length})</span>,
                 children: (
-                  <ResponsiveTable
-                    rowSelection={{
-                      selectedRowKeys: selectedIds,
-                      onChange: keys => setSelectedIds(keys),
-                    }}
-                    columns={memberCols}
-                    dataSource={allMembers}
-                    rowKey="id"
-                    size="small"
-                    pagination={{ pageSize: 10 }}
-                  />
+                  <>
+                    <div style={{ marginBottom: 12, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                      <Checkbox
+                        checked={allMembers.length > 0 && selectedIds.length === allMembers.length}
+                        indeterminate={selectedIds.length > 0 && selectedIds.length < allMembers.length}
+                        onChange={e => setSelectedIds(e.target.checked ? allMembers.map(m => m.id) : [])}
+                      >
+                        Chọn tất cả thành viên CLB ({allMembers.length})
+                      </Checkbox>
+                      {selectedIds.length > 0 && (
+                        <Button size="small" type="link" onClick={() => setSelectedIds([])}>
+                          Bỏ chọn ({selectedIds.length})
+                        </Button>
+                      )}
+                    </div>
+                    <ResponsiveTable
+                      rowSelection={{
+                        selectedRowKeys: selectedIds,
+                        onChange: keys => setSelectedIds(keys),
+                      }}
+                      columns={memberCols}
+                      dataSource={allMembers}
+                      rowKey="id"
+                      size="small"
+                      pagination={{ pageSize: 10 }}
+                      mobileTitle={(r) => (
+                        <span>
+                          {r.full_name}
+                          {r.rank && <Tag color="purple" style={{ marginLeft: 6 }}>{r.rank}</Tag>}
+                        </span>
+                      )}
+                      mobileHideColumns={["Họ và tên", "Hạng"]}
+                    />
+                  </>
                 ),
               },
               {
@@ -339,12 +362,19 @@ function CreateWizard({ onCreated, onClose }) {
                             },
                           },
                           {
-                            title: "", width: 60, align: "center",
+                            title: "Thao tác", width: 60, align: "center",
                             render: (_, r) => (
                               <Button danger size="small" onClick={() => removeGuest(r.id)}>Xóa</Button>
                             ),
                           },
                         ]}
+                        mobileTitle={(r) => (
+                          <span>
+                            <Tag color="orange" style={{ marginRight: 6 }}>Khách</Tag>
+                            {r.name}
+                          </span>
+                        )}
+                        mobileHideColumns={["#", "Họ và tên"]}
                       />
                     )}
                   </>
@@ -1156,6 +1186,8 @@ export default function Tournament() {
         size="small"
         pagination={{ pageSize: 10 }}
         locale={{ emptyText: <Empty description="Chưa có giải đấu nào." image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
+        mobileTitle={(r) => <a onClick={() => setDetail(r)}>{r.name}</a>}
+        mobileHideColumns={["Tên giải đấu"]}
       />
 
       <Modal
