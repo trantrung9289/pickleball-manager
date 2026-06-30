@@ -835,9 +835,9 @@ async def gdlist_show(update: Update, session: dict, club_id: int,
                      + (f" ({member_name})" if member_name else ""))
     if len(txs) > 20:
         lines.append(f"_...và {len(txs)-20} giao dịch khác_")
-    lines.append("\n_Nhập ID giao dịch để xóa (vd: `xoa 15`)_")
     await reply(update, "\n".join(lines), kb(
         [("💚 Chỉ thu", f"gdlist:{m}:{y}:income"), ("🔴 Chỉ chi", f"gdlist:{m}:{y}:expense"), ("Tất cả", f"gdlist:{m}:{y}:")],
+        [("🗑 Xóa GD", f"gdlist_del:{m}:{y}")],
         [back_btn("menu:gdlist")[0], ("🏠 Menu", "menu:exit")],
     ))
 
@@ -894,9 +894,8 @@ Sau khi đăng nhập, bấm các nút để điều hướng.
 • `/menu` — Về menu chính
 • `/logout` — Đăng xuất
 
-*Xóa giao dịch nhanh:*
-• Xem danh sách giao dịch → thấy ID → gõ `xoa <ID>`
-  Ví dụ: `xoa 15`
+*Xóa giao dịch:*
+• Vào 📋 Giao dịch → chọn tháng → bấm 🗑 Xóa GD → chọn giao dịch → xác nhận
 
 *Tất cả chức năng:*
 👥 Thành viên · 💰 Thu · 📤 Chi
@@ -1012,6 +1011,69 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         m, y = int(parts[1]), int(parts[2])
         tx_type = parts[3] if len(parts) > 3 else ""
         await gdlist_show(update, session, club_id, m, y, tx_type)
+        return
+
+    # ── Xóa giao dịch — chọn GD ──
+    if data.startswith("gdlist_del:"):
+        parts = data.split(":")
+        m, y = int(parts[1]), int(parts[2])
+        try:
+            txs = await call_backend("get", "/api/transactions", token=session["token"],
+                                     club_id=club_id, params={"month": m, "year": y})
+        except ValueError as e:
+            await reply(update, f"❌ {e}")
+            return
+        if not txs:
+            await reply(update, f"Không có giao dịch tháng {m}/{y}.",
+                        kb([back_btn(f"gdlist:{m}:{y}")[0]]))
+            return
+        rows = []
+        for t in txs[:20]:
+            icon = "💚" if t["type"] == "income" else "🔴"
+            fee_name = (t.get("fee_type") or {}).get("name", "?") if isinstance(t.get("fee_type"), dict) else "?"
+            date_short = t["transaction_date"][5:]  # MM-DD
+            label = f"{icon} {date_short} {fee_name} {fmt(t['amount'])}"
+            rows.append([(label, f"deltx_confirm:{t['id']}:{m}:{y}")])
+        rows.append([back_btn(f"gdlist:{m}:{y}")[0], ("🏠 Menu", "menu:exit")])
+        await reply(update, f"🗑 *Chọn giao dịch muốn xóa* (tháng {m}/{y}):", kb(*rows))
+        return
+
+    # ── Xóa giao dịch — confirm ──
+    if data.startswith("deltx_confirm:"):
+        parts = data.split(":")
+        tx_id, m, y = int(parts[1]), int(parts[2]), int(parts[3])
+        try:
+            tx = await call_backend("get", f"/api/transactions/{tx_id}",
+                                    token=session["token"], club_id=club_id)
+        except ValueError as e:
+            await reply(update, f"❌ {e}")
+            return
+        fee_name = (tx.get("fee_type") or {}).get("name", "?") if isinstance(tx.get("fee_type"), dict) else "?"
+        member_name = (tx.get("member") or {}).get("full_name", "") if isinstance(tx.get("member"), dict) else ""
+        icon = "💚" if tx["type"] == "income" else "🔴"
+        desc = f"{icon} *{fee_name}* — {fmt(tx['amount'])}"
+        if member_name:
+            desc += f" ({member_name})"
+        desc += f"\n📅 Ngày: {tx['transaction_date']}"
+        await reply(update,
+            f"⚠️ Xác nhận xóa giao dịch?\n\n{desc}\n\n_Thao tác này không thể hoàn tác!_",
+            kb(
+                [("✅ Xác nhận xóa", f"deltx:{tx_id}:{m}:{y}"), ("❌ Hủy", f"gdlist_del:{m}:{y}")],
+            ))
+        return
+
+    # ── Xóa giao dịch — thực hiện ──
+    if data.startswith("deltx:"):
+        parts = data.split(":")
+        tx_id = int(parts[1])
+        m, y = int(parts[2]), int(parts[3])
+        try:
+            await call_backend("delete", f"/api/transactions/{tx_id}",
+                               token=session["token"], club_id=club_id)
+            await reply(update, f"✅ Đã xóa giao dịch thành công.",
+                        kb([("📋 Xem giao dịch", f"gdlist:{m}:{y}"), ("🏠 Menu", "menu:exit")]))
+        except ValueError as e:
+            await reply(update, f"❌ {e}", kb([back_btn(f"gdlist:{m}:{y}")[0]]))
         return
 
     # ── Category ──
@@ -1166,28 +1228,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     w = _wizard.get(user_id)
 
-    # Xóa giao dịch nhanh: "xoa 15"
-    if text.lower().startswith("xoa ") or text.lower().startswith("xóa "):
-        parts = text.split()
-        if len(parts) == 2 and parts[1].isdigit():
-            tx_id = int(parts[1])
-            try:
-                tx = await call_backend("get", f"/api/transactions/{tx_id}",
-                                        token=session["token"], club_id=club_id)
-                fee_name = (tx.get("fee_type") or {}).get("name", "?")
-                amount = fmt(tx["amount"])
-                # Confirm
-                _wizard[user_id] = {"name": "_del_tx", "step": 0,
-                                     "data": {"tx_id": tx_id, "tx_desc": f"{fee_name} {amount}"}}
-                await update.message.reply_text(
-                    f"⚠️ Xác nhận xóa giao dịch *{fee_name}* — {amount}?",
-                    reply_markup=kb([("✅ Xóa", f"deltx:{tx_id}"), ("❌ Hủy", "wiz:cancel")]),
-                    parse_mode="Markdown",
-                )
-            except ValueError as e:
-                await update.message.reply_text(f"❌ {e}")
-            return
-
     # Wizard đang chờ nhập ngày thủ công
     if w and w["data"].get("_waiting_date_key"):
         date_key = w["data"].pop("_waiting_date_key")
@@ -1210,31 +1250,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Không hiểu → nhắc
     await update.message.reply_text(
-        "❓ Dùng các nút bấm hoặc gõ /menu để xem chức năng.\n"
-        "_Gõ `xoa <ID>` để xóa giao dịch theo ID._",
+        "❓ Dùng các nút bấm hoặc gõ /menu để xem chức năng.",
         parse_mode="Markdown",
         reply_markup=kb([("🏠 Menu chính", "menu:main")])
     )
-
-
-# ── DELETE TRANSACTION CALLBACK ───────────────────────────────────────────────
-async def handle_deltx(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    user_id = query.from_user.id
-    guard = await _guard(update)
-    if not guard:
-        return
-    session, club_id = guard
-    tx_id = int(query.data.split(":")[1])
-    _wizard.pop(user_id, None)
-    try:
-        await call_backend("delete", f"/api/transactions/{tx_id}",
-                           token=session["token"], club_id=club_id)
-        await safe_edit(query, f"✅ Đã xóa giao dịch ID {tx_id}.",
-                        kb([("📋 Xem giao dịch", "menu:gdlist"), back_btn("menu:main")[0]]))
-    except ValueError as e:
-        await safe_edit(query, f"❌ {e}", kb([back_btn("menu:main")[0]]))
 
 
 # ── MAIN ──────────────────────────────────────────────────────────────────────
@@ -1253,7 +1272,6 @@ def main():
     app.add_handler(login_handler)
     app.add_handler(CommandHandler("logout", cmd_logout))
     app.add_handler(CommandHandler("menu", cmd_menu))
-    app.add_handler(CallbackQueryHandler(handle_deltx, pattern=r"^deltx:"))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
