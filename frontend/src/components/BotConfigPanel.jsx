@@ -5,11 +5,12 @@ import {
 } from "antd";
 import { SaveOutlined, ReloadOutlined } from "@ant-design/icons";
 import { adminApi } from "../api";
-import { useAuth } from "../context/AuthContext";
 
 const { Text } = Typography;
 
 const API_BASE = import.meta.env.VITE_API_URL || "";
+
+const getToken = () => localStorage.getItem("token") || "";
 
 const FEATURE_LABELS = {
   enable_members: "Quản lý thành viên",
@@ -26,7 +27,6 @@ const DEFAULT_CONFIG = {
 };
 
 export default function BotConfigPanel() {
-  const { token } = useAuth();
   const [clubs, setClubs] = useState([]);
   const [selectedClub, setSelectedClub] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -49,7 +49,7 @@ export default function BotConfigPanel() {
     try {
       const res = await fetch(`${API_BASE}/api/bot-config`, {
         headers: {
-          Authorization: `Bearer ${token}`,
+          Authorization: `Bearer ${getToken()}`,
           "X-Club-ID": String(clubId),
         },
       });
@@ -82,7 +82,7 @@ export default function BotConfigPanel() {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
+          Authorization: `Bearer ${getToken()}`,
           "X-Club-ID": String(selectedClub),
         },
         body: JSON.stringify(payload),
