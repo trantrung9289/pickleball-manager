@@ -161,8 +161,8 @@ export default function BotConfigPanel() {
   const toggleRemindEnabled = async (feeType, checked) => {
     setSavingFeeType(feeType.id);
     try {
-      const res = await fetch(`${API_BASE}/api/fee-types/${feeType.id}`, {
-        method: "PUT",
+      const res = await fetch(`${API_BASE}/api/admin/fee-types/${feeType.id}`, {
+        method: "PATCH",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${getToken()}`,

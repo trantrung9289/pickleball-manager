@@ -2357,6 +2357,24 @@ def admin_list_fee_types(
     return db.query(models.FeeType).filter(models.FeeType.club_id == club_id).order_by(models.FeeType.id.desc()).all()
 
 
+@app.patch("/api/admin/fee-types/{ft_id}")
+def admin_update_fee_type(
+    ft_id: int,
+    data: schemas.FeeTypeUpdate,
+    db: Session = Depends(get_db),
+    club_id: int = Depends(_require_superuser_club_id),
+):
+    """Cập nhật khoản thu/chi — dành cho superuser (dùng cho toggle remind_enabled)."""
+    ft = db.query(models.FeeType).filter(models.FeeType.id == ft_id, models.FeeType.club_id == club_id).first()
+    if not ft:
+        raise HTTPException(404, "Không tìm thấy loại khoản")
+    for k, v in data.model_dump(exclude_none=True).items():
+        setattr(ft, k, v)
+    db.commit()
+    db.refresh(ft)
+    return ft
+
+
 @app.get("/api/fee-reminders/preview")
 def preview_fee_reminders_frontend(
     month: int,
