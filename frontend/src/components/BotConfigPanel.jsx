@@ -9,7 +9,7 @@ import dayjs from "dayjs";
 const { Text } = Typography;
 const API_BASE = import.meta.env.VITE_API_URL || "";
 const getToken  = () => localStorage.getItem("token")  || "";
-const getClubId = () => localStorage.getItem("clubId") || "";
+const getClubId = () => localStorage.getItem("selectedClubId") || "";
 
 const MENU_TREE = [
   {
