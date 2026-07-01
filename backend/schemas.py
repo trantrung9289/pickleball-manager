@@ -177,6 +177,7 @@ class FeeTypeBase(BaseModel):
     description: Optional[str] = None
     default_amount: Optional[Decimal] = None
     is_recurring: bool = False
+    remind_enabled: bool = False
 
 
 class FeeTypeCreate(FeeTypeBase):
@@ -189,6 +190,7 @@ class FeeTypeUpdate(BaseModel):
     description: Optional[str] = None
     default_amount: Optional[Decimal] = None
     is_recurring: Optional[bool] = None
+    remind_enabled: Optional[bool] = None
 
 
 class FeeTypeOut(FeeTypeBase):

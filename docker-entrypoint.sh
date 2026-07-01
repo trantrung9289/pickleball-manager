@@ -3,7 +3,7 @@
 
 # ── Database migration (idempotent, an toàn) ────────────────────────────────
 echo "🔄 Chạy database migration..."
-cd /app && python migrations/add_players_tables.py
+cd /app && python migrations/add_players_tables.py && python migrations/add_fee_reminder.py
 if [ $? -ne 0 ]; then
   echo "❌ Migration thất bại — dừng khởi động"
   exit 1
@@ -30,6 +30,13 @@ if [ -n "$TELEGRAM_BOT_TOKEN" ]; then
   echo "🤖 Khởi động Telegram bot..."
   cd /bot && python bot.py &
   BOT_PID=$!
+
+  # Cron: nhắc đóng phí mỗi ngày lúc 7h UTC = 14h UTC+7
+  if [ -n "$INTERNAL_SECRET" ]; then
+    echo "⏰ Cài cron nhắc đóng phí (7h UTC hàng ngày)..."
+    echo "0 7 * * * cd /bot && BACKEND_URL=${BACKEND_URL:-http://localhost:8000} INTERNAL_SECRET=$INTERNAL_SECRET python notify_bot.py >> /var/log/notify_bot.log 2>&1" | crontab -
+    crond -b -l 8 2>/dev/null || true
+  fi
 else
   echo "⚠️  Thiếu biến môi trường bot — bỏ qua."
 fi

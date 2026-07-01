@@ -69,6 +69,16 @@ async def call_backend(method: str, path: str, token: str,
         return resp.json()
 
 
+async def _save_telegram_chat_id(token: str, club_id: int, chat_id: int):
+    """Lưu telegram_chat_id vào ClubMembership — fire-and-forget, không raise."""
+    try:
+        await call_backend("patch", "/api/my-memberships/telegram-chat-id",
+                           token=token, club_id=club_id,
+                           json={"chat_id": chat_id})
+    except Exception:
+        pass  # không cần báo lỗi cho user
+
+
 def fmt(amount) -> str:
     try:
         return f"{int(float(amount)):,}đ".replace(",", ".")
@@ -266,6 +276,7 @@ async def _after_login(update: Update, user_id: int, session: dict):
         m = memberships[0]
         _user_club[user_id] = m["club_id"]
         _user_club_name[user_id] = m["club"]["name"] if m.get("club") else f"CLB #{m['club_id']}"
+        await _save_telegram_chat_id(session["token"], m["club_id"], user_id)
         await fetch_and_cache_menu_cfg(user_id, session["token"], m["club_id"])
         await show_main_menu(update, session, _user_club_name[user_id])
         return
@@ -977,6 +988,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         club_name = cache.get(user_id, {}).get(club_id_str, f"CLB #{club_id_str}")
         _user_club_name[user_id] = club_name
         _welcomed.discard(user_id)  # Reset để hiện welcome message CLB mới
+        await _save_telegram_chat_id(session["token"], new_club_id, user_id)
         await fetch_and_cache_menu_cfg(user_id, session["token"], new_club_id)
         await show_main_menu(update, session, club_name)
         return

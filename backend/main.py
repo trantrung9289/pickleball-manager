@@ -1334,6 +1334,7 @@ def report_monthly_detail(
 def member_contributions(
     fee_type_id: Optional[int] = None,
     year: Optional[int] = None,
+    month: Optional[int] = None,
     db: Session = Depends(get_db),
     perms: ClubPermissions = Depends(get_club_permission),
 ):
@@ -1353,6 +1354,8 @@ def member_contributions(
         q = q.filter(models.Transaction.fee_type_id == fee_type_id)
     if year:
         q = q.filter(extract("year", models.Transaction.transaction_date) == year)
+    if month:
+        q = q.filter(extract("month", models.Transaction.transaction_date) == month)
 
     q = q.group_by(models.Member.id, models.FeeType.id).order_by(models.Member.full_name)
     rows = q.all()
@@ -1637,6 +1640,7 @@ def public_report_member_contributions(
     request: Request, slug: str,
     fee_type_id: Optional[int] = None,
     year: Optional[int] = None,
+    month: Optional[int] = None,
     db: Session = Depends(get_db),
 ):
     rec = _validate_token(slug, db)
@@ -1654,6 +1658,8 @@ def public_report_member_contributions(
         q = q.filter(models.Transaction.fee_type_id == fee_type_id)
     if year:
         q = q.filter(extract("year", models.Transaction.transaction_date) == year)
+    if month:
+        q = q.filter(extract("month", models.Transaction.transaction_date) == month)
     rows = q.group_by(models.Member.id, models.FeeType.id).order_by(models.Member.full_name).all()
     return [
         {
@@ -2256,6 +2262,256 @@ def put_bot_config(
     db.commit()
     rows = db.query(models.BotConfig).filter(models.BotConfig.club_id == club_id).all()
     return {r.key: r.value for r in rows}
+
+
+# ── FEE REMINDER ENDPOINTS ───────────────────────────────
+
+import os as _os
+import urllib.request as _urllib_req
+import urllib.parse as _urllib_parse
+import json as _json
+from calendar import monthrange as _monthrange
+
+_INTERNAL_SECRET = _os.environ.get("INTERNAL_SECRET", "")
+
+
+def _check_internal_secret(x_internal_secret: str = Header(None)):
+    if not _INTERNAL_SECRET or x_internal_secret != _INTERNAL_SECRET:
+        raise HTTPException(403, "Forbidden")
+
+
+@app.patch("/api/my-memberships/telegram-chat-id")
+def save_telegram_chat_id(
+    body: dict,
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    """Bot gọi endpoint này sau khi admin chọn CLB để lưu telegram_chat_id."""
+    chat_id = body.get("chat_id")
+    if not chat_id:
+        raise HTTPException(400, "Thiếu chat_id")
+    membership = db.query(models.ClubMembership).filter(
+        models.ClubMembership.user_id == perms.user_id,
+        models.ClubMembership.club_id == perms.club_id,
+    ).first()
+    if not membership:
+        raise HTTPException(404, "Không tìm thấy membership")
+    membership.telegram_chat_id = int(chat_id)
+    db.commit()
+    return {"ok": True}
+
+
+def _build_reminder_data(month: int, year: int, db: Session):
+    """Trả về danh sách CLB → fee_types có remind_enabled + thành viên chưa đóng + chat_id admin."""
+    fee_types = db.query(models.FeeType).filter(
+        models.FeeType.remind_enabled == True,
+        models.FeeType.type == models.FeeTypeCategory.income,
+    ).all()
+
+    result = []
+    for ft in fee_types:
+        club_id = ft.club_id
+        paid_ids = set(
+            r[0] for r in db.query(models.Transaction.member_id).filter(
+                models.Transaction.club_id == club_id,
+                models.Transaction.fee_type_id == ft.id,
+                extract("month", models.Transaction.transaction_date) == month,
+                extract("year", models.Transaction.transaction_date) == year,
+                models.Transaction.member_id.isnot(None),
+            ).all()
+        )
+        unpaid_members = db.query(models.Member).filter(
+            models.Member.club_id == club_id,
+            models.Member.status == "active",
+            models.Member.id.notin_(paid_ids),
+        ).order_by(models.Member.full_name).all()
+
+        admin_memberships = db.query(models.ClubMembership).filter(
+            models.ClubMembership.club_id == club_id,
+            models.ClubMembership.role == models.UserRole.admin,
+            models.ClubMembership.telegram_chat_id.isnot(None),
+        ).all()
+        chat_ids = [m.telegram_chat_id for m in admin_memberships]
+
+        club = db.query(models.Club).filter(models.Club.id == club_id).first()
+        result.append({
+            "club_id": club_id,
+            "club_name": club.name if club else str(club_id),
+            "fee_type_id": ft.id,
+            "fee_type_name": ft.name,
+            "month": month,
+            "year": year,
+            "unpaid_count": len(unpaid_members),
+            "unpaid_members": [{"id": m.id, "full_name": m.full_name, "phone": m.phone} for m in unpaid_members],
+            "admin_chat_ids": chat_ids,
+        })
+    return result
+
+
+@app.get("/api/fee-reminders/preview")
+def preview_fee_reminders_frontend(
+    month: int,
+    year: int,
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    """Xem trước danh sách thành viên chưa đóng phí — dành cho AdminPortal (JWT)."""
+    perms.require_view()
+    data = _build_reminder_data(month, year, db)
+    return [item for item in data if item["club_id"] == perms.club_id]
+
+
+@app.post("/api/fee-reminders/send")
+def send_fee_reminders_frontend(
+    month: int,
+    year: int,
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    """Gửi nhắc đóng phí thủ công từ AdminPortal — dành cho admin CLB (JWT)."""
+    perms.require_view()
+    bot_token = _os.environ.get("BOT_TOKEN", "")
+    if not bot_token:
+        raise HTTPException(500, "BOT_TOKEN chưa được cấu hình")
+    data = [item for item in _build_reminder_data(month, year, db) if item["club_id"] == perms.club_id]
+    today = date.today()
+    sent_count = 0
+    skipped_count = 0
+    errors = []
+    for item in data:
+        if not item["admin_chat_ids"] or item["unpaid_count"] == 0:
+            continue
+        for chat_id in item["admin_chat_ids"]:
+            existing = db.query(models.ReminderLog).filter(
+                models.ReminderLog.club_id == item["club_id"],
+                models.ReminderLog.fee_type_id == item["fee_type_id"],
+                models.ReminderLog.month == month,
+                models.ReminderLog.year == year,
+                models.ReminderLog.send_date == today,
+            ).first()
+            if existing:
+                skipped_count += 1
+                continue
+            names = "\n".join(
+                f"  • {m['full_name']}" + (f" ({m['phone']})" if m.get("phone") else "")
+                for m in item["unpaid_members"]
+            )
+            text = (
+                f"🔔 *Nhắc đóng phí tháng {month}/{year}*\n"
+                f"CLB: {item['club_name']}\n"
+                f"Khoản: {item['fee_type_name']}\n\n"
+                f"Thành viên chưa đóng ({item['unpaid_count']} người):\n{names}"
+            )
+            try:
+                payload = _json.dumps({"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}).encode()
+                req = _urllib_req.Request(
+                    f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                    data=payload,
+                    headers={"Content-Type": "application/json"},
+                )
+                with _urllib_req.urlopen(req, timeout=10) as resp:
+                    resp.read()
+                db.add(models.ReminderLog(
+                    club_id=item["club_id"], fee_type_id=item["fee_type_id"],
+                    month=month, year=year, send_date=today,
+                ))
+                db.commit()
+                sent_count += 1
+            except Exception as exc:
+                errors.append({"chat_id": chat_id, "error": str(exc)})
+    return {"sent": sent_count, "skipped_already_sent_today": skipped_count, "errors": errors}
+
+
+@app.get("/api/internal/fee-reminders")
+def preview_fee_reminders(
+    month: int,
+    year: int,
+    db: Session = Depends(get_db),
+    _: None = Depends(_check_internal_secret),
+):
+    return _build_reminder_data(month, year, db)
+
+
+@app.post("/api/internal/send-fee-reminder")
+def send_fee_reminder(
+    month: int,
+    year: int,
+    db: Session = Depends(get_db),
+    _: None = Depends(_check_internal_secret),
+):
+    bot_token = _os.environ.get("BOT_TOKEN", "")
+    if not bot_token:
+        raise HTTPException(500, "BOT_TOKEN chưa được cấu hình")
+
+    data = _build_reminder_data(month, year, db)
+    today = date.today()
+    sent_count = 0
+    skipped_count = 0
+    errors = []
+
+    for item in data:
+        if not item["admin_chat_ids"]:
+            continue
+        if item["unpaid_count"] == 0:
+            continue
+
+        for chat_id in item["admin_chat_ids"]:
+            # Kiểm tra đã gửi hôm nay chưa
+            existing = db.query(models.ReminderLog).filter(
+                models.ReminderLog.club_id == item["club_id"],
+                models.ReminderLog.fee_type_id == item["fee_type_id"],
+                models.ReminderLog.month == month,
+                models.ReminderLog.year == year,
+                models.ReminderLog.send_date == today,
+            ).first()
+            if existing:
+                skipped_count += 1
+                continue
+
+            names = "\n".join(
+                f"  • {m['full_name']}" + (f" ({m['phone']})" if m.get("phone") else "")
+                for m in item["unpaid_members"]
+            )
+            text = (
+                f"🔔 *Nhắc đóng phí tháng {month}/{year}*\n"
+                f"CLB: {item['club_name']}\n"
+                f"Khoản: {item['fee_type_name']}\n\n"
+                f"Thành viên chưa đóng ({item['unpaid_count']} người):\n{names}"
+            )
+
+            try:
+                payload = _json.dumps({
+                    "chat_id": chat_id,
+                    "text": text,
+                    "parse_mode": "Markdown",
+                }).encode()
+                req = _urllib_req.Request(
+                    f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                    data=payload,
+                    headers={"Content-Type": "application/json"},
+                )
+                with _urllib_req.urlopen(req, timeout=10) as resp:
+                    resp.read()
+
+                # Ghi log (UNIQUE constraint tránh trùng)
+                log = models.ReminderLog(
+                    club_id=item["club_id"],
+                    fee_type_id=item["fee_type_id"],
+                    month=month,
+                    year=year,
+                    send_date=today,
+                )
+                db.add(log)
+                db.commit()
+                sent_count += 1
+            except Exception as exc:
+                errors.append({"chat_id": chat_id, "error": str(exc)})
+
+    return {
+        "sent": sent_count,
+        "skipped_already_sent_today": skipped_count,
+        "errors": errors,
+    }
 
 
 # ── SERVE REACT FRONTEND ──────────────────────────────────

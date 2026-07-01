@@ -76,6 +76,7 @@ class FeeType(Base):
     description = Column(Text, nullable=True)
     default_amount = Column(Numeric(15, 2), default=0)
     is_recurring = Column(Boolean, default=False)
+    remind_enabled = Column(Boolean, default=False)   # bật nhắc đóng phí qua Telegram
     created_at = Column(DateTime, server_default=func.now())
 
     transactions = relationship("Transaction", back_populates="fee_type")
@@ -143,6 +144,7 @@ class ClubMembership(Base):
     can_create = Column(Boolean, default=False)
     can_edit = Column(Boolean, default=False)
     can_delete = Column(Boolean, default=False)
+    telegram_chat_id = Column(Integer, nullable=True)   # Telegram user_id của admin khi login bot
     created_at = Column(DateTime, server_default=func.now())
 
     user = relationship("User", back_populates="club_memberships")
@@ -274,3 +276,21 @@ class BotConfig(Base):
     value = Column(Text, nullable=True)
 
     club = relationship("Club")
+
+
+class ReminderLog(Base):
+    """Ghi lại lần gửi nhắc để tránh gửi trùng trong cùng ngày."""
+    __tablename__ = "reminder_log"
+
+    id          = Column(Integer, primary_key=True, index=True)
+    club_id     = Column(Integer, ForeignKey("clubs.id"), nullable=False)
+    fee_type_id = Column(Integer, ForeignKey("fee_types.id"), nullable=False)
+    month       = Column(Integer, nullable=False)
+    year        = Column(Integer, nullable=False)
+    send_date   = Column(Date, nullable=False)
+    sent_at     = Column(DateTime, server_default=func.now())
+
+    from sqlalchemy import UniqueConstraint as _UC
+    __table_args__ = (
+        _UC("club_id", "fee_type_id", "month", "year", "send_date", name="uq_reminder_per_day"),
+    )
