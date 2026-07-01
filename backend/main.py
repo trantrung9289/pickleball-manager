@@ -2348,17 +2348,25 @@ def _build_reminder_data(month: int, year: int, db: Session):
     return result
 
 
+@app.get("/api/admin/fee-types")
+def admin_list_fee_types(
+    db: Session = Depends(get_db),
+    club_id: int = Depends(_require_superuser_club_id),
+):
+    """Lấy danh sách khoản thu/chi — dành cho superuser trong AdminPortal."""
+    return db.query(models.FeeType).filter(models.FeeType.club_id == club_id).order_by(models.FeeType.id.desc()).all()
+
+
 @app.get("/api/fee-reminders/preview")
 def preview_fee_reminders_frontend(
     month: int,
     year: int,
     db: Session = Depends(get_db),
-    perms: ClubPermissions = Depends(get_club_permission),
+    club_id: int = Depends(_require_superuser_club_id),
 ):
-    """Xem trước danh sách thành viên chưa đóng phí — dành cho AdminPortal (JWT)."""
-    perms.require_view()
+    """Xem trước danh sách thành viên chưa đóng phí — dành cho AdminPortal (JWT superuser)."""
     data = _build_reminder_data(month, year, db)
-    return [item for item in data if item["club_id"] == perms.club_id]
+    return [item for item in data if item["club_id"] == club_id]
 
 
 @app.post("/api/fee-reminders/send")
@@ -2366,14 +2374,13 @@ def send_fee_reminders_frontend(
     month: int,
     year: int,
     db: Session = Depends(get_db),
-    perms: ClubPermissions = Depends(get_club_permission),
+    club_id: int = Depends(_require_superuser_club_id),
 ):
-    """Gửi nhắc đóng phí thủ công từ AdminPortal — dành cho admin CLB (JWT)."""
-    perms.require_view()
+    """Gửi nhắc đóng phí thủ công từ AdminPortal — dành cho superuser (JWT)."""
     bot_token = _os.environ.get("BOT_TOKEN", "")
     if not bot_token:
         raise HTTPException(500, "BOT_TOKEN chưa được cấu hình")
-    data = [item for item in _build_reminder_data(month, year, db) if item["club_id"] == perms.club_id]
+    data = [item for item in _build_reminder_data(month, year, db) if item["club_id"] == club_id]
     today = date.today()
     sent_count = 0
     skipped_count = 0

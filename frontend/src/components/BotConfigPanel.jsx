@@ -113,7 +113,7 @@ export default function BotConfigPanel() {
 
   const loadFeeTypes = async (clubId) => {
     try {
-      const res = await fetch(`${API_BASE}/api/fee-types`, {
+      const res = await fetch(`${API_BASE}/api/admin/fee-types`, {
         headers: {
           Authorization: `Bearer ${getToken()}`,
           "X-Club-ID": String(clubId),
