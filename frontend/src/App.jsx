@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, lazy, Suspense } from "react";
 import {
   Layout, Menu, Typography, theme, Row, Spin,
   Avatar, Dropdown, Space, Result, Button, Drawer,
@@ -6,7 +6,7 @@ import {
 import {
   DashboardOutlined, TeamOutlined, DollarOutlined,
   SwapOutlined, BarChartOutlined, TrophyOutlined,
-  UserOutlined, LogoutOutlined, LockOutlined,
+  UserOutlined, LogoutOutlined, LockOutlined, RobotOutlined,
 } from "@ant-design/icons";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { ViewModeProvider, useViewMode } from "./contexts/ViewModeContext";
@@ -14,19 +14,29 @@ import { useAppTheme, THEMES } from "./contexts/ThemeContext";
 import ViewModeSwitcher from "./components/ViewModeSwitcher";
 import ThemeSwitcher from "./components/ThemeSwitcher";
 import MobileBottomNav from "./components/mobile/MobileBottomNav";
-import Dashboard from "./pages/Dashboard";
-import Members from "./pages/Members";
-import FeeTypes from "./pages/FeeTypes";
-import Transactions from "./pages/Transactions";
-import Reports from "./pages/Reports";
-import Tournament from "./pages/Tournament";
-import ShortcutHelp from "./components/ShortcutHelp";
-import Login from "./pages/Login";
-import Setup from "./pages/Setup";
-import Landing from "./pages/Landing";
-import AdminPortal from "./pages/AdminPortal";
-import ClubSelect from "./pages/ClubSelect";
-import PublicReport from "./pages/PublicReport";
+
+const Dashboard = lazy(() => import("./pages/Dashboard"));
+const Members = lazy(() => import("./pages/Members"));
+const FeeTypes = lazy(() => import("./pages/FeeTypes"));
+const Transactions = lazy(() => import("./pages/Transactions"));
+const Reports = lazy(() => import("./pages/Reports"));
+const Tournament = lazy(() => import("./pages/Tournament"));
+const ShortcutHelp = lazy(() => import("./components/ShortcutHelp"));
+const Login = lazy(() => import("./pages/Login"));
+const Setup = lazy(() => import("./pages/Setup"));
+const Landing = lazy(() => import("./pages/Landing"));
+const AdminPortal = lazy(() => import("./pages/AdminPortal"));
+const ClubSelect = lazy(() => import("./pages/ClubSelect"));
+const PublicReport = lazy(() => import("./pages/PublicReport"));
+const BotConfigPanel = lazy(() => import("./components/BotConfigPanel"));
+
+function PageSpinner() {
+  return (
+    <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <Spin size="large" />
+    </div>
+  );
+}
 
 const { Header, Sider, Content } = Layout;
 const { Title } = Typography;
@@ -62,6 +72,7 @@ function AppShell() {
   const [current, setCurrent] = useState("dashboard");
   const [mode, setMode] = useState(null); // null | "admin" | "member"
   const [moreOpen, setMoreOpen] = useState(false);
+  const [botDrawerOpen, setBotDrawerOpen] = useState(false);
   const { token } = theme.useToken();
   const { isMobileView } = useViewMode();
   const { themeConfig, themeName, setThemeName } = useAppTheme();
@@ -83,32 +94,36 @@ function AppShell() {
   }
 
   // Lần đầu chạy chưa có CLB → Setup wizard
-  if (!initialized) return <Setup />;
+  if (!initialized) return <Suspense fallback={<PageSpinner />}><Setup /></Suspense>;
 
   // Chưa chọn mode → Landing
-  if (!mode) return <Landing onSelect={setMode} />;
+  if (!mode) return <Suspense fallback={<PageSpinner />}><Landing onSelect={setMode} /></Suspense>;
 
   // ── Mode: Admin ──
   if (mode === "admin") {
     if (!user || !user.is_superuser) {
       return (
-        <Login
-          onBack={() => { logout(); setMode(null); }}
-          onSwitchMode={(m) => { logout(); setMode(m); }}
-          adminMode
-        />
+        <Suspense fallback={<PageSpinner />}>
+          <Login
+            onBack={() => { logout(); setMode(null); }}
+            onSwitchMode={(m) => { logout(); setMode(m); }}
+            adminMode
+          />
+        </Suspense>
       );
     }
-    return <AdminPortal onBack={() => { logout(); setMode(null); }} />;
+    return <Suspense fallback={<PageSpinner />}><AdminPortal onBack={() => { logout(); setMode(null); }} /></Suspense>;
   }
 
   // ── Mode: Member ──
   if (!user) {
     return (
-      <Login
-        onBack={() => setMode(null)}
-        onSwitchMode={(m) => { logout(); setMode(m); }}
-      />
+      <Suspense fallback={<PageSpinner />}>
+        <Login
+          onBack={() => setMode(null)}
+          onSwitchMode={(m) => { logout(); setMode(m); }}
+        />
+      </Suspense>
     );
   }
 
@@ -119,7 +134,7 @@ function AppShell() {
 
   // Nhiều CLB → chọn CLB
   if (!selectedMembership) {
-    return <ClubSelect onBack={() => { logout(); setMode(null); }} />;
+    return <Suspense fallback={<PageSpinner />}><ClubSelect onBack={() => { logout(); setMode(null); }} /></Suspense>;
   }
 
   // Lọc menu theo quyền can_view
@@ -146,12 +161,14 @@ function AppShell() {
         disabled: true,
       },
       { type: "divider" },
+      { key: "bot_config", label: "Cài đặt Telegram Bot", icon: <RobotOutlined /> },
       ...(memberships.length > 1 ? [{ key: "switch_club", label: "Đổi câu lạc bộ", icon: <SwapOutlined /> }] : []),
       { key: "logout", label: "Đăng xuất", icon: <LogoutOutlined />, danger: true },
     ],
     onClick: ({ key }) => {
       if (key === "logout") { logout(); setMode(null); }
       if (key === "switch_club") { selectClub(null); }
+      if (key === "bot_config") { setBotDrawerOpen(true); }
     },
   };
 
@@ -227,7 +244,9 @@ function AppShell() {
           minHeight: 280,
           paddingBottom: isMobileView ? "calc(64px + env(safe-area-inset-bottom, 0px))" : 0,
         }}>
-          <PageComp perms={perms} />
+          <Suspense fallback={<div style={{ textAlign: "center", padding: 48 }}><Spin size="large" /></div>}>
+            <PageComp perms={perms} />
+          </Suspense>
         </Content>
       </Layout>
 
@@ -287,6 +306,20 @@ function AppShell() {
           </Drawer>
         </>
       )}
+
+      {/* Drawer Cài đặt Telegram Bot */}
+      <Drawer
+        title={<><RobotOutlined style={{ marginRight: 8 }} />Cài đặt Telegram Bot</>}
+        placement="right"
+        width={isMobileView ? "100%" : 620}
+        open={botDrawerOpen}
+        onClose={() => setBotDrawerOpen(false)}
+        styles={{ body: { padding: "16px" } }}
+      >
+        <Suspense fallback={<div style={{ textAlign: "center", padding: 48 }}><Spin /></div>}>
+          <BotConfigPanel />
+        </Suspense>
+      </Drawer>
     </Layout>
   );
 }
@@ -295,13 +328,15 @@ export default function App() {
   // Trang công khai — không cần đăng nhập
   const publicMatch = window.location.pathname.match(/^\/public\/report\/([^/]+)/);
   if (publicMatch) {
-    return <PublicReport token={publicMatch[1]} />;
+    return <Suspense fallback={<PageSpinner />}><PublicReport token={publicMatch[1]} /></Suspense>;
   }
 
   return (
     <AuthProvider>
       <ViewModeProvider>
-        <AppShell />
+        <Suspense fallback={<PageSpinner />}>
+          <AppShell />
+        </Suspense>
       </ViewModeProvider>
     </AuthProvider>
   );

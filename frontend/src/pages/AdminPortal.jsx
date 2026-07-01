@@ -7,7 +7,7 @@ import {
 import {
   TeamOutlined, TrophyOutlined, LinkOutlined, LogoutOutlined,
   PlusOutlined, EditOutlined, DeleteOutlined, SettingOutlined,
-  UserOutlined, ArrowLeftOutlined, CrownOutlined, RobotOutlined,
+  UserOutlined, ArrowLeftOutlined, CrownOutlined,
   MinusCircleOutlined, EyeOutlined, FormOutlined, EditFilled, ScissorOutlined,
 } from "@ant-design/icons";
 import { adminApi } from "../api";
@@ -15,7 +15,6 @@ import { useAuth } from "../context/AuthContext";
 import { useAppTheme } from "../contexts/ThemeContext";
 import ResponsiveTable from "../components/ResponsiveTable";
 import ThemeSwitcher from "../components/ThemeSwitcher";
-import BotConfigPanel from "../components/BotConfigPanel";
 import { useViewMode } from "../contexts/ViewModeContext";
 
 const { Header, Content, Sider } = Layout;
@@ -416,7 +415,6 @@ export default function AdminPortal({ onBack }) {
     { key: "users",       icon: <TeamOutlined />,   label: "Tài khoản" },
     { key: "clubs",       icon: <TrophyOutlined />, label: "Câu lạc bộ" },
     { key: "memberships", icon: <LinkOutlined />,   label: "Phân quyền" },
-    { key: "bot",         icon: <RobotOutlined />,  label: "Telegram Bot" },
   ];
 
   const contentArea = (
@@ -455,9 +453,6 @@ export default function AdminPortal({ onBack }) {
           />
         </div>
       )}
-
-      {/* ── BOT CONFIG ── */}
-      {section === "bot" && <BotConfigPanel />}
 
       {/* ── MEMBERSHIPS ── */}
       {section === "memberships" && (
