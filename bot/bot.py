@@ -32,7 +32,8 @@ _user_club_name: dict[int, str] = {}   # user_id → club_name
 _pending_username: dict[int, str] = {} # tạm thời khi login
 _wizard: dict[int, dict] = {}          # user_id → {name, step, data}
 _ft_name_cache: dict[int, dict] = {}   # user_id → {str(ft_id): ft_name} — cho category delete
-_tx_cache: dict[int, dict] = {}        # user_id → {tx_id: tx_dict} — cho confirm xóa GD
+_tx_cache: dict[int, dict] = {}        # user_id → {tx_id: tx_dict} — cho xóa/sửa GD
+_edit_tx: dict[int, dict] = {}         # user_id → {tx, m, y, changes, _waiting_field?}
 _menu_cfg: dict[int, dict] = {}        # user_id → {"menu": {checkedKeys}, "welcome": str}
 _welcomed: set[int] = set()            # user_ids đã thấy tin nhắn chào mừng trong session này
 
@@ -843,8 +844,52 @@ async def gdlist_show(update: Update, session: dict, club_id: int,
         lines.append(f"_...và {len(txs)-20} giao dịch khác_")
     await reply(update, "\n".join(lines), kb(
         [("💚 Chỉ thu", f"gdlist:{m}:{y}:income"), ("🔴 Chỉ chi", f"gdlist:{m}:{y}:expense"), ("Tất cả", f"gdlist:{m}:{y}:")],
-        [("🗑 Xóa GD", f"gdlist_del:{m}:{y}")],
+        [("✏️ Sửa GD", f"gdlist_edit:{m}:{y}"), ("🗑 Xóa GD", f"gdlist_del:{m}:{y}")],
         [back_btn("menu:gdlist")[0], ("🏠 Menu", "menu:exit")],
+    ))
+
+
+# ── SỬA GIAO DỊCH ────────────────────────────────────────────────────────────
+async def edittx_show_confirm(update: Update, user_id: int):
+    """Hiển thị màn hình sửa GD với các giá trị hiện tại và pending changes."""
+    e = _edit_tx.get(user_id)
+    if not e:
+        return
+    tx = e["tx"]
+    changes = e.get("changes", {})
+    m, y, tx_id = e["m"], e["y"], tx["id"]
+
+    fee_name = (tx.get("fee_type") or {}).get("name", "?") if isinstance(tx.get("fee_type"), dict) else "?"
+    icon = "💚" if tx["type"] == "income" else "🔴"
+
+    def _val(field, label, fmt_fn=None):
+        orig = tx.get(field, "") or ""
+        new = changes.get(field)
+        if new is not None and str(new) != str(orig):
+            orig_s = fmt_fn(orig) if fmt_fn and orig else str(orig)
+            new_s  = fmt_fn(new)  if fmt_fn else str(new)
+            return f"{label}: {orig_s} → *{new_s}* ✏️"
+        val = orig
+        return f"{label}: {fmt_fn(val) if fmt_fn and val else (val or '—')}"
+
+    lines = [
+        f"✏️ *Sửa giao dịch* {icon} {fee_name}\n",
+        _val("amount", "💰 Số tiền", fmt),
+        _val("transaction_date", "📅 Ngày"),
+        _val("payment_method", "💳 Phương thức"),
+        _val("description", "📝 Ghi chú"),
+    ]
+    if changes:
+        lines.append(f"\n_⚠️ Có {len(changes)} thay đổi chưa lưu — bấm 💾 để lưu_")
+
+    await reply(update, "\n".join(lines), kb(
+        [(f"💰 Sửa số tiền", f"edittx_field:amount:{tx_id}:{m}:{y}"),
+         (f"📅 Sửa ngày", f"edittx_field:date:{tx_id}:{m}:{y}")],
+        [(f"💳 Phương thức", f"edittx_field:method:{tx_id}:{m}:{y}"),
+         (f"📝 Ghi chú", f"edittx_field:note:{tx_id}:{m}:{y}")],
+        [(f"💾 Lưu", f"edittx_save:{tx_id}:{m}:{y}"),
+         ("❌ Hủy", f"gdlist:{m}:{y}")],
+        [("🏠 Menu", "menu:exit")],
     ))
 
 
@@ -899,6 +944,9 @@ Sau khi đăng nhập, bấm các nút để điều hướng.
 *Lệnh tắt:*
 • `/menu` — Về menu chính
 • `/logout` — Đăng xuất
+
+*Sửa giao dịch:*
+• Vào 📋 Giao dịch → chọn tháng → bấm ✏️ Sửa GD → chọn giao dịch → chọn field cần sửa → 💾 Lưu
 
 *Xóa giao dịch:*
 • Vào 📋 Giao dịch → chọn tháng → bấm 🗑 Xóa GD → chọn giao dịch → xác nhận
@@ -1099,6 +1147,162 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await reply(update, f"❌ {e}", kb([back_btn(f"gdlist:{m}:{y}")[0], ("🏠 Menu", "menu:exit")]))
         return
 
+    # ── Sửa giao dịch — picker chọn GD ──
+    if data.startswith("gdlist_edit:"):
+        parts = data.split(":")
+        m, y = int(parts[1]), int(parts[2])
+        page = int(parts[3]) if len(parts) > 3 else 0
+        PAGE_SIZE = 10
+        try:
+            txs = await call_backend("get", "/api/transactions", token=session["token"],
+                                     club_id=club_id, params={"month": m, "year": y})
+        except ValueError as e:
+            await reply(update, f"❌ {e}")
+            return
+        if not txs:
+            await reply(update, f"Không có giao dịch tháng {m}/{y}.",
+                        kb([back_btn(f"gdlist:{m}:{y}")[0], ("🏠 Menu", "menu:exit")]))
+            return
+        _tx_cache[user_id] = {t["id"]: t for t in txs}
+        total = len(txs)
+        total_pages = (total + PAGE_SIZE - 1) // PAGE_SIZE
+        page = max(0, min(page, total_pages - 1))
+        slice_ = txs[page * PAGE_SIZE:(page + 1) * PAGE_SIZE]
+        rows = []
+        for t in slice_:
+            icon = "💚" if t["type"] == "income" else "🔴"
+            fee_name = (t.get("fee_type") or {}).get("name", "?") if isinstance(t.get("fee_type"), dict) else "?"
+            date_short = t["transaction_date"][5:]
+            label = f"{icon} {date_short} {fee_name} {fmt(t['amount'])}"
+            rows.append([(label, f"edittx_start:{t['id']}:{m}:{y}")])
+        nav = []
+        if page > 0:
+            nav.append((f"◀ Trang {page}", f"gdlist_edit:{m}:{y}:{page-1}"))
+        if page < total_pages - 1:
+            nav.append((f"Trang {page+2} ▶", f"gdlist_edit:{m}:{y}:{page+1}"))
+        if nav:
+            rows.append(nav)
+        rows.append([back_btn(f"gdlist:{m}:{y}")[0], ("🏠 Menu", "menu:exit")])
+        header = f"✏️ *Chọn giao dịch muốn sửa* (tháng {m}/{y})"
+        if total_pages > 1:
+            header += f"\nTrang {page+1}/{total_pages} — {total} GD"
+        await reply(update, header + ":", kb(*rows))
+        return
+
+    # ── Sửa giao dịch — bắt đầu sửa ──
+    if data.startswith("edittx_start:"):
+        parts = data.split(":")
+        tx_id, m, y = int(parts[1]), int(parts[2]), int(parts[3])
+        tx = (_tx_cache.get(user_id) or {}).get(tx_id)
+        if not tx:
+            await reply(update, "❌ Không tìm thấy giao dịch. Vui lòng thử lại.",
+                        kb([back_btn(f"gdlist_edit:{m}:{y}")[0], ("🏠 Menu", "menu:exit")]))
+            return
+        _edit_tx[user_id] = {"tx": tx, "m": m, "y": y, "changes": {}}
+        await edittx_show_confirm(update, user_id)
+        return
+
+    # ── Sửa giao dịch — chọn field cần sửa ──
+    if data.startswith("edittx_field:"):
+        parts = data.split(":")
+        field, tx_id, m, y = parts[1], int(parts[2]), int(parts[3]), int(parts[4])
+        e = _edit_tx.get(user_id)
+        if not e:
+            await reply(update, "❌ Phiên sửa đã hết. Vui lòng thử lại.", kb([("🏠 Menu", "menu:exit")]))
+            return
+        if field == "method":
+            # Phương thức: dùng button thay vì text input
+            await reply(update, "💳 Chọn *phương thức thanh toán*:", kb(
+                [("💵 Tiền mặt", f"edittx_set:method:Tiền mặt:{tx_id}:{m}:{y}"),
+                 ("🏦 Chuyển khoản", f"edittx_set:method:Chuyển khoản:{tx_id}:{m}:{y}")],
+                [("↩ Quay lại", f"edittx_start:{tx_id}:{m}:{y}"), ("🏠 Menu", "menu:exit")],
+            ))
+        elif field == "date":
+            e["_waiting_field"] = "date"
+            today_iso = today_str()  # YYYY-MM-DD
+            await reply(update, f"📅 Nhập *ngày giao dịch* mới (DD/MM/YYYY) hoặc bấm hôm nay ({today_iso}):",
+                        kb([("📅 Hôm nay", f"edittx_today:{tx_id}:{m}:{y}")],
+                           [("↩ Quay lại", f"edittx_start:{tx_id}:{m}:{y}"), ("🏠 Menu", "menu:exit")]))
+        elif field == "amount":
+            e["_waiting_field"] = "amount"
+            await reply(update, "💰 Nhập *số tiền* mới:",
+                        kb([("↩ Quay lại", f"edittx_start:{tx_id}:{m}:{y}"), ("🏠 Menu", "menu:exit")]))
+        elif field == "note":
+            e["_waiting_field"] = "note"
+            await reply(update, "📝 Nhập *ghi chú* mới (hoặc gõ `-` để xóa ghi chú):",
+                        kb([("↩ Quay lại", f"edittx_start:{tx_id}:{m}:{y}"), ("🏠 Menu", "menu:exit")]))
+        return
+
+    # ── Sửa giao dịch — chọn phương thức thanh toán ──
+    if data.startswith("edittx_set:method:"):
+        # format: edittx_set:method:{value}:{tx_id}:{m}:{y}
+        parts = data.split(":")
+        # parts[2] = value (có thể chứa khoảng trắng nhưng không chứa ":")
+        value = parts[2]
+        tx_id, m, y = int(parts[3]), int(parts[4]), int(parts[5])
+        e = _edit_tx.get(user_id)
+        if not e:
+            await reply(update, "❌ Phiên sửa đã hết.", kb([("🏠 Menu", "menu:exit")]))
+            return
+        e["changes"]["payment_method"] = value
+        await edittx_show_confirm(update, user_id)
+        return
+
+    # ── Sửa giao dịch — chọn hôm nay làm ngày ──
+    if data.startswith("edittx_today:"):
+        parts = data.split(":")
+        tx_id, m, y = int(parts[1]), int(parts[2]), int(parts[3])
+        e = _edit_tx.get(user_id)
+        if not e:
+            await reply(update, "❌ Phiên sửa đã hết.", kb([("🏠 Menu", "menu:exit")]))
+            return
+        e["changes"]["transaction_date"] = today_str()
+        await edittx_show_confirm(update, user_id)
+        return
+
+    # ── Sửa giao dịch — lưu ──
+    if data.startswith("edittx_save:"):
+        parts = data.split(":")
+        tx_id, m, y = int(parts[1]), int(parts[2]), int(parts[3])
+        e = _edit_tx.pop(user_id, None)
+        if not e:
+            await reply(update, "❌ Phiên sửa đã hết.", kb([("🏠 Menu", "menu:exit")]))
+            return
+        tx = e["tx"]
+        changes = e.get("changes", {})
+        if not changes:
+            await reply(update, "ℹ️ Không có thay đổi nào để lưu.",
+                        kb([("↩ Quay lại", f"gdlist:{m}:{y}"), ("🏠 Menu", "menu:exit")]))
+            return
+        # Build payload: merge original + changes (PUT cần full payload)
+        fee_type_id = tx["fee_type"]["id"] if isinstance(tx.get("fee_type"), dict) else tx.get("fee_type_id")
+        member_id = tx["member"]["id"] if isinstance(tx.get("member"), dict) and tx.get("member") else tx.get("member_id")
+        payload = {
+            "fee_type_id": fee_type_id,
+            "amount": float(changes.get("amount", tx["amount"])),
+            "transaction_date": changes.get("transaction_date", tx["transaction_date"]),
+            "payment_method": changes.get("payment_method", tx.get("payment_method", "Tiền mặt")),
+            "description": changes.get("description", tx.get("description", "") or ""),
+        }
+        if member_id:
+            payload["member_id"] = member_id
+        try:
+            updated = await call_backend("put", f"/api/transactions/{tx_id}",
+                                         token=session["token"], club_id=club_id, json=payload)
+            fee_name = (updated.get("fee_type") or {}).get("name", "?") if isinstance(updated.get("fee_type"), dict) else "?"
+            icon = "💚" if updated["type"] == "income" else "🔴"
+            await reply(update,
+                f"✅ *Đã cập nhật giao dịch!*\n"
+                f"{icon} {fee_name}\n"
+                f"💰 Số tiền: {fmt(updated['amount'])}\n"
+                f"📅 Ngày: {updated['transaction_date']}\n"
+                f"💳 Phương thức: {updated.get('payment_method', '—')}",
+                kb([("📋 Xem giao dịch", f"gdlist:{m}:{y}"), ("🏠 Menu", "menu:exit")])
+            )
+        except ValueError as err:
+            await reply(update, f"❌ {err}", kb([back_btn(f"gdlist:{m}:{y}")[0], ("🏠 Menu", "menu:exit")]))
+        return
+
     # ── Category ──
     if data == "category:delete":
         await category_delete_menu(update, session, club_id)
@@ -1254,6 +1458,34 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     session, club_id = guard
 
     w = _wizard.get(user_id)
+
+    # Edit GD đang chờ nhập giá trị
+    e = _edit_tx.get(user_id)
+    if e and e.get("_waiting_field"):
+        field = e.pop("_waiting_field")
+        tx = e["tx"]
+        m, y, tx_id = e["m"], e["y"], tx["id"]
+        if field == "amount":
+            try:
+                val = float(text.replace(".", "").replace(",", ""))
+                if val <= 0:
+                    raise ValueError()
+                e["changes"]["amount"] = val
+            except Exception:
+                e["_waiting_field"] = field
+                await update.message.reply_text("❌ Số tiền không hợp lệ. Nhập lại (VD: 150000):", parse_mode="Markdown")
+                return
+        elif field == "date":
+            parsed = parse_date(text)
+            if not parsed:
+                e["_waiting_field"] = field
+                await update.message.reply_text("❌ Sai định dạng. Nhập lại *DD/MM/YYYY*:", parse_mode="Markdown")
+                return
+            e["changes"]["transaction_date"] = parsed
+        elif field == "note":
+            e["changes"]["description"] = "" if text.strip() == "-" else text.strip()
+        await edittx_show_confirm(update, user_id)
+        return
 
     # Wizard đang chờ nhập ngày thủ công
     if w and w["data"].get("_waiting_date_key"):
