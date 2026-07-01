@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Row, Col, Card, Statistic, Typography, Spin, Tag, Divider } from "antd";
+import { Row, Col, Card, Statistic, Typography, Skeleton, Tag, Divider } from "antd";
 import {
   TeamOutlined, RiseOutlined, FallOutlined, WalletOutlined,
   TrophyOutlined, CalendarOutlined,
@@ -34,7 +34,22 @@ export default function Dashboard() {
     tournamentsApi.list().then((r) => setTournaments(r.data));
   }, []);
 
-  if (!overview) return <Spin size="large" style={{ marginTop: 80, display: "block", textAlign: "center" }} />;
+  if (!overview) return (
+    <div>
+      <Row gutter={[16, 16]} style={{ marginBottom: 8 }}>
+        {[0,1,2,3].map(i => (
+          <Col key={i} xs={24} sm={12} lg={6}>
+            <Card><Skeleton active paragraph={{ rows: 1 }} /></Card>
+          </Col>
+        ))}
+      </Row>
+      <Row gutter={[16, 16]} style={{ marginBottom: 24, marginTop: 16 }}>
+        <Col xs={24} lg={16}><Card><Skeleton active paragraph={{ rows: 2 }} /></Card></Col>
+        <Col xs={24} lg={8}><Card><Skeleton active paragraph={{ rows: 2 }} /></Card></Col>
+      </Row>
+      <Card><Skeleton active paragraph={{ rows: 6 }} /></Card>
+    </div>
+  );
 
   const activeTournaments = tournaments.filter(t => t.status === "active").length;
   const totalTournaments = tournaments.length;
@@ -95,7 +110,7 @@ export default function Dashboard() {
                   <Text type="secondary" style={{ fontSize: 12 }}>{thisMonth.transaction_count} giao dịch</Text>
                 </Col>
               </Row>
-            ) : <Spin size="small" />}
+            ) : <Skeleton active paragraph={{ rows: 1 }} />}
           </Card>
         </Col>
         <Col xs={24} lg={8}>

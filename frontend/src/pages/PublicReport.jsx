@@ -22,7 +22,7 @@ function PublicReportInner({ token }) {
   const [year, setYear] = useState(dayjs().year());
   const { token: antToken } = theme.useToken();
   const { themeConfig, themeName } = useAppTheme();
-  const isDark = themeName === "dark-pro";
+  const isDark = themeName === "ai-inspired";
 
   const api = createPublicReportApi(token);
 
@@ -66,9 +66,9 @@ function PublicReportInner({ token }) {
 
   // Màu label bar theo theme
   const labelBarStyle = isDark
-    ? { background: "rgba(124,58,237,0.15)", borderBottom: `1px solid rgba(124,58,237,0.3)`, padding: "8px 24px" }
-    : { background: "#e6f4ff", borderBottom: "1px solid #bae0ff", padding: "8px 24px" };
-  const labelTextColor = isDark ? themeConfig.sidebarActive : "#0958d9";
+    ? { background: "rgba(39,160,99,0.1)", borderBottom: "1px solid rgba(39,160,99,0.25)", padding: "8px 24px" }
+    : { background: "rgba(39,160,99,0.08)", borderBottom: "1px solid rgba(39,160,99,0.2)", padding: "8px 24px" };
+  const labelTextColor = isDark ? "#5dd49a" : "#1a7a4a";
 
   return (
     <div style={{ minHeight: "100vh", background: antToken.colorBgLayout }}>
@@ -92,7 +92,7 @@ function PublicReportInner({ token }) {
             <Space wrap>
               <ThemeSwitcher dark={isDark} />
               <ViewModeSwitcher />
-              <Tag icon={<EyeOutlined />} color="blue">{meta.view_count} lượt xem</Tag>
+              <Tag icon={<EyeOutlined />} color="green">{meta.view_count} lượt xem</Tag>
               {meta.expires_at && (
                 <Tag icon={<CalendarOutlined />} color="orange">
                   Hết hạn: {dayjs(meta.expires_at).format("DD/MM/YYYY")}
