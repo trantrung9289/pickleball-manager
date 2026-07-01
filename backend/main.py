@@ -2291,7 +2291,7 @@ def save_telegram_chat_id(
     if not chat_id:
         raise HTTPException(400, "Thiếu chat_id")
     membership = db.query(models.ClubMembership).filter(
-        models.ClubMembership.user_id == perms.user_id,
+        models.ClubMembership.user_id == perms.membership.user_id,
         models.ClubMembership.club_id == perms.club_id,
     ).first()
     if not membership:
@@ -2395,7 +2395,7 @@ def send_fee_reminders_frontend(
     club_id: int = Depends(_require_superuser_club_id),
 ):
     """Gửi nhắc đóng phí thủ công từ AdminPortal — dành cho superuser (JWT)."""
-    bot_token = _os.environ.get("BOT_TOKEN", "")
+    bot_token = _os.environ.get("TELEGRAM_BOT_TOKEN") or _os.environ.get("BOT_TOKEN", "")
     if not bot_token:
         raise HTTPException(500, "BOT_TOKEN chưa được cấu hình")
     data = [item for item in _build_reminder_data(month, year, db) if item["club_id"] == club_id]
@@ -2464,7 +2464,7 @@ def send_fee_reminder(
     db: Session = Depends(get_db),
     _: None = Depends(_check_internal_secret),
 ):
-    bot_token = _os.environ.get("BOT_TOKEN", "")
+    bot_token = _os.environ.get("TELEGRAM_BOT_TOKEN") or _os.environ.get("BOT_TOKEN", "")
     if not bot_token:
         raise HTTPException(500, "BOT_TOKEN chưa được cấu hình")
 
