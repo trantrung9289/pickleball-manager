@@ -8,12 +8,12 @@
 import React, { useEffect, useState } from "react";
 import {
   Table, Select, Typography, Row, Col, Card, Tabs, Statistic,
-  Tag, Empty, Spin, Progress, Alert, Button, Space, theme,
+  Tag, Empty, Spin, Progress, Alert, Button, Space, theme, Input,
 } from "antd";
 import {
   RiseOutlined, FallOutlined, WalletOutlined, SwapOutlined,
   CheckCircleOutlined, CloseCircleOutlined, DownloadOutlined,
-  ArrowRightOutlined,
+  ArrowRightOutlined, SearchOutlined,
 } from "@ant-design/icons";
 import dayjs from "dayjs";
 import ResponsiveTable from "./ResponsiveTable";
@@ -163,27 +163,53 @@ export function MonthlyStats({ year, api }) {
       api.transactions.list({ month, year }),
     ]).then(([dRes, txRes]) => {
       setDetail(dRes.data);
-      setTxs(txRes.data);
+      // Pre-sort mới nhất lên đầu (áp dụng cả desktop lẫn mobile)
+      setTxs([...txRes.data].sort((a, b) => b.transaction_date.localeCompare(a.transaction_date)));
     }).finally(() => setLoading(false));
   }, [month, year]);
+
+  // Tạo filter options từ data thực tế
+  const feeTypeOptions = [...new Set(txs.map(r => r.fee_type?.name).filter(Boolean))].map(v => ({ text: v, value: v }));
+  const memberOptions  = [...new Set(txs.map(r => r.member?.full_name).filter(Boolean))].map(v => ({ text: v, value: v }));
+  const methodOptions  = [...new Set(txs.map(r => r.payment_method).filter(Boolean))].map(v => ({ text: v, value: v }));
 
   const txCols = [
     {
       title: "Ngày", dataIndex: "transaction_date", width: 100,
       render: (v) => dayjs(v).format("DD/MM/YYYY"),
       sorter: (a, b) => a.transaction_date.localeCompare(b.transaction_date),
+      defaultSortOrder: "descend",
     },
     {
       title: "Loại", dataIndex: "type", width: 70,
       render: (v) => <Tag color={v === "income" ? "green" : "red"}>{v === "income" ? "Thu" : "Chi"}</Tag>,
+      sorter: (a, b) => a.type.localeCompare(b.type),
+      filters: [{ text: "Thu", value: "income" }, { text: "Chi", value: "expense" }],
+      onFilter: (value, r) => r.type === value,
     },
-    { title: "Khoản", render: (_, r) => r.fee_type?.name || "—" },
-    { title: "Thành viên", render: (_, r) => r.member?.full_name || "—" },
+    {
+      title: "Khoản", render: (_, r) => r.fee_type?.name || "—",
+      sorter: (a, b) => (a.fee_type?.name || "").localeCompare(b.fee_type?.name || ""),
+      filters: feeTypeOptions,
+      onFilter: (value, r) => r.fee_type?.name === value,
+    },
+    {
+      title: "Thành viên", render: (_, r) => r.member?.full_name || "—",
+      sorter: (a, b) => (a.member?.full_name || "").localeCompare(b.member?.full_name || ""),
+      filters: memberOptions,
+      onFilter: (value, r) => r.member?.full_name === value,
+    },
     {
       title: "Số tiền", dataIndex: "amount", align: "right",
       render: (v, r) => <b style={{ color: r.type === "income" ? "#52c41a" : "#ff4d4f" }}>{fmt(v)}</b>,
+      sorter: (a, b) => parseFloat(a.amount) - parseFloat(b.amount),
     },
-    { title: "Phương thức", dataIndex: "payment_method", width: 130 },
+    {
+      title: "Phương thức", dataIndex: "payment_method", width: 130,
+      sorter: (a, b) => (a.payment_method || "").localeCompare(b.payment_method || ""),
+      filters: methodOptions,
+      onFilter: (value, r) => r.payment_method === value,
+    },
     { title: "Ghi chú", dataIndex: "description", ellipsis: true },
   ];
 
@@ -378,6 +404,8 @@ export function MemberContributions({ year, api }) {
   const [contributions, setContributions] = useState([]);
   const [feeTypes, setFeeTypes] = useState([]);
   const [feeTypeFilter, setFeeTypeFilter] = useState(null);
+  const [monthFilter, setMonthFilter] = useState(null);
+  const [search, setSearch] = useState("");
   const { token: antToken } = theme.useToken();
 
   useEffect(() => {
@@ -385,34 +413,81 @@ export function MemberContributions({ year, api }) {
   }, []);
 
   useEffect(() => {
-    api.reports.memberContributions({ fee_type_id: feeTypeFilter || undefined, year }).then((r) =>
-      setContributions(r.data)
-    );
-  }, [feeTypeFilter, year]);
+    api.reports.memberContributions({
+      fee_type_id: feeTypeFilter || undefined,
+      month: monthFilter || undefined,
+      year,
+    }).then((r) => setContributions(r.data));
+  }, [feeTypeFilter, monthFilter, year]);
+
+  const filtered = search
+    ? contributions.filter(r =>
+        r.full_name?.toLowerCase().includes(search.toLowerCase()) ||
+        r.member_code?.toLowerCase().includes(search.toLowerCase())
+      )
+    : contributions;
+
+  // Danh sách khoản đóng duy nhất để làm filter inline
+  const feeTypeOptions = [...new Set(contributions.map(r => r.fee_type_name))].map(v => ({ text: v, value: v }));
 
   const contribCols = [
-    { title: "Mã TV", dataIndex: "member_code", width: 90 },
-    { title: "Họ và tên", dataIndex: "full_name" },
-    { title: "Khoản đóng", dataIndex: "fee_type_name" },
-    { title: "Số lần", dataIndex: "transaction_count", align: "center", width: 80 },
     {
-      title: "Tổng tiền", dataIndex: "total_amount",
+      title: "Mã TV", dataIndex: "member_code", width: 90,
+      sorter: (a, b) => a.member_code.localeCompare(b.member_code),
+    },
+    {
+      title: "Họ và tên", dataIndex: "full_name",
+      sorter: (a, b) => a.full_name.localeCompare(b.full_name),
+    },
+    {
+      title: "Khoản đóng", dataIndex: "fee_type_name",
+      sorter: (a, b) => a.fee_type_name.localeCompare(b.fee_type_name),
+      filters: feeTypeOptions,
+      onFilter: (value, r) => r.fee_type_name === value,
+    },
+    {
+      title: "Số lần", dataIndex: "transaction_count", align: "center", width: 80,
+      sorter: (a, b) => a.transaction_count - b.transaction_count,
+    },
+    {
+      title: "Tổng tiền", dataIndex: "total_amount", align: "right",
       render: (v) => <b style={{ color: "#52c41a" }}>{fmt(v)}</b>,
-      align: "right",
+      sorter: (a, b) => a.total_amount - b.total_amount,
+      defaultSortOrder: "descend",
     },
   ];
 
-  const totalAmount = contributions.reduce((s, r) => s + r.total_amount, 0);
+  const totalAmount = filtered.reduce((s, r) => s + r.total_amount, 0);
 
   return (
     <>
-      <Row gutter={12} style={{ marginBottom: 16 }}>
+      <Row gutter={[12, 8]} style={{ marginBottom: 16 }} wrap>
         <Col>
-          <Select placeholder="Lọc theo khoản thu" allowClear style={{ width: 220 }} onChange={setFeeTypeFilter}>
+          <Select
+            placeholder="Lọc theo tháng" allowClear style={{ width: 140 }}
+            value={monthFilter} onChange={setMonthFilter}
+          >
+            {Array.from({ length: 12 }, (_, i) => (
+              <Select.Option key={i + 1} value={i + 1}>Tháng {i + 1}</Select.Option>
+            ))}
+          </Select>
+        </Col>
+        <Col>
+          <Select placeholder="Lọc theo khoản thu" allowClear style={{ width: 200 }} onChange={setFeeTypeFilter}>
             {feeTypes.map((ft) => (
               <Select.Option key={ft.id} value={ft.id}>{ft.name}</Select.Option>
             ))}
           </Select>
+        </Col>
+        <Col flex="auto">
+          <Input
+            prefix={<SearchOutlined />}
+            placeholder="Tìm mã TV hoặc họ tên..."
+            allowClear
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            style={{ minWidth: 180 }}
+          />
         </Col>
         <Col>
           <Tag color="green" style={{ lineHeight: "32px", padding: "0 12px" }}>
@@ -422,12 +497,12 @@ export function MemberContributions({ year, api }) {
       </Row>
       <ResponsiveTable
         columns={contribCols}
-        dataSource={contributions}
+        dataSource={filtered}
         rowKey={(r) => `${r.member_id}-${r.fee_type_name}`}
         size="small"
         pagination={{ pageSize: 20 }}
-        mobileTitle={(r) => r.full_name}
-        mobileHideColumns={["Họ và tên"]}
+        mobileTitle={(r) => <span><b>{r.member_code}</b> — {r.full_name}</span>}
+        mobileHideColumns={["Mã TV", "Họ và tên"]}
         summary={(rows) => {
           const total = rows.reduce((s, r) => s + r.total_amount, 0);
           return (
@@ -452,6 +527,7 @@ export function FeeStatusTracker({ year, api }) {
   const [selectedFeeType, setSelectedFeeType] = useState(null);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [search, setSearch] = useState("");
 
   useEffect(() => {
     api.feeTypes.list({ type: "income" }).then((r) => {
@@ -483,24 +559,55 @@ export function FeeStatusTracker({ year, api }) {
     a.click(); URL.revokeObjectURL(url);
   };
 
+  // Danh sách hạng duy nhất từ data để làm filter
+  const rankOptions = data
+    ? [...new Set(data.members.map(m => m.rank).filter(Boolean))].map(v => ({ text: v, value: v }))
+    : [];
+
+  const filteredMembers = data
+    ? (search
+        ? data.members.filter(m =>
+            m.full_name?.toLowerCase().includes(search.toLowerCase()) ||
+            m.member_code?.toLowerCase().includes(search.toLowerCase())
+          )
+        : data.members)
+    : [];
+
   const paidCols = [
-    { title: "Mã TV", dataIndex: "member_code", width: 90 },
-    { title: "Họ và tên", dataIndex: "full_name" },
-    { title: "SĐT", dataIndex: "phone", width: 120 },
-    { title: "Hạng", dataIndex: "rank", width: 90, render: (v) => v ? <Tag color="purple">{v}</Tag> : "—" },
     {
-      title: "Trạng thái", dataIndex: "paid", width: 120,
+      title: "Mã TV", dataIndex: "member_code", width: 90,
+      sorter: (a, b) => a.member_code.localeCompare(b.member_code),
+    },
+    {
+      title: "Họ và tên", dataIndex: "full_name",
+      sorter: (a, b) => a.full_name.localeCompare(b.full_name),
+    },
+    {
+      title: "SĐT", dataIndex: "phone", width: 130,
+      sorter: (a, b) => (a.phone || "").localeCompare(b.phone || ""),
+    },
+    {
+      title: "Hạng", dataIndex: "rank", width: 90,
+      render: (v) => v ? <Tag color="purple">{v}</Tag> : "—",
+      sorter: (a, b) => (a.rank || "").localeCompare(b.rank || ""),
+      filters: rankOptions,
+      onFilter: (value, r) => r.rank === value,
+    },
+    {
+      title: "Trạng thái", dataIndex: "paid", width: 130,
       render: (v) => v
         ? <Tag icon={<CheckCircleOutlined />} color="success">Đã đóng</Tag>
         : <Tag icon={<CloseCircleOutlined />} color="error">Chưa đóng</Tag>,
+      sorter: (a, b) => Number(b.paid) - Number(a.paid),
       filters: [{ text: "Đã đóng", value: true }, { text: "Chưa đóng", value: false }],
       onFilter: (value, r) => r.paid === value,
+      defaultSortOrder: "ascend",
     },
   ];
 
   return (
     <>
-      <Row gutter={12} align="middle" style={{ marginBottom: 16 }}>
+      <Row gutter={[12, 8]} align="middle" style={{ marginBottom: 16 }} wrap>
         <Col>
           <Select value={month} onChange={setMonth} style={{ width: 120 }}>
             {Array.from({ length: 12 }, (_, i) => (
@@ -509,11 +616,22 @@ export function FeeStatusTracker({ year, api }) {
           </Select>
         </Col>
         <Col>
-          <Select value={selectedFeeType} onChange={setSelectedFeeType} style={{ width: 220 }} placeholder="Chọn khoản phí">
+          <Select value={selectedFeeType} onChange={setSelectedFeeType} style={{ width: 200 }} placeholder="Chọn khoản phí">
             {feeTypes.map((ft) => (
               <Select.Option key={ft.id} value={ft.id}>{ft.name}</Select.Option>
             ))}
           </Select>
+        </Col>
+        <Col flex="auto">
+          <Input
+            prefix={<SearchOutlined />}
+            placeholder="Tìm mã TV hoặc họ tên..."
+            allowClear
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            style={{ minWidth: 180 }}
+            disabled={!data}
+          />
         </Col>
         <Col>
           <Button icon={<DownloadOutlined />} onClick={exportCSV} disabled={!data}>Xuất CSV</Button>
@@ -559,18 +677,18 @@ export function FeeStatusTracker({ year, api }) {
 
             <ResponsiveTable
               columns={paidCols}
-              dataSource={data.members}
+              dataSource={filteredMembers}
               rowKey="member_id"
               size="small"
               pagination={{ pageSize: 20 }}
               rowClassName={(r) => r.paid ? "" : "ant-table-row-danger"}
               mobileTitle={(r) => (
                 <span>
-                  {r.full_name}
+                  <b>{r.member_code}</b> — {r.full_name}
                   {r.rank && <Tag color="purple" style={{ marginLeft: 6 }}>{r.rank}</Tag>}
                 </span>
               )}
-              mobileHideColumns={["Họ và tên", "Hạng"]}
+              mobileHideColumns={["Mã TV", "Họ và tên", "Hạng"]}
             />
           </>
         ) : (
