@@ -40,8 +40,8 @@ export default function Landing({ onSelect }) {
               transition: "all 0.2s",
             }}
             onMouseEnter={e => {
-              e.currentTarget.style.background = "rgba(255,255,255,0.12)";
-              e.currentTarget.style.borderColor = "#faad14";
+              e.currentTarget.style.background = "rgba(39,160,99,0.12)";
+              e.currentTarget.style.borderColor = "#27A063";
               e.currentTarget.style.transform = "translateY(-4px)";
             }}
             onMouseLeave={e => {
@@ -50,7 +50,7 @@ export default function Landing({ onSelect }) {
               e.currentTarget.style.transform = "translateY(0)";
             }}
           >
-            <SettingOutlined style={{ fontSize: 48, color: "#faad14", marginBottom: 16, display: "block" }} />
+            <SettingOutlined style={{ fontSize: 48, color: "#27A063", marginBottom: 16, display: "block" }} />
             <Title level={4} style={{ color: "#fff", margin: "0 0 8px" }}>
               Quản trị viên
             </Title>
@@ -74,8 +74,8 @@ export default function Landing({ onSelect }) {
               transition: "all 0.2s",
             }}
             onMouseEnter={e => {
-              e.currentTarget.style.background = "rgba(255,255,255,0.12)";
-              e.currentTarget.style.borderColor = "#1677ff";
+              e.currentTarget.style.background = "rgba(39,160,99,0.12)";
+              e.currentTarget.style.borderColor = "#27A063";
               e.currentTarget.style.transform = "translateY(-4px)";
             }}
             onMouseLeave={e => {
@@ -84,7 +84,7 @@ export default function Landing({ onSelect }) {
               e.currentTarget.style.transform = "translateY(0)";
             }}
           >
-            <TrophyOutlined style={{ fontSize: 48, color: "#1677ff", marginBottom: 16, display: "block" }} />
+            <TrophyOutlined style={{ fontSize: 48, color: "#27A063", marginBottom: 16, display: "block" }} />
             <Title level={4} style={{ color: "#fff", margin: "0 0 8px" }}>
               Quản lý CLB
             </Title>

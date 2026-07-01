@@ -48,7 +48,7 @@ export default function Dashboard() {
         <Col xs={24} sm={12} lg={6}>
           <Card>
             <Statistic title="Tổng thành viên" value={overview.total_members}
-              prefix={<TeamOutlined />} styles={{ content: { color: "#1677ff" } }} />
+              prefix={<TeamOutlined />} styles={{ content: { color: "#27A063" } }} />
             <Text type="secondary">Đang hoạt động: <b style={{ color: "#52c41a" }}>{overview.active_members}</b></Text>
           </Card>
         </Col>
@@ -77,7 +77,7 @@ export default function Dashboard() {
       <Row gutter={[16, 16]} style={{ marginBottom: 24, marginTop: 16 }}>
         <Col xs={24} lg={16}>
           <Card title={<span><CalendarOutlined style={{ marginRight: 8 }} />Tháng {month}/{year}</span>}
-            size="small" style={{ borderTop: "3px solid #1677ff" }}>
+            size="small" style={{ borderTop: "3px solid #27A063" }}>
             {thisMonth ? (
               <Row gutter={16}>
                 <Col span={8}>
@@ -91,7 +91,7 @@ export default function Dashboard() {
                 <Col span={8}>
                   <Statistic title="Số dư tháng" value={thisMonth.balance}
                     formatter={fmt}
-                    styles={{ content: { color: thisMonth.balance >= 0 ? "#1677ff" : "#ff4d4f", fontSize: 18 } }} />
+                    styles={{ content: { color: thisMonth.balance >= 0 ? "#27A063" : "#ff4d4f", fontSize: 18 } }} />
                   <Text type="secondary" style={{ fontSize: 12 }}>{thisMonth.transaction_count} giao dịch</Text>
                 </Col>
               </Row>
