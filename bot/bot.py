@@ -367,7 +367,7 @@ async def member_list(update: Update, session: dict, club_id: int, status_filter
         await reply(update, f"❌ {e}")
         return
     if not members:
-        await reply(update, "Không có thành viên nào.", kb([back_btn("menu:members")[0]]))
+        await reply(update, "Không có thành viên nào.", kb([back_btn("menu:members")[0], ("🏠 Menu", "menu:exit")]))
         return
     lines = [f"👥 *Danh sách thành viên* ({len(members)} người)\n"]
     for m in members[:30]:
@@ -379,7 +379,7 @@ async def member_list(update: Update, session: dict, club_id: int, status_filter
         lines.append(f"\n_...và {len(members)-30} người khác_")
     await reply(update, "\n".join(lines), kb(
         [("✅ Hoạt động", "member:list:active"), ("⏸ Tạm nghỉ", "member:list:inactive"), ("👥 Tất cả", "member:list:")],
-        [back_btn("menu:members")[0]],
+        [back_btn("menu:members")[0], ("🏠 Menu", "menu:exit")],
     ))
 
 
@@ -526,6 +526,7 @@ async def wizard_show_step(update: Update, user_id: int, session: dict, club_id:
             text = confirm_tpl.format(**w["data"])
             await reply(update, text, kb(
                 [("✅ Xác nhận xóa", "wiz:confirm_yes"), ("❌ Hủy", "wiz:cancel")],
+                [("🏠 Menu", "menu:exit")],
             ))
         else:
             await wizard_submit(update, user_id, session, club_id)
@@ -637,7 +638,8 @@ async def wizard_submit(update: Update, user_id: int, session: dict, club_id: in
                 f"• Tên: {m['full_name']}\n"
                 f"• Hạng: {m.get('rank') or '—'}\n"
                 f"• SĐT: {m.get('phone') or '—'}",
-                kb([("➕ Thêm tiếp", "wiz:add_member"), back_btn("menu:members")[0]])
+                kb([("➕ Thêm tiếp", "wiz:add_member"), back_btn("menu:members")[0]],
+                   [("🏠 Menu", "menu:exit")])
             )
 
         elif name in ("add_thu", "add_chi"):
@@ -659,7 +661,8 @@ async def wizard_submit(update: Update, user_id: int, session: dict, club_id: in
                 f"• Số tiền: {fmt(tx['amount'])}\n"
                 f"• Ngày: {tx['transaction_date']}",
                 kb([("➕ Ghi tiếp", f"wiz:{'add_thu' if name=='add_thu' else 'add_chi'}"),
-                    back_btn("menu:main")[0]])
+                    back_btn("menu:main")[0]],
+                   [("🏠 Menu", "menu:exit")])
             )
 
         elif name == "del_member":
@@ -667,7 +670,7 @@ async def wizard_submit(update: Update, user_id: int, session: dict, club_id: in
             member_name = data.get("_member_name", f"ID {member_id}")
             await call_backend("delete", f"/api/members/{member_id}", token=token, club_id=club_id)
             await reply(update, f"✅ Đã xóa thành viên *{member_name}*.",
-                        kb([back_btn("menu:members")[0]]))
+                        kb([back_btn("menu:members")[0], ("🏠 Menu", "menu:exit")]))
 
         elif name in ("upd_member_rank", "upd_member_status"):
             member_id = int(data["_member_id"])
@@ -677,7 +680,7 @@ async def wizard_submit(update: Update, user_id: int, session: dict, club_id: in
                                    json={field: value})
             label = {"rank": "hạng", "status": "trạng thái"}[field]
             await reply(update, f"✅ Đã cập nhật {label} *{m['full_name']}* → {value}",
-                        kb([back_btn("menu:members")[0]]))
+                        kb([back_btn("menu:members")[0], ("🏠 Menu", "menu:exit")]))
 
         elif name == "add_fee_type":
             payload = {"name": data["name"], "type": data["type"]}
@@ -689,10 +692,11 @@ async def wizard_submit(update: Update, user_id: int, session: dict, club_id: in
             ft = await call_backend("post", "/api/fee-types", token=token, club_id=club_id, json=payload)
             kind = "Thu" if ft["type"] == "income" else "Chi"
             await reply(update, f"✅ Đã thêm khoản {kind}: *{ft['name']}*",
-                        kb([("➕ Thêm khoản khác", "wiz:add_fee_type"), back_btn("menu:category")[0]]))
+                        kb([("➕ Thêm khoản khác", "wiz:add_fee_type"), back_btn("menu:category")[0]],
+                           [("🏠 Menu", "menu:exit")]))
 
     except ValueError as e:
-        await reply(update, f"❌ {e}", kb([back_btn("menu:main")[0]]))
+        await reply(update, f"❌ {e}", kb([back_btn("menu:main")[0], ("🏠 Menu", "menu:exit")]))
 
 
 # ── REPORT FLOWS ──────────────────────────────────────────────────────────────
@@ -713,7 +717,7 @@ async def _period_menu(update: Update, prefix: str, label: str, back: str = "men
         [(f"⬅ Tháng trước ({prev_m}/{prev_y})",  f"{prefix}:{prev_m}:{prev_y}")],
         [(f"📅 Tháng này ({now.month}/{now.year})", f"{prefix}:{now.month}:{now.year}")],
         [(f"➡ Tháng sau ({next_m}/{next_y})",     f"{prefix}:{next_m}:{next_y}")],
-        [back_btn(back)[0]],
+        [back_btn(back)[0], ("🏠 Menu", "menu:exit")],
     ))
 
 
@@ -729,7 +733,8 @@ async def report_overview(update: Update, session: dict, club_id: int):
         f"💚 Tổng thu: {fmt(data['total_income'])}\n"
         f"🔴 Tổng chi: {fmt(data['total_expense'])}\n"
         f"💰 Số dư: {fmt(data['balance'])}",
-        kb([("📅 Báo cáo tháng", "report:monthly"), back_btn("menu:report")[0]])
+        kb([("📅 Báo cáo tháng", "report:monthly"), back_btn("menu:report")[0]],
+           [("🏠 Menu", "menu:exit")])
     )
 
 
@@ -755,7 +760,7 @@ async def report_monthly(update: Update, session: dict, club_id: int, month: int
         lines.append("\n*Chi tiết chi:*")
         for item in data["expense_breakdown"][:5]:
             lines.append(f"  • {item['fee_type']}: {fmt(item['amount'])} ({item['count']} lần)")
-    await reply(update, "\n".join(lines), kb([back_btn("menu:report")[0]]))
+    await reply(update, "\n".join(lines), kb([back_btn("menu:report")[0], ("🏠 Menu", "menu:exit")]))
 
 
 async def report_fee_status_select_ft(update: Update, session: dict, club_id: int,
@@ -769,10 +774,10 @@ async def report_fee_status_select_ft(update: Update, session: dict, club_id: in
     income = [f for f in fee_types if f["type"] == "income"]
     if not income:
         await reply(update, "Chưa có khoản thu nào để kiểm tra.",
-                    kb([back_btn("menu:report")[0]]))
+                    kb([back_btn("menu:report")[0], ("🏠 Menu", "menu:exit")]))
         return
     rows = [[(f["name"], f"rpt_fee_ft:{month}:{year}:{f['id']}")] for f in income]
-    rows.append([back_btn("menu:report")[0]])
+    rows.append([back_btn("menu:report")[0], ("🏠 Menu", "menu:exit")])
     await reply(update, f"💳 Chọn *khoản thu* cần kiểm tra tháng *{month}/{year}*:", kb(*rows))
 
 
@@ -800,7 +805,7 @@ async def report_fee_status(update: Update, session: dict, club_id: int,
             lines.append(f"  • `{m['member_code']}` {m['full_name']}")
         if len(unpaid) > 15:
             lines.append(f"  _...và {len(unpaid)-15} người khác_")
-    await reply(update, "\n".join(lines), kb([back_btn("menu:report")[0]]))
+    await reply(update, "\n".join(lines), kb([back_btn("menu:report")[0], ("🏠 Menu", "menu:exit")]))
 
 
 # ── GDLIST FLOW ───────────────────────────────────────────────────────────────
@@ -882,7 +887,7 @@ async def category_delete_menu(update: Update, session: dict, club_id: int):
     for f in fee_types:
         icon = "💚" if f["type"] == "income" else "🔴"
         rows.append([(f"{icon} {f['name']}", f"category:del_confirm:{f['id']}")])
-    rows.append([back_btn("menu:category")[0]])
+    rows.append([back_btn("menu:category")[0], ("🏠 Menu", "menu:exit")])
     await reply(update, "Chọn khoản cần xóa:", kb(*rows))
 
 
@@ -1014,10 +1019,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await gdlist_show(update, session, club_id, m, y, tx_type)
         return
 
-    # ── Xóa giao dịch — chọn GD ──
+    # ── Xóa giao dịch — chọn GD (có phân trang) ──
     if data.startswith("gdlist_del:"):
         parts = data.split(":")
         m, y = int(parts[1]), int(parts[2])
+        page = int(parts[3]) if len(parts) > 3 else 0
+        PAGE_SIZE = 10
         try:
             txs = await call_backend("get", "/api/transactions", token=session["token"],
                                      club_id=club_id, params={"month": m, "year": y})
@@ -1026,19 +1033,32 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         if not txs:
             await reply(update, f"Không có giao dịch tháng {m}/{y}.",
-                        kb([back_btn(f"gdlist:{m}:{y}")[0]]))
+                        kb([back_btn(f"gdlist:{m}:{y}")[0], ("🏠 Menu", "menu:exit")]))
             return
-        # Cache lại để dùng ở bước confirm (tránh gọi API lần nữa)
         _tx_cache[user_id] = {t["id"]: t for t in txs}
+        total = len(txs)
+        total_pages = (total + PAGE_SIZE - 1) // PAGE_SIZE
+        page = max(0, min(page, total_pages - 1))
+        slice_ = txs[page * PAGE_SIZE:(page + 1) * PAGE_SIZE]
         rows = []
-        for t in txs[:20]:
+        for t in slice_:
             icon = "💚" if t["type"] == "income" else "🔴"
             fee_name = (t.get("fee_type") or {}).get("name", "?") if isinstance(t.get("fee_type"), dict) else "?"
             date_short = t["transaction_date"][5:]  # MM-DD
             label = f"{icon} {date_short} {fee_name} {fmt(t['amount'])}"
             rows.append([(label, f"deltx_confirm:{t['id']}:{m}:{y}")])
+        nav = []
+        if page > 0:
+            nav.append((f"◀ Trang {page}", f"gdlist_del:{m}:{y}:{page-1}"))
+        if page < total_pages - 1:
+            nav.append((f"Trang {page+2} ▶", f"gdlist_del:{m}:{y}:{page+1}"))
+        if nav:
+            rows.append(nav)
         rows.append([back_btn(f"gdlist:{m}:{y}")[0], ("🏠 Menu", "menu:exit")])
-        await reply(update, f"🗑 *Chọn giao dịch muốn xóa* (tháng {m}/{y}):", kb(*rows))
+        header = f"🗑 *Chọn giao dịch muốn xóa* (tháng {m}/{y})"
+        if total_pages > 1:
+            header += f"\nTrang {page+1}/{total_pages} — {total} GD"
+        await reply(update, header + ":", kb(*rows))
         return
 
     # ── Xóa giao dịch — confirm ──
@@ -1048,7 +1068,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         tx = (_tx_cache.get(user_id) or {}).get(tx_id)
         if not tx:
             await reply(update, "❌ Không tìm thấy giao dịch. Vui lòng thử lại.",
-                        kb([back_btn(f"gdlist_del:{m}:{y}")[0]]))
+                        kb([back_btn(f"gdlist_del:{m}:{y}")[0], ("🏠 Menu", "menu:exit")]))
             return
         fee_name = (tx.get("fee_type") or {}).get("name", "?") if isinstance(tx.get("fee_type"), dict) else "?"
         member_name = (tx.get("member") or {}).get("full_name", "") if isinstance(tx.get("member"), dict) else ""
@@ -1061,6 +1081,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"⚠️ Xác nhận xóa giao dịch?\n\n{desc}\n\n_Thao tác này không thể hoàn tác!_",
             kb(
                 [("✅ Xác nhận xóa", f"deltx:{tx_id}:{m}:{y}"), ("❌ Hủy", f"gdlist_del:{m}:{y}")],
+                [("🏠 Menu", "menu:exit")],
             ))
         return
 
@@ -1075,7 +1096,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await reply(update, f"✅ Đã xóa giao dịch thành công.",
                         kb([("📋 Xem giao dịch", f"gdlist:{m}:{y}"), ("🏠 Menu", "menu:exit")]))
         except ValueError as e:
-            await reply(update, f"❌ {e}", kb([back_btn(f"gdlist:{m}:{y}")[0]]))
+            await reply(update, f"❌ {e}", kb([back_btn(f"gdlist:{m}:{y}")[0], ("🏠 Menu", "menu:exit")]))
         return
 
     # ── Category ──
@@ -1087,7 +1108,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ft_name = _ft_name_cache.get(user_id, {}).get(ft_id, f"ID {ft_id}")
         await reply(update,
             f"⚠️ Xác nhận xóa khoản *{ft_name}*?",
-            kb([("✅ Xóa", f"category:del_exec:{ft_id}"), ("❌ Hủy", "menu:category")])
+            kb([("✅ Xóa", f"category:del_exec:{ft_id}"), ("❌ Hủy", "menu:category")],
+               [("🏠 Menu", "menu:exit")])
         )
         return
     if data.startswith("category:del_exec:"):
@@ -1095,9 +1117,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ft_name = _ft_name_cache.get(user_id, {}).get(ft_id, f"ID {ft_id}")
         try:
             await call_backend("delete", f"/api/fee-types/{ft_id}", token=session["token"], club_id=club_id)
-            await reply(update, f"✅ Đã xóa khoản *{ft_name}*.", kb([back_btn("menu:category")[0]]))
+            await reply(update, f"✅ Đã xóa khoản *{ft_name}*.",
+                        kb([back_btn("menu:category")[0], ("🏠 Menu", "menu:exit")]))
         except ValueError as e:
-            await reply(update, f"❌ {e}", kb([back_btn("menu:category")[0]]))
+            await reply(update, f"❌ {e}",
+                        kb([back_btn("menu:category")[0], ("🏠 Menu", "menu:exit")]))
         return
 
     # ── Wizard start ──
@@ -1147,7 +1171,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await wizard_set_value(update, user_id, step["key"], today_str(), session, club_id)
         else:
             w["data"]["_waiting_date_key"] = step["key"]
-            await reply(update, "Nhập ngày theo định dạng *DD/MM/YYYY*:")
+            await reply(update, "Nhập ngày theo định dạng *DD/MM/YYYY*:",
+                        kb([("🏠 Menu", "menu:exit")]))
         return
 
     # ── Wizard: fee type ──
