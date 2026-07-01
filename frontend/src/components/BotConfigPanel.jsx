@@ -178,10 +178,7 @@ export default function BotConfigPanel() {
       });
       if (!res.ok) throw new Error(res.status);
       const data = await res.json();
-      message.success(
-        `Đã gửi ${data.sent} tin nhắn` +
-        (data.skipped_already_sent_today ? `, bỏ qua ${data.skipped_already_sent_today} (đã gửi hôm nay)` : "")
-      );
+      message.success(`Đã gửi ${data.sent} tin nhắn thành công`);
       if (data.errors?.length) message.warning(`${data.errors.length} lỗi gửi — kiểm tra log server`);
       setShowPreview(false);
     } catch (e) {

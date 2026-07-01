@@ -2376,34 +2376,30 @@ def send_fee_reminders_frontend(
     if not bot_token:
         raise HTTPException(500, "BOT_TOKEN chưa được cấu hình")
     data = [item for item in _build_reminder_data(month, year, db) if item["club_id"] == perms.club_id]
-    today = date.today()
     sent_count = 0
-    skipped_count = 0
     errors = []
     for item in data:
-        if not item["admin_chat_ids"] or item["unpaid_count"] == 0:
+        if not item["admin_chat_ids"]:
             continue
         for chat_id in item["admin_chat_ids"]:
-            existing = db.query(models.ReminderLog).filter(
-                models.ReminderLog.club_id == item["club_id"],
-                models.ReminderLog.fee_type_id == item["fee_type_id"],
-                models.ReminderLog.month == month,
-                models.ReminderLog.year == year,
-                models.ReminderLog.send_date == today,
-            ).first()
-            if existing:
-                skipped_count += 1
-                continue
-            names = "\n".join(
-                f"  • {m['full_name']}" + (f" ({m['phone']})" if m.get("phone") else "")
-                for m in item["unpaid_members"]
-            )
-            text = (
-                f"🔔 *Nhắc đóng phí tháng {month}/{year}*\n"
-                f"CLB: {item['club_name']}\n"
-                f"Khoản: {item['fee_type_name']}\n\n"
-                f"Thành viên chưa đóng ({item['unpaid_count']} người):\n{names}"
-            )
+            unpaid_count = item["unpaid_count"]
+            if unpaid_count > 0:
+                names = "\n".join(
+                    f"  • {m['full_name']}" + (f" ({m['phone']})" if m.get("phone") else "")
+                    for m in item["unpaid_members"]
+                )
+                text = (
+                    f"🔔 *Nhắc đóng phí tháng {month}/{year}*\n"
+                    f"CLB: {item['club_name']}\n"
+                    f"Khoản: {item['fee_type_name']}\n\n"
+                    f"Thành viên chưa đóng ({unpaid_count} người):\n{names}"
+                )
+            else:
+                text = (
+                    f"✅ *Phí tháng {month}/{year} — {item['fee_type_name']}*\n"
+                    f"CLB: {item['club_name']}\n\n"
+                    f"Tất cả thành viên đã đóng phí!"
+                )
             try:
                 payload = _json.dumps({"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}).encode()
                 req = _urllib_req.Request(
@@ -2413,15 +2409,10 @@ def send_fee_reminders_frontend(
                 )
                 with _urllib_req.urlopen(req, timeout=10) as resp:
                     resp.read()
-                db.add(models.ReminderLog(
-                    club_id=item["club_id"], fee_type_id=item["fee_type_id"],
-                    month=month, year=year, send_date=today,
-                ))
-                db.commit()
                 sent_count += 1
             except Exception as exc:
                 errors.append({"chat_id": chat_id, "error": str(exc)})
-    return {"sent": sent_count, "skipped_already_sent_today": skipped_count, "errors": errors}
+    return {"sent": sent_count, "errors": errors}
 
 
 @app.get("/api/internal/fee-reminders")
