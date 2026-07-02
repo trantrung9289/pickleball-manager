@@ -3,7 +3,7 @@ import {
   Table, Button, Space, Tag, Modal, Form, Input, Select,
   message, Typography, Row, Col, Card, Steps,
   InputNumber, Tabs, Badge, Statistic, Empty,
-  Divider, Alert, Transfer, Tooltip, Checkbox,
+  Divider, Alert, Transfer, Tooltip, Checkbox, Collapse,
 } from "antd";
 import {
   PlusOutlined, ThunderboltOutlined, TrophyOutlined,
@@ -13,6 +13,7 @@ import {
 } from "@ant-design/icons";
 import { tournamentsApi, membersApi, playersApi } from "../api";
 import ResponsiveTable from "../components/ResponsiveTable";
+import { useViewMode } from "../contexts/ViewModeContext";
 
 const { Title, Text } = Typography;
 
@@ -63,7 +64,7 @@ function CreateWizard({ onCreated, onClose }) {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    membersApi.list({ status: "active" }).then((r) => setAllMembers(r.data));
+    membersApi.list().then((r) => setAllMembers(r.data));
   }, []);
 
   const selectedMembers = allMembers.filter(m => selectedIds.includes(m.id));
@@ -214,9 +215,16 @@ function CreateWizard({ onCreated, onClose }) {
     } finally { setSaving(false); }
   };
 
+  const STATUS_MEMBER_MAP = {
+    active: { label: "Hoạt động", color: "success" },
+    inactive: { label: "Tạm nghỉ", color: "warning" },
+    suspended: { label: "Đình chỉ", color: "error" },
+  };
+
   const memberCols = [
     { title: "Họ và tên", dataIndex: "full_name" },
     { title: "Hạng", dataIndex: "rank", width: 90, render: v => v ? <Tag color="purple">{v}</Tag> : <Text type="secondary">—</Text> },
+    { title: "Trạng thái", dataIndex: "status", width: 110, render: v => { const s = STATUS_MEMBER_MAP[v] || { label: v, color: "default" }; return <Badge status={s.color} text={s.label} />; } },
     { title: "SĐT", dataIndex: "phone", width: 120 },
   ];
 
@@ -297,13 +305,17 @@ function CreateWizard({ onCreated, onClose }) {
                       rowKey="id"
                       size="small"
                       pagination={{ pageSize: 10 }}
-                      mobileTitle={(r) => (
-                        <span>
-                          {r.full_name}
-                          {r.rank && <Tag color="purple" style={{ marginLeft: 6 }}>{r.rank}</Tag>}
-                        </span>
-                      )}
-                      mobileHideColumns={["Họ và tên", "Hạng"]}
+                      mobileTitle={(r) => {
+                        const s = STATUS_MEMBER_MAP[r.status] || { label: r.status, color: "default" };
+                        return (
+                          <span>
+                            {r.full_name}
+                            {r.rank && <Tag color="purple" style={{ marginLeft: 6 }}>{r.rank}</Tag>}
+                            {r.status !== "active" && <Badge status={s.color} text={s.label} style={{ marginLeft: 8 }} />}
+                          </span>
+                        );
+                      }}
+                      mobileHideColumns={["Họ và tên", "Hạng", "Trạng thái"]}
                     />
                   </>
                 ),
@@ -708,8 +720,33 @@ function ScoreModal({ match, tournament, onSaved, onClose }) {
 
 // ── Bracket knockout ─────────────────────────────────────
 function KnockoutBracket({ matches }) {
+  const { isMobileView } = useViewMode();
   const rounds = [...new Set(matches.map(m => m.round_number))].sort((a, b) => a - b);
 
+  // Mobile: Collapse theo từng vòng (dọc)
+  if (isMobileView) {
+    return (
+      <Collapse
+        defaultActiveKey={rounds.map(String)}
+        items={rounds.map(r => {
+          const rMatches = matches.filter(m => m.round_number === r);
+          const rName = rMatches[0]?.round_name || `Vòng ${r}`;
+          const done = rMatches.filter(m => m.status === "completed").length;
+          return {
+            key: String(r),
+            label: <Text strong style={{ color: "#1677ff" }}>{rName} ({done}/{rMatches.length})</Text>,
+            children: (
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                {rMatches.map(m => <BracketCard key={m.id} match={m} />)}
+              </div>
+            ),
+          };
+        })}
+      />
+    );
+  }
+
+  // Desktop: bố cục ngang như cũ
   return (
     <div style={{ overflowX: "auto" }}>
       <div style={{ display: "flex", gap: 24, minWidth: rounds.length * 220 }}>
@@ -787,16 +824,20 @@ function StandingsTable({ tournament, group }) {
       render: v => <b style={{ color: "#1677ff", fontSize: 15 }}>{v}</b> },
   ];
 
+  const mobileTitle = (r) => {
+    const name = r.team_name || r.full_name || "—";
+    const rankIcon = r.rank === 1 ? "🥇" : r.rank === 2 ? "🥈" : r.rank === 3 ? "🥉" : `#${r.rank}`;
+    return <span>{rankIcon} {name}</span>;
+  };
+
   return (
     <ResponsiveTable columns={cols} dataSource={rows} rowKey="participant_id" size="small"
       pagination={false}
       rowClassName={(_, i) => i < 2 ? "ant-table-row-selected" : ""}
-      mobileTitle={(r) => (
-        <span>
-          <b style={{ color: r.rank === 1 ? "#faad14" : r.rank === 2 ? "#1677ff" : "inherit", marginRight: 6 }}>#{r.rank}</b>
-          {r.team_name || r.full_name}
-        </span>
-      )}
+      mobileTitle={(r) => {
+        const icon = r.rank === 1 ? "🥇" : r.rank === 2 ? "🥈" : r.rank === 3 ? "🥉" : `#${r.rank}`;
+        return <span>{icon} <b>{r.team_name || r.full_name}</b></span>;
+      }}
       mobileHideColumns={["#", "Đội"]}
     />
   );
@@ -921,13 +962,26 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated }) {
     },
   ];
 
+  // Mobile props dùng chung cho bảng lịch thi đấu
+  const matchTableMobileProps = {
+    mobileTitle: (m) => {
+      const p1 = teamLabel(m.p1) || "BYE";
+      const p2 = teamLabel(m.p2) || "BYE";
+      const score = m.status === "completed"
+        ? <b style={{ color: "#1677ff" }}> {m.score1}–{m.score2}</b>
+        : <Tag style={{ marginLeft: 4 }}>Chưa đấu</Tag>;
+      return <span>{p1} vs {p2}{score}</span>;
+    },
+    mobileHideColumns: ["Đội 1", "Tỉ số", "Đội 2", "Kết quả"],
+  };
+
   const tabItems = [];
 
   if (fmt === "round_robin" || fmt === "individual") {
     tabItems.push({
       key: "schedule",
       label: `Lịch thi đấu (${doneCount}/${matches.length})`,
-      children: <ResponsiveTable columns={matchTableCols} dataSource={matches} rowKey="id" size="small" pagination={{ pageSize: 15 }} />,
+      children: <ResponsiveTable columns={matchTableCols} dataSource={matches} rowKey="id" size="small" pagination={{ pageSize: 15 }} {...matchTableMobileProps} />,
     });
     if (fmt === "round_robin") {
       tabItems.push({
@@ -947,7 +1001,7 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated }) {
     tabItems.push({
       key: "schedule",
       label: `Danh sách trận (${doneCount}/${matches.length})`,
-      children: <ResponsiveTable columns={matchTableCols} dataSource={matches} rowKey="id" size="small" pagination={false} />,
+      children: <ResponsiveTable columns={matchTableCols} dataSource={matches} rowKey="id" size="small" pagination={false} {...matchTableMobileProps} />,
     });
   }
 
@@ -983,6 +1037,7 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated }) {
                     dataSource={groupMatches.filter(m => m.group_name === g)}
                     rowKey="id" size="small" pagination={false}
                     style={{ marginBottom: 16 }}
+                    {...matchTableMobileProps}
                   />
                   <StandingsTable tournament={tournament} group={g} />
                 </>
@@ -1000,7 +1055,7 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated }) {
           <>
             <KnockoutBracket matches={koMatches} />
             <Divider />
-            <ResponsiveTable columns={matchTableCols} dataSource={koMatches} rowKey="id" size="small" pagination={false} />
+            <ResponsiveTable columns={matchTableCols} dataSource={koMatches} rowKey="id" size="small" pagination={false} {...matchTableMobileProps} />
           </>
         ),
       });
