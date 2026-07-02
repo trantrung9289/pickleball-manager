@@ -1,3 +1,68 @@
+# Handoff — Phiên làm việc 2026-07-02 (cập nhật)
+
+## Trạng thái hiện tại
+- Deployed: https://pickleball-manager.fly.dev
+- Branch: main (clean, đã push)
+- DB: SQLite persistent trên Fly.io (volume)
+
+---
+
+## Phiên làm việc 2026-07-02 — Sửa lỗi + Cải tiến
+
+### 37. Fix cron nhắc đóng phí không chạy
+
+**Nguyên nhân gốc:** Image `python:3.11-slim` (Debian) không có `cron` cài sẵn. Entrypoint dùng lệnh `crond -b || true` (cú pháp Alpine/BusyBox) → fail silently, daemon không bao giờ khởi động.
+
+**Chẩn đoán:** SSH vào container kiểm tra process list — không có `crond`. Crontab `/var/spool/cron/crontabs/root` không tồn tại.
+
+**Fix:**
+- `Dockerfile`: thêm `apt-get install -y --no-install-recommends cron`
+- `docker-entrypoint.sh`: dùng `/etc/cron.d/fee-reminder` (Debian style, có trường `user`) + lệnh `cron` thay `crond -b`
+
+**Verify sau deploy:** Process `cron` xuất hiện trong container; endpoint `POST /api/internal/send-fee-reminder` trả `sent: 1` ✅
+
+**Cron chạy:** Mỗi ngày 7h UTC = 14h GMT+7. INTERNAL_SECRET = `pickleball-remind-2026`.
+
+---
+
+### 38. Tournament — Hiển thị tất cả thành viên kể cả Tạm nghỉ/Đình chỉ
+
+**Vấn đề:** `Tournament.jsx` line 67 gọi `membersApi.list({ status: "active" })` → chỉ load thành viên Active.
+
+**Fix (`frontend/src/pages/Tournament.jsx`):**
+- Bỏ filter: `membersApi.list()` (không tham số)
+- Thêm `STATUS_MEMBER_MAP` map status → badge màu
+- Thêm cột **Trạng thái** vào `memberCols` với badge: xanh=Hoạt động, vàng=Tạm nghỉ, đỏ=Đình chỉ
+- Mobile `mobileTitle`: hiển thị badge trạng thái nếu không phải Active
+- `mobileHideColumns`: thêm `"Trạng thái"` vào danh sách ẩn trên mobile
+
+**Xác nhận DB:** CLB 1 có "Cường" (`inactive`) — giờ hiển thị trong danh sách chọn.
+
+---
+
+## Còn lại (chưa làm)
+
+| Hạng mục | Ghi chú |
+|---|---|
+| Reports.jsx Table.Summary | Vẫn scroll ngang mobile — chưa convert sang card |
+| AdminPortal.jsx 3 bảng | Users/Clubs/Memberships chưa responsive |
+| Bot: sửa giao dịch | Chưa có tính năng edit transaction |
+
+---
+
+## Lệnh hữu ích
+
+```bash
+fly deploy                                    # Deploy lên Fly.io
+cd frontend && npm run dev                    # Dev local frontend
+cd backend && uvicorn main:app --reload       # Dev local backend
+cd frontend && npm run build                  # Build production
+# Test cron nhắc phí thủ công:
+curl -X POST "https://pickleball-manager.fly.dev/api/internal/send-fee-reminder?month=7&year=2026" -H "X-Internal-Secret: pickleball-remind-2026"
+```
+
+---
+
 # Handoff — Phiên làm việc 2026-07-01 (cập nhật)
 
 ## Trạng thái hiện tại
@@ -456,6 +521,93 @@ cd frontend && npm run build                  # Build production
 - Wizard submit success/error (tất cả wizard)
 
 **File:** `bot/bot.py`
+
+---
+
+---
+
+## Phiên làm việc 2026-07-02 — Hệ thống Nhắc Đóng Phí Telegram
+
+### 31. Migration DB (add_fee_reminder.py)
+
+File: `backend/migrations/add_fee_reminder.py` — idempotent (an toàn chạy nhiều lần)
+
+- `club_memberships.telegram_chat_id` INTEGER NULL — lưu Telegram user_id của admin CLB
+- `fee_types.remind_enabled` INTEGER DEFAULT 0 — bật/tắt nhắc cho từng khoản thu
+- Bảng `reminder_log` với UNIQUE(club_id, fee_type_id, month, year, send_date) — chỉ dùng cho cron
+
+### 32. Backend endpoints mới (backend/main.py)
+
+**CLB admin endpoints (dùng `get_club_permission`):**
+- `PATCH /api/my-memberships/telegram-chat-id` — bot lưu chat_id sau khi admin đăng nhập
+- `GET /api/fee-reminders/preview?month=M&year=Y` — xem trước danh sách chưa đóng
+- `POST /api/fee-reminders/send?month=M&year=Y` — **gửi thủ công, không giới hạn, không anti-spam**
+
+**Internal endpoints (dùng `_check_internal_secret` via `X-Internal-Secret` header):**
+- `GET /api/internal/fee-reminders` — cron hỏi danh sách cần nhắc
+- `POST /api/internal/send-fee-reminder` — cron gửi (có check reminder_log)
+
+**Helper `_build_reminder_data(month, year, db)`:** trả list mỗi fee_type có `remind_enabled=True` kèm `admin_chat_ids`, `unpaid_count`, `unpaid_members`.
+
+### 33. Bot lưu telegram_chat_id (bot/bot.py)
+
+- Thêm `_save_telegram_chat_id(token, club_id, chat_id)` — fire-and-forget, gọi `PATCH /api/my-memberships/telegram-chat-id`
+- Gọi trong `_after_login` (1 CLB) và `club:` callback (chọn CLB)
+
+### 34. Cron nhắc phí (bot/notify_bot.py + docker-entrypoint.sh)
+
+- `notify_bot.py` — script standalone, logic `_determine_reminder_month(today)`:
+  - 5 ngày cuối tháng M → nhắc M+1
+  - 5 ngày đầu tháng M → nhắc M
+  - Ngoài ra → bỏ qua
+- `docker-entrypoint.sh` — thêm crontab `0 7 * * *` (7h UTC = 14h GMT+7) + `crond -b`
+- Env vars: `BACKEND_URL`, `INTERNAL_SECRET`
+
+### 35. BotConfigPanel di chuyển sang CLB admin (quyết định kiến trúc quan trọng)
+
+**Trước:** BotConfigPanel ở AdminPortal, chỉ superuser dùng được, cần `/api/admin/*` endpoints riêng.
+
+**Sau:** BotConfigPanel mở từ dropdown avatar → "Cài đặt Telegram Bot" (Drawer bên phải), dùng permission hệ thống chuẩn.
+
+**Lợi ích:**
+- Admin CLB tự cấu hình không cần qua superuser
+- Dùng `get_club_permission` bình thường, không cần endpoint admin đặc biệt
+- `PUT /api/fee-types/{id}` (standard) thay cho `/api/admin/fee-types/{id}`
+
+**Files thay đổi:**
+- `frontend/src/App.jsx` — thêm Drawer + lazy BotConfigPanel, nút trong userMenu
+- `frontend/src/pages/AdminPortal.jsx` — xóa toàn bộ BotConfigPanel và tab "Telegram Bot"
+- `frontend/src/components/BotConfigPanel.jsx` — xóa club selector, dùng `authHeaders()` với `selectedClubId`
+
+### 36. Gửi ngay không giới hạn (quyết định thiết kế)
+
+Nút "Gửi ngay" trong BotConfigPanel **không** có anti-spam:
+- Không check `reminder_log`
+- Không skip khi `unpaid_count == 0` — thay vào đó gửi "✅ Tất cả đã đóng phí!"
+- Admin CLB gửi bao nhiêu lần/ngày tuỳ ý
+
+Chỉ cron tự động mới có `reminder_log` (lịch chạy chính là cơ chế kiểm soát).
+
+### Bugs đã fix trong phiên này
+
+| Lỗi | Nguyên nhân | Fix |
+|---|---|---|
+| 403 khi preview/send | `get_club_permission` block superuser đúng — cần chuyển context | Chuyển BotConfigPanel sang CLB admin |
+| AttributeError `perms.user_id` | `ClubPermissions` không có attr `user_id` | Đổi thành `perms.membership.user_id` |
+| 500 khi gửi Telegram | `BOT_TOKEN` không tồn tại trên Fly.io — secret đúng là `TELEGRAM_BOT_TOKEN` | Dùng `_os.environ.get("TELEGRAM_BOT_TOKEN") or _os.environ.get("BOT_TOKEN", "")` |
+| 422 preview + "Lỗi lưu cấu hình" | `localStorage.getItem("clubId")` không tồn tại — đúng là `"selectedClubId"` | Fix `getClubId()` trong BotConfigPanel |
+| Tag "Admin chưa đăng nhập Bot" không mất | Do bug `perms.user_id` → chat_id không bao giờ được lưu | Fix AttributeError + admin re-login bot |
+
+### Fly.io secrets hiện tại
+
+| Secret | Trạng thái |
+|---|---|
+| `TELEGRAM_BOT_TOKEN` | ✅ Bot Telegram |
+| `INTERNAL_SECRET` | ✅ Cron nhắc phí (X-Internal-Secret header) |
+| `BACKEND_URL` | ✅ URL backend cho notify_bot.py |
+| `BOT_USERNAME` | ✅ Tài khoản bot tự đăng nhập hệ thống |
+| `BOT_PASSWORD` | ✅ Mật khẩu bot tự đăng nhập hệ thống |
+| `BOT_CLUB_ID` | ✅ Club ID mặc định của bot |
 
 ---
 
