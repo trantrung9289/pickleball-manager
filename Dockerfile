@@ -10,6 +10,9 @@ RUN npm run build
 FROM python:3.11-slim
 WORKDIR /app
 
+# Cài cron (cần cho notify_bot.py chạy hàng ngày)
+RUN apt-get update && apt-get install -y --no-install-recommends cron && rm -rf /var/lib/apt/lists/*
+
 # Backend dependencies
 COPY backend/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
