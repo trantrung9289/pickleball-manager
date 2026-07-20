@@ -60,6 +60,8 @@ def _run_migration():
         # Bảng tournament_participants — thêm hỗ trợ khách mời (player_id)
         ("tournament_participants", "player_id", "INTEGER REFERENCES players(id)", None),
         ("tournament_participants", "partner_player_id", "INTEGER REFERENCES players(id)", None),
+        # Bảng club_memberships — thêm telegram_chat_id (đăng nhập bot qua Telegram)
+        ("club_memberships", "telegram_chat_id", "INTEGER", None),
     ]
 
     with engine.connect() as conn:
@@ -2249,6 +2251,71 @@ def update_score(
 
     db.commit(); db.refresh(match)
     return match
+
+
+def _resolve_display_name(db, member_id=None, player_id=None) -> str:
+    if member_id:
+        return db.query(models.Member.full_name).filter(models.Member.id == member_id).scalar() or ""
+    if player_id:
+        return db.query(models.Player.name).filter(models.Player.id == player_id).scalar() or ""
+    return ""
+
+
+@app.patch("/api/tournaments/{tid}/participants/{pid}", response_model=schemas.ParticipantOut)
+def replace_participant_slot(
+    tid: int, pid: int,
+    data: schemas.ParticipantSlotUpdate,
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    """Thay người chơi ở 1 vị trí (main hoặc partner) trong 1 đội — dùng khi có
+    người không thể tiếp tục thi đấu giữa giải. Giữ nguyên lịch sử các trận đã đấu
+    (điểm/thắng-thua vẫn gắn với participant_id, chỉ đổi tên người ở vị trí đó)."""
+    perms.require_edit()
+    t = db.query(models.Tournament).filter(models.Tournament.id == tid, models.Tournament.club_id == perms.club_id).first()
+    if not t: raise HTTPException(404, "Không tìm thấy giải đấu")
+    p = db.query(models.TournamentParticipant).filter(
+        models.TournamentParticipant.id == pid, models.TournamentParticipant.tournament_id == tid,
+    ).first()
+    if not p: raise HTTPException(404, "Không tìm thấy đội/người chơi")
+    if data.slot not in ("main", "partner"):
+        raise HTTPException(400, "slot phải là 'main' hoặc 'partner'")
+    if not data.member_id and not data.player_id:
+        raise HTTPException(400, "Cần chọn thành viên hoặc khách mời để thay")
+    if data.member_id and data.player_id:
+        raise HTTPException(400, "Chỉ chọn 1 trong 2: thành viên hoặc khách mời")
+
+    # Không cho trùng người đã có mặt ở vị trí khác trong cùng giải
+    others = db.query(models.TournamentParticipant).filter(
+        models.TournamentParticipant.tournament_id == tid,
+        models.TournamentParticipant.id != pid,
+    ).all()
+    for o in others:
+        for mid, plid in [(o.member_id, o.player_id), (o.partner_member_id, o.partner_player_id)]:
+            if data.member_id and mid == data.member_id:
+                raise HTTPException(400, "Thành viên này đã tham gia giải ở một đội khác")
+            if data.player_id and plid == data.player_id:
+                raise HTTPException(400, "Khách mời này đã tham gia giải ở một đội khác")
+    same_team_other = (p.partner_member_id, p.partner_player_id) if data.slot == "main" else (p.member_id, p.player_id)
+    if data.member_id and same_team_other[0] == data.member_id:
+        raise HTTPException(400, "Không thể chọn trùng người còn lại trong cùng đội")
+    if data.player_id and same_team_other[1] == data.player_id:
+        raise HTTPException(400, "Không thể chọn trùng người còn lại trong cùng đội")
+
+    if data.slot == "main":
+        p.member_id, p.player_id = data.member_id, data.player_id
+    else:
+        p.partner_member_id, p.partner_player_id = data.member_id, data.player_id
+
+    if data.team_name:
+        p.team_name = data.team_name
+    else:
+        n1 = _resolve_display_name(db, p.member_id, p.player_id)
+        n2 = _resolve_display_name(db, p.partner_member_id, p.partner_player_id)
+        p.team_name = f"{n1} / {n2}" if n1 and n2 else (n1 or n2)
+
+    db.commit(); db.refresh(p)
+    return p
 
 
 @app.get("/api/tournaments/{tid}/standings")

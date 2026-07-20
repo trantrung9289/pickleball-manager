@@ -270,6 +270,13 @@ class TournamentUpdate(BaseModel):
     status: Optional[TournamentStatus] = None
 
 
+class ParticipantSlotUpdate(BaseModel):
+    slot: str                              # "main" | "partner"
+    member_id: Optional[int] = None
+    player_id: Optional[int] = None
+    team_name: Optional[str] = None        # nếu bỏ trống sẽ tự tính lại
+
+
 class ParticipantOut(BaseModel):
     id: int
     member_id: Optional[int] = None

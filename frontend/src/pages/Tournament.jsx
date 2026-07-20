@@ -843,6 +843,173 @@ function StandingsTable({ tournament, group }) {
   );
 }
 
+// ── Thay người chơi (khi 1 người không thể tiếp tục thi đấu) ──
+function ReplaceParticipantModal({ tournament, target, onSaved, onClose }) {
+  const { participant, slot } = target;
+  const [allMembers, setAllMembers] = useState([]);
+  const [guestPlayers, setGuestPlayers] = useState([]);
+  const [selectedKey, setSelectedKey] = useState(null);
+  const [guestForm] = Form.useForm();
+  const [addingGuest, setAddingGuest] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    membersApi.list().then(r => setAllMembers(r.data));
+    playersApi.list("guest").then(r => setGuestPlayers(r.data));
+  }, []);
+
+  const outgoingName = slot === "main" ? teamLabel(participant) : (participant.partner?.full_name || participant.partner_player?.name || "—");
+
+  // Người đã có mặt ở bất kỳ đội nào trong giải (trừ chính người sắp bị thay) không được chọn lại
+  const usedMemberIds = new Set();
+  const usedPlayerIds = new Set();
+  tournament.participants.forEach(p => {
+    if (p.member_id) usedMemberIds.add(p.member_id);
+    if (p.partner_member_id) usedMemberIds.add(p.partner_member_id);
+    if (p.player_id) usedPlayerIds.add(p.player_id);
+    if (p.partner_player_id) usedPlayerIds.add(p.partner_player_id);
+  });
+
+  const availableMembers = allMembers.filter(m => !usedMemberIds.has(m.id));
+  const availableGuests = guestPlayers.filter(g => !usedPlayerIds.has(g.id));
+
+  const handleAddGuest = async () => {
+    let vals;
+    try { vals = await guestForm.validateFields(); } catch { return; }
+    setAddingGuest(true);
+    try {
+      const res = await playersApi.create({ name: vals.name, phone: vals.phone || null, rank: vals.rank || "Chưa xếp hạng" });
+      setGuestPlayers(prev => [...prev, res.data]);
+      setSelectedKey(`g-${res.data.id}`);
+      guestForm.resetFields();
+      message.success(`Đã thêm khách mời: ${res.data.name}`);
+    } catch (err) {
+      message.error(err.response?.data?.detail || "Không thể thêm khách mời");
+    } finally { setAddingGuest(false); }
+  };
+
+  const handleSave = async () => {
+    if (!selectedKey) { message.error("Chọn người thay thế"); return; }
+    const isMember = selectedKey.startsWith("m-");
+    const id = parseInt(selectedKey.slice(2));
+    const newName = isMember
+      ? allMembers.find(m => m.id === id)?.full_name
+      : guestPlayers.find(g => g.id === id)?.name;
+
+    const ok = await confirm({
+      title: "Xác nhận thay người?",
+      content: <div>Thay <b>{outgoingName}</b> bằng <b>{newName}</b>. Kết quả các trận đã đấu của vị trí này vẫn được giữ nguyên.</div>,
+    });
+    if (!ok) return;
+
+    setSaving(true);
+    try {
+      await tournamentsApi.replaceParticipant(tournament.id, participant.id, {
+        slot,
+        member_id: isMember ? id : null,
+        player_id: isMember ? null : id,
+      });
+      message.success("Đã thay người chơi");
+      onSaved();
+    } catch (err) {
+      message.error(err.response?.data?.detail || "Không thể thay người chơi");
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <Modal
+      title={`Thay người — đang thay thế "${outgoingName}"`}
+      open onCancel={onClose} width={620}
+      footer={
+        <Space>
+          <Button onClick={onClose}>Hủy</Button>
+          <Button type="primary" loading={saving} onClick={handleSave}>Xác nhận thay người</Button>
+        </Space>
+      }
+    >
+      <Tabs
+        defaultActiveKey="member"
+        items={[
+          {
+            key: "member",
+            label: <span><UserOutlined /> Thành viên CLB chưa tham gia ({availableMembers.length})</span>,
+            children: availableMembers.length === 0 ? (
+              <Empty description="Không còn thành viên nào chưa tham gia giải" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+            ) : (
+              <ResponsiveTable
+                rowSelection={{
+                  type: "radio",
+                  selectedRowKeys: selectedKey ? [selectedKey] : [],
+                  onChange: (keys) => setSelectedKey(keys[0] ?? null),
+                }}
+                onRow={(r) => ({ onClick: () => setSelectedKey(`m-${r.id}`) })}
+                columns={[
+                  { title: "Họ và tên", dataIndex: "full_name" },
+                  { title: "Hạng", dataIndex: "rank", width: 90, render: v => v ? <Tag color="purple">{v}</Tag> : "—" },
+                ]}
+                dataSource={availableMembers}
+                rowKey={(r) => `m-${r.id}`} size="small" pagination={{ pageSize: 8 }}
+                mobileTitle={(r) => <span>{r.full_name} {r.rank && <Tag color="purple">{r.rank}</Tag>}</span>}
+                mobileHideColumns={["Họ và tên", "Hạng"]}
+              />
+            ),
+          },
+          {
+            key: "guest",
+            label: <span><UserAddOutlined /> Khách mời ({availableGuests.length})</span>,
+            children: (
+              <>
+                <Card size="small" style={{ marginBottom: 12, background: "#fafafa" }}
+                  title={<span style={{ fontSize: 13 }}>Tạo khách mời mới</span>}>
+                  <Form form={guestForm} layout="inline" style={{ flexWrap: "wrap", gap: 8 }}>
+                    <Form.Item name="name" rules={[{ required: true, message: "Nhập tên" }]} style={{ marginBottom: 8 }}>
+                      <Input placeholder="Họ và tên *" style={{ width: 160 }} />
+                    </Form.Item>
+                    <Form.Item name="phone" style={{ marginBottom: 8 }}>
+                      <Input placeholder="Số điện thoại" style={{ width: 130 }} />
+                    </Form.Item>
+                    <Form.Item name="rank" initialValue="Chưa xếp hạng" style={{ marginBottom: 8 }}>
+                      <Select style={{ width: 140 }}>
+                        {["A","B","C","D","Hạt giống 1","Hạt giống 2","Hạt giống 3","Chưa xếp hạng"].map(r => (
+                          <Select.Option key={r} value={r}>{r}</Select.Option>
+                        ))}
+                      </Select>
+                    </Form.Item>
+                    <Form.Item style={{ marginBottom: 8 }}>
+                      <Button type="primary" icon={<PlusOutlined />} loading={addingGuest} onClick={handleAddGuest}>Thêm</Button>
+                    </Form.Item>
+                  </Form>
+                </Card>
+                {availableGuests.length === 0 ? (
+                  <Empty description="Chưa có khách mời nào khả dụng" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+                ) : (
+                  <ResponsiveTable
+                    rowSelection={{
+                      type: "radio",
+                      selectedRowKeys: selectedKey ? [selectedKey] : [],
+                      onChange: (keys) => setSelectedKey(keys[0] ?? null),
+                    }}
+                    onRow={(r) => ({ onClick: () => setSelectedKey(`g-${r.id}`) })}
+                    columns={[
+                      { title: "Họ và tên", dataIndex: "name" },
+                      { title: "SĐT", dataIndex: "phone", width: 120, render: v => v || "—" },
+                      { title: "Hạng", dataIndex: "rank", width: 120, render: v => v ? <Tag color="purple">{v}</Tag> : "—" },
+                    ]}
+                    dataSource={availableGuests}
+                    rowKey={(r) => `g-${r.id}`} size="small" pagination={{ pageSize: 8 }}
+                    mobileTitle={(r) => <span>{r.name} {r.rank && <Tag color="purple">{r.rank}</Tag>}</span>}
+                    mobileHideColumns={["Họ và tên", "SĐT", "Hạng"]}
+                  />
+                )}
+              </>
+            ),
+          },
+        ]}
+      />
+    </Modal>
+  );
+}
+
 // ── Chi tiết giải đấu ─────────────────────────────────────
 function TournamentDetail({ tournament: initData, onBack, onUpdated }) {
   const [tournament, setTournament] = useState(initData);
@@ -851,6 +1018,7 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated }) {
   const [startingKO, setStartingKO] = useState(false);
   const [editNameModal, setEditNameModal] = useState(false);
   const [editForm] = Form.useForm();
+  const [replaceTarget, setReplaceTarget] = useState(null); // { participant, slot: "main"|"partner" }
 
   const reload = useCallback(async () => {
     const r = await tournamentsApi.get(tournament.id);
@@ -976,6 +1144,39 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated }) {
   };
 
   const tabItems = [];
+
+  tabItems.push({
+    key: "participants",
+    label: `Người chơi (${tournament.participants.length})`,
+    children: (
+      <ResponsiveTable
+        columns={[
+          { title: "Đội", dataIndex: "team_name", render: (v, r) => v || teamLabel(r) },
+          { title: "Bảng", dataIndex: "group_name", width: 70, render: v => v ? <Tag>{v}</Tag> : "—" },
+          {
+            title: "", width: 130, align: "right",
+            render: (_, r) => (
+              <Button size="small" icon={<UserAddOutlined />} onClick={() => setReplaceTarget({ participant: r, slot: "main" })}>
+                Thay {r.member?.full_name || r.player?.name || "người 1"}
+              </Button>
+            ),
+          },
+          ...(tournament.team_type === "doubles" ? [{
+            title: "", width: 130, align: "right",
+            render: (_, r) => (
+              <Button size="small" icon={<UserAddOutlined />} onClick={() => setReplaceTarget({ participant: r, slot: "partner" })}>
+                Thay {r.partner?.full_name || r.partner_player?.name || "người 2"}
+              </Button>
+            ),
+          }] : []),
+        ]}
+        dataSource={tournament.participants}
+        rowKey="id" size="small" pagination={false}
+        mobileTitle={(r) => <span>{r.team_name || teamLabel(r)} {r.group_name && <Tag style={{ marginLeft: 6 }}>{r.group_name}</Tag>}</span>}
+        mobileHideColumns={["Đội", "Bảng"]}
+      />
+    ),
+  });
 
   if (fmt === "round_robin" || fmt === "individual") {
     tabItems.push({
@@ -1143,6 +1344,15 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated }) {
           tournament={tournament}
           onSaved={() => { setScoreMatch(null); reload(); }}
           onClose={() => setScoreMatch(null)}
+        />
+      )}
+
+      {replaceTarget && (
+        <ReplaceParticipantModal
+          tournament={tournament}
+          target={replaceTarget}
+          onSaved={() => { setReplaceTarget(null); reload(); }}
+          onClose={() => setReplaceTarget(null)}
         />
       )}
 

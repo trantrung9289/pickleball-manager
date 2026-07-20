@@ -121,6 +121,7 @@ export const tournamentsApi = {
   startKnockout: (id) => api.post(`/api/tournaments/${id}/start-knockout`),
   score: (tid, mid, data) => api.post(`/api/tournaments/${tid}/matches/${mid}/score`, data),
   standings: (tid, group) => api.get(`/api/tournaments/${tid}/standings`, { params: group ? { group } : {} }),
+  replaceParticipant: (tid, pid, data) => api.patch(`/api/tournaments/${tid}/participants/${pid}`, data),
 };
 
 export const reportLinksApi = {
