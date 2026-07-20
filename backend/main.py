@@ -57,6 +57,9 @@ def _run_migration():
             "UPDATE tournaments SET club_id = (SELECT id FROM clubs LIMIT 1) WHERE club_id IS NULL"),
         # Bảng public_report_tokens — thêm cột slug
         ("public_report_tokens", "slug", "VARCHAR(120)", None),
+        # Bảng tournament_participants — thêm hỗ trợ khách mời (player_id)
+        ("tournament_participants", "player_id", "INTEGER REFERENCES players(id)", None),
+        ("tournament_participants", "partner_player_id", "INTEGER REFERENCES players(id)", None),
     ]
 
     with engine.connect() as conn:
@@ -1750,6 +1753,81 @@ def public_report_transactions(
         }
         for t in txs
     ]
+
+
+@app.get("/api/public/report/{slug}/tournaments")
+@limiter.limit("60/minute")
+def public_tournaments_list(request: Request, slug: str, db: Session = Depends(get_db)):
+    rec = _validate_token(slug, db)
+    ts = db.query(models.Tournament).filter(
+        models.Tournament.club_id == rec.club_id,
+        models.Tournament.status != models.TournamentStatus.draft,
+    ).order_by(models.Tournament.id.desc()).all()
+    return [
+        {
+            "id": t.id, "name": t.name, "format": t.format,
+            "status": t.status, "team_type": t.team_type,
+            "created_at": t.created_at.isoformat() if t.created_at else None,
+        }
+        for t in ts
+    ]
+
+
+@app.get("/api/public/report/{slug}/tournaments/{tid}", response_model=schemas.TournamentOut)
+@limiter.limit("60/minute")
+def public_tournament_detail(request: Request, slug: str, tid: int, db: Session = Depends(get_db)):
+    rec = _validate_token(slug, db)
+    t = db.query(models.Tournament).filter(
+        models.Tournament.id == tid,
+        models.Tournament.club_id == rec.club_id,
+        models.Tournament.status != models.TournamentStatus.draft,
+    ).first()
+    if not t:
+        raise HTTPException(404, "Không tìm thấy giải đấu")
+    return t
+
+
+@app.get("/api/public/report/{slug}/tournaments/{tid}/standings")
+@limiter.limit("60/minute")
+def public_tournament_standings(
+    request: Request, slug: str, tid: int,
+    group: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    rec = _validate_token(slug, db)
+    t = db.query(models.Tournament).filter(
+        models.Tournament.id == tid,
+        models.Tournament.club_id == rec.club_id,
+        models.Tournament.status != models.TournamentStatus.draft,
+    ).first()
+    if not t:
+        raise HTTPException(404, "Không tìm thấy giải đấu")
+
+    matches_q = db.query(models.TournamentMatch).filter(
+        models.TournamentMatch.tournament_id == tid,
+        models.TournamentMatch.phase == "group",
+    )
+    if group:
+        matches_q = matches_q.filter(models.TournamentMatch.group_name == group)
+    matches = matches_q.all()
+
+    participants = t.participants
+    if group:
+        participants = [p for p in participants if p.group_name == group]
+
+    p_dicts = [{
+        "id": p.id, "member_id": p.member_id,
+        "full_name": p.member.full_name if p.member else "",
+        "team_name": p.team_name or (p.member.full_name if p.member else ""),
+        "group_name": p.group_name,
+    } for p in participants]
+
+    m_dicts = [{
+        "p1_id": m.p1_id, "p2_id": m.p2_id,
+        "score1": m.score1, "score2": m.score2, "status": m.status,
+    } for m in matches]
+
+    return compute_standings(m_dicts, p_dicts, group=group)
 
 
 # ── TOURNAMENTS ───────────────────────────────────────────

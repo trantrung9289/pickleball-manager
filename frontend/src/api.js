@@ -148,6 +148,11 @@ export const createPublicReportApi = (slug) => {
     feeTypes: {
       list: (params) => pub.get(`${base}/fee-types`, { params }),
     },
+    tournaments: {
+      list: () => pub.get(`${base}/tournaments`),
+      detail: (tid) => pub.get(`${base}/tournaments/${tid}`),
+      standings: (tid, group) => pub.get(`${base}/tournaments/${tid}/standings`, { params: { group } }),
+    },
   };
 };
 

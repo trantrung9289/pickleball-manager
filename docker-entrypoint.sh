@@ -34,7 +34,10 @@ if [ -n "$TELEGRAM_BOT_TOKEN" ]; then
   # Cron: nhắc đóng phí mỗi ngày lúc 7h UTC = 14h UTC+7
   if [ -n "$INTERNAL_SECRET" ]; then
     echo "⏰ Cài cron nhắc đóng phí (7h UTC hàng ngày)..."
-    echo "0 7 * * * root cd /bot && BACKEND_URL=${BACKEND_URL:-http://localhost:8000} INTERNAL_SECRET=$INTERNAL_SECRET python notify_bot.py >> /var/log/notify_bot.log 2>&1" > /etc/cron.d/fee-reminder
+    {
+      echo "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+      echo "0 7 * * * root cd /bot && BACKEND_URL=${BACKEND_URL:-http://localhost:8000} INTERNAL_SECRET=$INTERNAL_SECRET python notify_bot.py >> /var/log/notify_bot.log 2>&1"
+    } > /etc/cron.d/fee-reminder
     chmod 0644 /etc/cron.d/fee-reminder
     cron
     echo "✅ Cron đã khởi động"

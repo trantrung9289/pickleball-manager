@@ -49,7 +49,8 @@ export default function Transactions() {
       if (filters.type) params.type = filters.type;
       if (filters.search) params.search = filters.search;
       const r = await transactionsApi.list(params);
-      setData(r.data);
+      // Sắp xếp mới nhất lên trên
+      setData([...r.data].sort((a, b) => b.transaction_date.localeCompare(a.transaction_date)));
     } finally { setLoading(false); }
   };
 
@@ -206,12 +207,41 @@ export default function Transactions() {
   };
 
   const columns = [
-    { title: "Ngày", dataIndex: "transaction_date", render: (v) => dayjs(v).format("DD/MM/YYYY"), sorter: (a, b) => a.transaction_date.localeCompare(b.transaction_date) },
-    { title: "Loại", dataIndex: "type", render: (v) => <Tag color={v === "income" ? "green" : "red"}>{v === "income" ? "Thu" : "Chi"}</Tag> },
-    { title: "Khoản", render: (_, r) => r.fee_type?.name || "—" },
-    { title: "Thành viên", render: (_, r) => r.member?.full_name || "—" },
-    { title: "Số tiền", dataIndex: "amount", render: (v, r) => <b style={{ color: r.type === "income" ? "#52c41a" : "#ff4d4f" }}>{fmt(v)}</b>, align: "right" },
-    { title: "PT thanh toán", dataIndex: "payment_method" },
+    {
+      title: "Ngày", dataIndex: "transaction_date",
+      render: (v) => dayjs(v).format("DD/MM/YYYY"),
+      sorter: (a, b) => a.transaction_date.localeCompare(b.transaction_date),
+      defaultSortOrder: "descend",
+      width: 110,
+    },
+    {
+      title: "Loại", dataIndex: "type", width: 80,
+      render: (v) => <Tag color={v === "income" ? "green" : "red"}>{v === "income" ? "Thu" : "Chi"}</Tag>,
+      filters: [{ text: "Thu", value: "income" }, { text: "Chi", value: "expense" }],
+      onFilter: (value, r) => r.type === value,
+    },
+    {
+      title: "Khoản",
+      render: (_, r) => r.fee_type?.name || "—",
+      sorter: (a, b) => (a.fee_type?.name || "").localeCompare(b.fee_type?.name || ""),
+      filters: [...new Map(data.filter(r => r.fee_type).map(r => [r.fee_type.id, { text: r.fee_type.name, value: r.fee_type.id }])).values()],
+      onFilter: (value, r) => r.fee_type?.id === value,
+    },
+    {
+      title: "Thành viên",
+      render: (_, r) => r.member?.full_name || "—",
+      sorter: (a, b) => (a.member?.full_name || "").localeCompare(b.member?.full_name || ""),
+      filters: [...new Map(data.filter(r => r.member).map(r => [r.member.id, { text: r.member.full_name, value: r.member.id }])).values()],
+      onFilter: (value, r) => r.member?.id === value,
+    },
+    {
+      title: "Số tiền", dataIndex: "amount",
+      render: (v, r) => <b style={{ color: r.type === "income" ? "#52c41a" : "#ff4d4f" }}>{fmt(v)}</b>,
+      align: "right",
+      sorter: (a, b) => parseFloat(a.amount) - parseFloat(b.amount),
+      width: 130,
+    },
+    { title: "PT thanh toán", dataIndex: "payment_method", width: 130 },
     { title: "Ghi chú", dataIndex: "description", ellipsis: true },
     {
       title: "Thao tác", width: 100,

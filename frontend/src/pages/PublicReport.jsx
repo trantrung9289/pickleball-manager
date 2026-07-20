@@ -8,6 +8,7 @@ import {
 import dayjs from "dayjs";
 import { createPublicReportApi } from "../api";
 import { YearlySummary, MonthlyStats, MemberContributions, FeeStatusTracker } from "../components/ReportContent";
+import PublicTournamentTracker from "../components/PublicTournamentTracker";
 import { ViewModeProvider } from "../contexts/ViewModeContext";
 import ViewModeSwitcher from "../components/ViewModeSwitcher";
 import ThemeSwitcher from "../components/ThemeSwitcher";
@@ -131,6 +132,7 @@ function PublicReportInner({ token }) {
             { key: "yearly", label: "Tổng hợp năm", children: <YearlySummary year={year} api={api} /> },
             { key: "contributions", label: "Đóng góp thành viên", children: <MemberContributions year={year} api={api} /> },
             { key: "fee-status", label: "Theo dõi phí", children: <FeeStatusTracker year={year} api={api} /> },
+            { key: "tournaments", label: "Theo dõi giải đấu", children: <PublicTournamentTracker api={api} /> },
           ]}
         />
       </div>
