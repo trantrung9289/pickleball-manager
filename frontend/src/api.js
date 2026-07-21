@@ -109,6 +109,8 @@ export const playersApi = {
   /** Tạo player từ member CLB (tự động lấy tên từ member) */
   createFromMember: (memberId, memberName) =>
     api.post("/api/players", { member_id: memberId, name: memberName }),
+  tournaments: (id) => api.get(`/api/players/${id}/tournaments`),
+  convertToMember: (id) => api.post(`/api/players/${id}/convert-to-member`),
 };
 
 export const tournamentsApi = {

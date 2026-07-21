@@ -1,9 +1,82 @@
-# Handoff — Phiên làm việc 2026-07-02 (cập nhật)
+# Handoff — Phiên làm việc 2026-07-21 (mới nhất)
 
 ## Trạng thái hiện tại
 - Deployed: https://pickleball-manager.fly.dev
-- Branch: main (clean, đã push)
+- Branch: main
 - DB: SQLite persistent trên Fly.io (volume)
+
+---
+
+## Phiên làm việc 2026-07-21 — Quản lý Khách mời
+
+**Yêu cầu:** Thêm trang quản lý khách mời độc lập (trước đây chỉ tạo/sửa được trong lúc đăng ký giải đấu).
+
+**Phân tích trước khi làm:** Khách mời (`Player.member_id IS NULL`) không nằm trong bất kỳ luồng tài chính nào — `Transaction` chỉ có `member_id`, không có `player_id`; hệ thống nhắc phí Telegram chỉ query `Member`. Quyết định: trang Khách mời không có mục công nợ/giao dịch.
+
+**Backend (`backend/main.py`):**
+- `GET /api/players/{pid}/tournaments` — lịch sử tham gia giải đấu của 1 player (dùng cho cả khách mời lẫn thành viên), join qua `TournamentParticipant.player_id`/`partner_player_id`.
+- `POST /api/players/{pid}/convert-to-member` — tạo `Member` mới từ 1 khách mời (copy tên/SĐT/email/hạng, mã thành viên tự động qua `auto_member_code()`), gán `Player.member_id` trỏ về member mới. Chặn convert nếu player đã có `member_id`.
+
+**Frontend:**
+- `frontend/src/pages/Guests.jsx` (mới) — danh sách khách mời (`playersApi.list("guest")`), thêm/sửa/xoá, modal lịch sử giải đấu, nút "Chuyển thành thành viên".
+- `frontend/src/api.js` — thêm `playersApi.tournaments()` và `playersApi.convertToMember()`.
+- `frontend/src/App.jsx` — đăng ký trang `guests` vào `ALL_PAGES`, icon `UserAddOutlined`, nằm trong overflow "Thêm" trên mobile (không phải 1 trong 4 tab chính).
+
+**Bug phát sinh khi test (không phải do thay đổi lần này):** DB dev local (`backend/clb.db`) thiếu cột `players.rank` — `migrations/add_players_tables.py` chỉ chạy tự động trong Docker (`docker-entrypoint.sh`), không chạy khi khởi động local qua `start.sh`/`uvicorn --reload` trực tiếp. Đã chạy migration thủ công để test local. **Lưu ý cho phiên sau:** cân nhắc gọi migration này trong `start.sh` luôn để tránh lặp lại vấn đề.
+
+**Xác minh đã thực hiện:** Test end-to-end qua Chrome preview với dữ liệu thật trên backend local (venv) — tạo khách mời (kèm validate tên bắt buộc), sửa, xoá, xem lịch sử giải đấu (rỗng), chuyển khách mời thành thành viên (xác nhận qua SQL: `Member` mới tạo mã `TV0015`, `Player.member_id` đã liên kết), kiểm tra thành viên mới xuất hiện đúng ở trang Thành viên, kiểm tra hiển thị responsive trên mobile (trong sheet "Thêm").
+
+---
+
+## Phiên làm việc 2026-07-20 — Theo dõi giải đấu public + Thay người chơi
+
+### 39. Chế độ theo dõi giải đấu trên link public
+
+**Yêu cầu:** Cho phép xem tiến độ giải đấu (bracket, lịch đấu, bảng xếp hạng) qua link public, tích hợp vào link báo cáo tài chính có sẵn (không tạo token riêng).
+
+**Backend (`backend/main.py`):**
+- 3 endpoint mới, dùng chung `_validate_token()` (club-scoped, không cần auth):
+  - `GET /api/public/report/{slug}/tournaments` — danh sách giải (loại trừ `draft`)
+  - `GET /api/public/report/{slug}/tournaments/{tid}` — chi tiết (participants + matches)
+  - `GET /api/public/report/{slug}/tournaments/{tid}/standings` — bảng xếp hạng (tái dùng `compute_standings`)
+
+**Frontend:**
+- `frontend/src/components/PublicTournamentTracker.jsx` (mới) — component read-only, polling tự động mỗi 12s + nút "Làm mới" thủ công. Hỗ trợ đủ 3 định dạng: round_robin, knockout, combined.
+- `frontend/src/pages/PublicReport.jsx` — thêm tab "Theo dõi giải đấu"
+- `frontend/src/api.js` — thêm `tournaments.list/detail/standings` vào `createPublicReportApi`
+
+### 40. Thay người chơi trong giải đấu đang diễn ra
+
+**Yêu cầu:** 1 thành viên không thể tiếp tục thi đấu giữa giải → cần thay người khác (thành viên CLB chưa tham gia, hoặc tạo khách mời mới), không mất lịch sử trận đã đấu.
+
+**Kiến trúc quan trọng:** `TournamentMatch.p1_id/p2_id` trỏ tới `TournamentParticipant.id` ("chỗ ngồi"), không phải `member_id` trực tiếp → đổi `member_id`/`player_id` trên participant có sẵn giữ nguyên toàn bộ điểm/thắng-thua đã ghi nhận.
+
+**Backend:**
+- `schemas.ParticipantSlotUpdate` — `{slot: "main"|"partner", member_id?, player_id?, team_name?}`
+- `PATCH /api/tournaments/{tid}/participants/{pid}` — chặn chọn trùng người đã có mặt ở đội khác trong cùng giải, tự tính lại `team_name`
+
+**Frontend (`frontend/src/pages/Tournament.jsx`):**
+- Tab mới "Người chơi" trong `TournamentDetail` — liệt kê từng đội, nút "Thay [tên]" cho mỗi vị trí (main/partner nếu đấu đôi)
+- `ReplaceParticipantModal` — 2 tab: Thành viên CLB chưa tham gia (loại trừ người đã ở đội khác) / Khách mời (chọn có sẵn hoặc tạo mới ngay trong modal)
+- **Bug đã sửa trong lúc test:** `rowSelection.selectedRowKeys` dùng key có tiền tố (`m-5`, `g-3`) nhưng `rowKey` mặc định là `"id"` (số) → radio không bao giờ hiện chọn. Fix: `rowKey={(r) => \`m-${r.id}\`}` khớp với format key đang dùng.
+
+### 41. Bug schema đã sửa (ảnh hưởng cả production)
+
+Phát hiện khi test bằng DB thật (không phải suy đoán từ đọc code): local dev DB thiếu 3 cột mà `models.py` đã khai báo nhưng `_run_migration()` trong `main.py` chưa từng thêm:
+- `tournament_participants.player_id`, `tournament_participants.partner_player_id` — thiếu thì mọi giải có khách mời lỗi 500 (kể cả trang quản trị đã đăng nhập)
+- `club_memberships.telegram_chat_id` — thiếu thì `GET /api/my-memberships` lỗi 500 (đăng nhập CLB admin thường cũng gãy)
+
+Đã thêm cả 3 vào migrations list, deploy lên production, xác nhận cột đã tạo qua `fly ssh console`.
+
+**Bài học:** Xem chi tiết trong memory `feedback.md` — nên đối chiếu `models.py` ↔ migrations list khi nghi ngờ, đừng chỉ tin vào đọc code.
+
+### Xác minh đã thực hiện
+- Test end-to-end cả 2 tính năng bằng dữ liệu thật trên backend local (venv) + frontend dev server, qua Chrome preview
+- Deploy production qua `fly deploy --no-cache`, xác nhận migration mới chạy đúng qua `fly ssh console`, xác nhận endpoint mới có trong `/openapi.json`
+- Test trực tiếp trên link public thật của CLB Silk Village Pickleball (slug `silk-village-pickleball-XI57o0ZR`)
+
+### Lưu ý công cụ (không phải bug ứng dụng)
+Trong phiên này, Browser pane (Claude_Browser tools) có độ trễ giữa DOM thực tế và ảnh chụp `screenshot` — nhiều lần click đã thành công (xác nhận qua `read_page`/network requests) nhưng `screenshot` chụp muộn cho thấy trạng thái cũ. Khi nghi ngờ 1 click "không phản hồi", nên `read_page` lại hoặc kiểm tra network requests trước khi kết luận là lỗi code.
 
 ---
 

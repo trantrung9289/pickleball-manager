@@ -7,6 +7,7 @@ import {
   DashboardOutlined, TeamOutlined, DollarOutlined,
   SwapOutlined, BarChartOutlined, TrophyOutlined,
   UserOutlined, LogoutOutlined, LockOutlined, RobotOutlined,
+  UserAddOutlined,
 } from "@ant-design/icons";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { ViewModeProvider, useViewMode } from "./contexts/ViewModeContext";
@@ -17,6 +18,7 @@ import MobileBottomNav from "./components/mobile/MobileBottomNav";
 
 const Dashboard = lazy(() => import("./pages/Dashboard"));
 const Members = lazy(() => import("./pages/Members"));
+const Guests = lazy(() => import("./pages/Guests"));
 const FeeTypes = lazy(() => import("./pages/FeeTypes"));
 const Transactions = lazy(() => import("./pages/Transactions"));
 const Reports = lazy(() => import("./pages/Reports"));
@@ -44,6 +46,7 @@ const { Title } = Typography;
 const ALL_PAGES = {
   dashboard: { label: "Tổng quan", icon: <DashboardOutlined />, comp: Dashboard, requireView: false },
   members:   { label: "Thành viên", icon: <TeamOutlined />, comp: Members, requireView: true },
+  guests:    { label: "Khách mời", icon: <UserAddOutlined />, comp: Guests, requireView: true },
   fee_types: { label: "Danh mục khoản", icon: <DollarOutlined />, comp: FeeTypes, requireView: true },
   transactions: { label: "Giao dịch", icon: <SwapOutlined />, comp: Transactions, requireView: true },
   reports:   { label: "Báo cáo", icon: <BarChartOutlined />, comp: Reports, requireView: true },

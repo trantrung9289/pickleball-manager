@@ -1953,6 +1953,66 @@ def delete_player(
     db.delete(p); db.commit()
 
 
+@app.get("/api/players/{pid}/tournaments")
+def get_player_tournaments(
+    pid: int,
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    perms.require_view()
+    p = db.query(models.Player).filter(
+        models.Player.id == pid, models.Player.club_id == perms.club_id
+    ).first()
+    if not p:
+        raise HTTPException(404, "Không tìm thấy player")
+    parts = db.query(models.TournamentParticipant).filter(
+        (models.TournamentParticipant.player_id == pid) |
+        (models.TournamentParticipant.partner_player_id == pid)
+    ).all()
+    result = []
+    for part in parts:
+        t = part.tournament
+        result.append({
+            "tournament_id": t.id,
+            "tournament_name": t.name,
+            "status": t.status.value if hasattr(t.status, "value") else t.status,
+            "team_type": t.team_type,
+            "team_name": part.team_name,
+            "as_partner": part.partner_player_id == pid,
+        })
+    return result
+
+
+@app.post("/api/players/{pid}/convert-to-member", response_model=schemas.MemberOut, status_code=201)
+def convert_player_to_member(
+    pid: int,
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    perms.require_create()
+    p = db.query(models.Player).filter(
+        models.Player.id == pid, models.Player.club_id == perms.club_id
+    ).first()
+    if not p:
+        raise HTTPException(404, "Không tìm thấy player")
+    if p.member_id is not None:
+        raise HTTPException(400, "Player này đã là thành viên CLB")
+
+    member = models.Member(
+        club_id=perms.club_id,
+        member_code=auto_member_code(db, perms.club_id),
+        full_name=p.name,
+        phone=p.phone,
+        email=p.email,
+        rank=p.rank,
+        status=models.MemberStatus.active,
+    )
+    db.add(member); db.flush()
+    p.member_id = member.id
+    db.commit(); db.refresh(member)
+    return member
+
+
 # ── TOURNAMENTS ───────────────────────────────────────────
 
 @app.get("/api/tournaments", response_model=List[schemas.TournamentOut])
