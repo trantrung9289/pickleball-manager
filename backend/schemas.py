@@ -268,6 +268,11 @@ class TournamentUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     status: Optional[TournamentStatus] = None
+    format: Optional[TournamentFormat] = None
+    team_type: Optional[str] = None
+    pairing_mode: Optional[str] = None
+    rank_rules: Optional[List[Dict[str, str]]] = None
+    num_groups: Optional[int] = None
 
 
 class ParticipantSlotUpdate(BaseModel):
@@ -275,6 +280,14 @@ class ParticipantSlotUpdate(BaseModel):
     member_id: Optional[int] = None
     player_id: Optional[int] = None
     team_name: Optional[str] = None        # nếu bỏ trống sẽ tự tính lại
+
+
+class ParticipantCreate(BaseModel):
+    member_id: Optional[int] = None
+    player_id: Optional[int] = None
+    partner_member_id: Optional[int] = None
+    partner_player_id: Optional[int] = None
+    team_name: Optional[str] = None
 
 
 class ParticipantOut(BaseModel):

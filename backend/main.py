@@ -2101,6 +2101,14 @@ def get_tournament(
     return t
 
 
+SETUP_FIELDS = {"format", "team_type", "pairing_mode", "rank_rules", "num_groups"}
+ALLOWED_STATUS_TRANSITIONS = {
+    models.TournamentStatus.draft: {models.TournamentStatus.active},
+    models.TournamentStatus.active: {models.TournamentStatus.completed},
+    models.TournamentStatus.completed: set(),
+}
+
+
 @app.put("/api/tournaments/{tid}", response_model=schemas.TournamentOut)
 def update_tournament(
     tid: int,
@@ -2111,10 +2119,83 @@ def update_tournament(
     perms.require_edit()
     t = db.query(models.Tournament).filter(models.Tournament.id == tid, models.Tournament.club_id == perms.club_id).first()
     if not t: raise HTTPException(404, "Không tìm thấy giải đấu")
-    for k, v in data.model_dump(exclude_none=True).items():
+    updates = data.model_dump(exclude_none=True)
+
+    if any(k in SETUP_FIELDS for k in updates) and t.status != models.TournamentStatus.draft:
+        raise HTTPException(400, "Chỉ có thể chỉnh sửa thể thức/cấu hình khi giải đấu ở trạng thái Nháp")
+
+    new_status = updates.get("status")
+    if new_status is not None and new_status != t.status:
+        if new_status not in ALLOWED_STATUS_TRANSITIONS.get(t.status, set()):
+            raise HTTPException(400, f"Không thể chuyển trạng thái từ '{t.status.value}' sang '{new_status.value}'")
+
+    for k, v in updates.items():
         setattr(t, k, v)
     db.commit(); db.refresh(t)
     return t
+
+
+@app.post("/api/tournaments/{tid}/participants", response_model=schemas.ParticipantOut, status_code=201)
+def add_participant(
+    tid: int,
+    data: schemas.ParticipantCreate,
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    perms.require_edit()
+    t = db.query(models.Tournament).filter(models.Tournament.id == tid, models.Tournament.club_id == perms.club_id).first()
+    if not t: raise HTTPException(404, "Không tìm thấy giải đấu")
+    if t.status != models.TournamentStatus.draft:
+        raise HTTPException(400, "Chỉ có thể thêm người chơi khi giải đấu ở trạng thái Nháp")
+    if not data.member_id and not data.player_id:
+        raise HTTPException(400, "Cần chọn thành viên hoặc khách mời")
+    if data.member_id and data.player_id:
+        raise HTTPException(400, "Chỉ chọn 1 trong 2: thành viên hoặc khách mời")
+
+    others = db.query(models.TournamentParticipant).filter(models.TournamentParticipant.tournament_id == tid).all()
+    for o in others:
+        for mid, plid in [(o.member_id, o.player_id), (o.partner_member_id, o.partner_player_id)]:
+            if data.member_id and mid == data.member_id:
+                raise HTTPException(400, "Thành viên này đã tham gia giải")
+            if data.player_id and plid == data.player_id:
+                raise HTTPException(400, "Khách mời này đã tham gia giải")
+
+    team_name = data.team_name
+    if not team_name:
+        n1 = _resolve_display_name(db, data.member_id, data.player_id)
+        n2 = _resolve_display_name(db, data.partner_member_id, data.partner_player_id)
+        team_name = f"{n1} / {n2}" if n1 and n2 else (n1 or n2)
+
+    max_seed = db.query(func.max(models.TournamentParticipant.seed)).filter(
+        models.TournamentParticipant.tournament_id == tid
+    ).scalar() or 0
+
+    p = models.TournamentParticipant(
+        tournament_id=tid,
+        member_id=data.member_id, player_id=data.player_id,
+        partner_member_id=data.partner_member_id, partner_player_id=data.partner_player_id,
+        team_name=team_name, seed=max_seed + 1,
+    )
+    db.add(p); db.commit(); db.refresh(p)
+    return p
+
+
+@app.delete("/api/tournaments/{tid}/participants/{pid}", status_code=204)
+def remove_participant(
+    tid: int, pid: int,
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    perms.require_edit()
+    t = db.query(models.Tournament).filter(models.Tournament.id == tid, models.Tournament.club_id == perms.club_id).first()
+    if not t: raise HTTPException(404, "Không tìm thấy giải đấu")
+    if t.status != models.TournamentStatus.draft:
+        raise HTTPException(400, "Chỉ có thể xóa người chơi khi giải đấu ở trạng thái Nháp")
+    p = db.query(models.TournamentParticipant).filter(
+        models.TournamentParticipant.id == pid, models.TournamentParticipant.tournament_id == tid,
+    ).first()
+    if not p: raise HTTPException(404, "Không tìm thấy đội/người chơi")
+    db.delete(p); db.commit()
 
 
 @app.delete("/api/tournaments/{tid}", status_code=204)
