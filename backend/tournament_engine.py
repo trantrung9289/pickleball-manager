@@ -364,18 +364,23 @@ def compute_standings(
                 h_points += 1
         return (-h_points, -(h_for - h_against), -h_for)
 
-    # Nhóm theo điểm số, trong mỗi nhóm bằng điểm ưu tiên hệ số đối đầu trước hiệu số chung
-    rows.sort(key=lambda x: -x["points"])
+    # Nhóm theo điểm số, trong mỗi nhóm bằng điểm ưu tiên hiệu số chung,
+    # chỉ khi bằng cả điểm lẫn hiệu số mới xét đến hệ số đối đầu.
+    rows.sort(key=lambda x: (-x["points"], -x["goal_diff"], -x["goals_for"]))
     ordered: List[Dict] = []
     i = 0
     while i < len(rows):
         j = i
-        while j < len(rows) and rows[j]["points"] == rows[i]["points"]:
+        while (
+            j < len(rows)
+            and rows[j]["points"] == rows[i]["points"]
+            and rows[j]["goal_diff"] == rows[i]["goal_diff"]
+        ):
             j += 1
         tied_group = rows[i:j]
         if len(tied_group) > 1:
             tied_ids = {r["participant_id"] for r in tied_group}
-            tied_group.sort(key=lambda x: head_to_head_key(x["participant_id"], tied_ids) + (-x["goal_diff"], -x["goals_for"]))
+            tied_group.sort(key=lambda x: head_to_head_key(x["participant_id"], tied_ids) + (-x["goals_for"],))
         ordered.extend(tied_group)
         i = j
 

@@ -1,9 +1,65 @@
-# Handoff — Phiên làm việc 2026-07-21 (mới nhất)
+# Handoff — Phiên làm việc 2026-07-23 (mới nhất)
 
 ## Trạng thái hiện tại
 - Deployed: https://pickleball-manager.fly.dev
 - Branch: main
 - DB: SQLite persistent trên Fly.io (volume)
+- Commit mới nhất đã deploy: xem lịch sử git
+
+---
+
+## Phiên làm việc 2026-07-23 — Fix thứ tự tie-break bảng xếp hạng
+
+**Lỗi:** Bảng xếp hạng sắp xếp sai — `compute_standings` áp dụng hệ số đối đầu (head-to-head) TRƯỚC khi xét hiệu số toàn giải trong nhóm các đội bằng điểm, khiến các đội bị xếp sai thứ tự dù hiệu số toàn giải chênh lệch rõ ràng (VD: đội +7 xếp trên đội +19 vì thắng đối đầu).
+
+**Quy tắc đúng theo yêu cầu người dùng:** điểm cao → hiệu số toàn giải cao → chỉ khi bằng CẢ điểm lẫn hiệu số mới xét hệ số đối đầu.
+
+**Fix (`backend/tournament_engine.py:367-384`):** đổi sort key chính thành `(-points, -goal_diff, -goals_for)`; nhóm tied giờ chỉ gộp các đội bằng cả điểm lẫn goal_diff; head-to-head chỉ áp dụng trong nhóm tied đó (dùng `goals_for` làm fallback cuối thay vì `goal_diff` vì goal_diff đã bằng nhau trong nhóm).
+
+**Xác minh:** Test bằng script Python gọi trực tiếp `compute_standings` với dữ liệu synthetic — xác nhận đội có goal_diff cao hơn (+21) xếp trên đội thắng đối đầu nhưng goal_diff thấp hơn (+1); xác nhận tie-break đối đầu vẫn hoạt động khi điểm và goal_diff bằng nhau hệt nhau. Không test được trên UI vì DB dev local rỗng (chưa có giải đấu/trận đấu).
+
+---
+
+## Phiên làm việc 2026-07-22 — Trạng thái giải đấu, thể thức vòng tròn 2 lượt, tie-break đối đầu
+
+### 1. Nút Bắt đầu/Kết thúc giải + khóa chỉnh sửa sau khi bắt đầu
+
+**Yêu cầu:** Giải chưa bắt đầu (draft) vẫn sửa được thể thức/thêm người chơi; sau khi bắt đầu thì khóa lại.
+
+**Luồng trạng thái mới:** `draft → active → completed`, một chiều — đã bỏ nút "Mở lại giải" (completed→active) theo lựa chọn của người dùng khi được hỏi.
+
+**Backend (`backend/main.py`, `backend/schemas.py`):**
+- `update_tournament`: chặn sửa `format/team_type/pairing_mode/rank_rules/num_groups` nếu status khác `draft`; validate transition qua dict `ALLOWED_STATUS_TRANSITIONS` (chỉ draft→active, active→completed).
+- 2 endpoint mới: `POST /api/tournaments/{tid}/participants` (thêm), `DELETE /api/tournaments/{tid}/participants/{pid}` (xóa) — chỉ hoạt động khi draft. Tính năng PATCH thay người (đang active) giữ nguyên, không đụng tới.
+- `schemas.TournamentUpdate` thêm các field config (optional); `schemas.ParticipantCreate` mới.
+
+**Frontend (`frontend/src/pages/Tournament.jsx`, `frontend/src/api.js`):**
+- Nút "Bắt đầu giải" (draft→active, KHÔNG tự sinh lịch) và "Kết thúc giải" (active→completed); bỏ nút "Mở lại giải".
+- Modal `EditSetupModal` mới (chỉ hiện khi draft): sửa thể thức/số bảng, thêm/xóa người chơi — tái dùng pattern chọn thành viên/khách mời từ `CreateWizard`.
+- Nút "Sinh lịch" chỉ hiện khi đã active.
+
+Xem chi tiết đầy đủ trong memory `tournament_system.md`.
+
+### 2. Thể thức Vòng tròn hai lượt (`round_robin_double`)
+
+**Lưu ý quan trọng:** `TournamentFormat` enum tồn tại độc lập ở **2 file** (`backend/models.py` và `backend/schemas.py`, không import lẫn nhau) — phải sửa cả hai khi thêm format mới. Đã sửa cả hai lần này.
+
+- `tournament_engine.generate_schedule`: case mới `round_robin_double` — lượt đi giống vòng tròn 1 lượt, lượt về đảo p1/p2 (đảo sân), đặt tên vòng "Lượt đi – Vòng N" / "Lượt về – Vòng N". 4 đội → 12 trận.
+- Frontend: thêm vào `FORMAT_MAP`, mở rộng điều kiện hiển thị tab Lịch thi đấu/Bảng xếp hạng cho format mới (trước đây chỉ check `fmt === "round_robin"`).
+- Không cần migration DB: cột `tournaments.format` là `VARCHAR(11)` không có CHECK constraint trên SQLite.
+
+### 3. Tie-break ưu tiên hệ số đối đầu
+
+**Yêu cầu:** Khi 2 đội bằng điểm, ưu tiên hệ số đối đầu trước khi xét hiệu số toàn giải.
+
+`tournament_engine.compute_standings`: nhóm các đội theo điểm, trong mỗi nhóm >1 đội bằng điểm tính lại điểm/hiệu số/bàn thắng chỉ trong các trận giữa các đội đang tied để sắp xếp trước; nếu vẫn hòa (VD: tie vòng tròn 3 chiều) mới fallback về hiệu số/bàn thắng toàn giải như cũ.
+
+### Xác minh đã thực hiện
+
+- Backend: `python -c "import main"` không lỗi; test qua `curl` với JWT tự tạo (`auth.create_access_token`) — đầy đủ luồng gating (sửa format lúc draft OK, lúc active FAIL 400; thêm/xóa participant lúc draft OK, lúc active FAIL 400; chuyển thẳng draft→completed FAIL 400; completed→active FAIL 400 — xác nhận đã bỏ mở lại).
+- Test riêng `tournament_engine.py`: sinh lịch `round_robin_double` cho 4 đội ra đúng 12 trận; test tie-break xác nhận đội thắng đối đầu trực tiếp xếp trên dù hiệu số toàn giải thấp hơn nhiều.
+- Frontend: dev server không có lỗi build/console (`preview_logs`, `read_console_messages`).
+- Đã commit + push (`bfb937f`, `a8d6549`) + `fly deploy` — xác nhận qua `curl` production trả HTTP 200 sau mỗi lần deploy.
 
 ---
 
