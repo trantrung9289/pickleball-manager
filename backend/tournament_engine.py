@@ -231,6 +231,27 @@ def generate_schedule(
                 })
         return matches
 
+    if format == "round_robin_double":
+        first_leg = _round_robin_pairs(ids)
+        total_rounds = len(first_leg)
+        for r_idx, round_pairs in enumerate(first_leg):
+            for p1, p2 in round_pairs:
+                matches.append({
+                    "round_number": r_idx + 1,
+                    "round_name": f"Lượt đi – Vòng {r_idx + 1}",
+                    "match_number": next_num(), "phase": "group",
+                    "group_name": None, "p1_id": p1, "p2_id": p2,
+                })
+        for r_idx, round_pairs in enumerate(first_leg):
+            for p1, p2 in round_pairs:
+                matches.append({
+                    "round_number": total_rounds + r_idx + 1,
+                    "round_name": f"Lượt về – Vòng {r_idx + 1}",
+                    "match_number": next_num(), "phase": "group",
+                    "group_name": None, "p1_id": p2, "p2_id": p1,
+                })
+        return matches
+
     if format == "knockout":
         for m in _knockout_bracket(ids):
             matches.append({
@@ -322,7 +343,42 @@ def compute_standings(
     for r in rows:
         r["goal_diff"] = r["goals_for"] - r["goals_against"]
 
-    rows.sort(key=lambda x: (-x["points"], -x["goal_diff"], -x["goals_for"]))
-    for i, r in enumerate(rows):
-        r["rank"] = i + 1
-    return rows
+    completed_matches = [m for m in matches if m.get("status") == "completed"]
+
+    def head_to_head_key(pid: int, tied_ids: set) -> tuple:
+        """Hệ số đối đầu: chỉ tính các trận giữa những đội đang bằng điểm nhau."""
+        h_points = h_for = h_against = 0
+        for m in completed_matches:
+            p1, p2 = m.get("p1_id"), m.get("p2_id")
+            if pid not in (p1, p2):
+                continue
+            other = p2 if p1 == pid else p1
+            if other not in tied_ids:
+                continue
+            s1 = int(m.get("score1") or 0)
+            s2 = int(m.get("score2") or 0)
+            my_score, opp_score = (s1, s2) if p1 == pid else (s2, s1)
+            h_for += my_score
+            h_against += opp_score
+            if my_score > opp_score:
+                h_points += 1
+        return (-h_points, -(h_for - h_against), -h_for)
+
+    # Nhóm theo điểm số, trong mỗi nhóm bằng điểm ưu tiên hệ số đối đầu trước hiệu số chung
+    rows.sort(key=lambda x: -x["points"])
+    ordered: List[Dict] = []
+    i = 0
+    while i < len(rows):
+        j = i
+        while j < len(rows) and rows[j]["points"] == rows[i]["points"]:
+            j += 1
+        tied_group = rows[i:j]
+        if len(tied_group) > 1:
+            tied_ids = {r["participant_id"] for r in tied_group}
+            tied_group.sort(key=lambda x: head_to_head_key(x["participant_id"], tied_ids) + (-x["goal_diff"], -x["goals_for"]))
+        ordered.extend(tied_group)
+        i = j
+
+    for idx, r in enumerate(ordered):
+        r["rank"] = idx + 1
+    return ordered

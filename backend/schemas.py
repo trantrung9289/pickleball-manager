@@ -121,6 +121,7 @@ class FeeTypeCategory(str, Enum):
 
 class TournamentFormat(str, Enum):
     round_robin = "round_robin"
+    round_robin_double = "round_robin_double"
     knockout = "knockout"
     combined = "combined"
     individual = "individual"

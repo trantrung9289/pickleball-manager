@@ -24,6 +24,7 @@ class UserRole(str, enum.Enum):
 
 class TournamentFormat(str, enum.Enum):
     round_robin = "round_robin"
+    round_robin_double = "round_robin_double"
     knockout = "knockout"
     combined = "combined"
     individual = "individual"

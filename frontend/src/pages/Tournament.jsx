@@ -18,10 +18,11 @@ import { useViewMode } from "../contexts/ViewModeContext";
 const { Title, Text } = Typography;
 
 const FORMAT_MAP = {
-  round_robin: { label: "Vòng tròn một lượt", color: "blue" },
-  knockout:    { label: "Đấu loại trực tiếp", color: "red" },
-  combined:    { label: "Vòng bảng + loại trực tiếp", color: "purple" },
-  individual:  { label: "Thi đấu riêng lẻ", color: "default" },
+  round_robin:        { label: "Vòng tròn một lượt", color: "blue" },
+  round_robin_double: { label: "Vòng tròn hai lượt", color: "cyan" },
+  knockout:           { label: "Đấu loại trực tiếp", color: "red" },
+  combined:           { label: "Vòng bảng + loại trực tiếp", color: "purple" },
+  individual:         { label: "Thi đấu riêng lẻ", color: "default" },
 };
 const STATUS_MAP = {
   draft:     { label: "Nháp", color: "default" },
@@ -1369,13 +1370,13 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated }) {
     ),
   });
 
-  if (fmt === "round_robin" || fmt === "individual") {
+  if (fmt === "round_robin" || fmt === "round_robin_double" || fmt === "individual") {
     tabItems.push({
       key: "schedule",
       label: `Lịch thi đấu (${doneCount}/${matches.length})`,
       children: <ResponsiveTable columns={matchTableCols} dataSource={matches} rowKey="id" size="small" pagination={{ pageSize: 15 }} {...matchTableMobileProps} />,
     });
-    if (fmt === "round_robin") {
+    if (fmt === "round_robin" || fmt === "round_robin_double") {
       tabItems.push({
         key: "standings",
         label: "Bảng xếp hạng",
