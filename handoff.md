@@ -8,6 +8,21 @@
 
 ---
 
+## Phiên làm việc 2026-07-23 (tiếp) — Bottom nav mobile cho link public
+
+**Yêu cầu:** Trên link public (`/public/report/:token`) ở chế độ Mobile, đưa 5 mục (Tổng hợp năm, Thống kê tháng, Đóng góp thành viên, Theo dõi phí, Theo dõi giải đấu) vào 1 menu hiển thị bên dưới giống trang quản lý CLB, thay vì thanh Tabs cuộn ngang phía trên.
+
+**Fix:**
+- `components/mobile/MobileBottomNav.jsx`: sửa để chỉ render nút "Thêm" (overflow) khi có truyền `onMore` — cho phép tái sử dụng component này ở nơi không cần overflow (đủ ≤5 mục).
+- `pages/PublicReport.jsx`: import `useViewMode` (trước đây không dùng context này); gộp định nghĩa 5 section vào mảng `SECTIONS` dùng chung cho cả 2 chế độ; khi `isMobileView` render `MobileBottomNav` (không truyền `onMore`) + nội dung section đang chọn (state `activeSection`); khi desktop giữ nguyên `Tabs` top như cũ, cùng điều khiển bởi `activeSection` nên chuyển đổi qua lại giữa 2 kích thước màn hình không mất tab đang xem.
+- Thêm `navLabel` ngắn riêng cho bottom nav (Tháng/Năm/Đóng góp/Phí/Giải đấu) vì label đầy đủ quá dài cho nút 1/5 chiều rộng màn hình.
+
+**Xác minh:** Chạy dev server (frontend + backend), tạo tạm 1 dòng `public_report_tokens` trong `clb.db` trỏ tới club có dữ liệu thật, mở `/public/report/devtest123` ở viewport mobile (375x812) — xác nhận bottom nav hiện đủ 5 tab, click "Đóng góp" chuyển đúng nội dung (dữ liệu thật hiển thị). Resize desktop (1440x900) xác nhận quay lại `Tabs` top, giữ nguyên tab đang chọn. Đã xóa token test sau khi xong.
+
+Xem thêm pattern `MobileBottomNav` trong memory `ui_conventions.md`.
+
+---
+
 ## Phiên làm việc 2026-07-23 — Fix thứ tự tie-break bảng xếp hạng
 
 **Lỗi:** Bảng xếp hạng sắp xếp sai — `compute_standings` áp dụng hệ số đối đầu (head-to-head) TRƯỚC khi xét hiệu số toàn giải trong nhóm các đội bằng điểm, khiến các đội bị xếp sai thứ tự dù hiệu số toàn giải chênh lệch rõ ràng (VD: đội +7 xếp trên đội +19 vì thắng đối đầu).

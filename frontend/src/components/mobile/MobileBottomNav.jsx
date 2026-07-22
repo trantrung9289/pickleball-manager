@@ -4,7 +4,7 @@ import { AppstoreOutlined } from "@ant-design/icons";
 export default function MobileBottomNav({ items, current, onSelect, onMore, moreActive }) {
   const tabs = [
     ...items.map((it) => ({ ...it, type: "page" })),
-    { key: "__more__", label: "Thêm", icon: <AppstoreOutlined />, type: "more" },
+    ...(onMore ? [{ key: "__more__", label: "Thêm", icon: <AppstoreOutlined />, type: "more" }] : []),
   ];
 
   return (

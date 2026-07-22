@@ -4,15 +4,17 @@ import {
 } from "antd";
 import {
   LockOutlined, EyeOutlined, CalendarOutlined, TrophyOutlined,
+  BarChartOutlined, TeamOutlined, DollarOutlined,
 } from "@ant-design/icons";
 import dayjs from "dayjs";
 import { createPublicReportApi } from "../api";
 import { YearlySummary, MonthlyStats, MemberContributions, FeeStatusTracker } from "../components/ReportContent";
 import PublicTournamentTracker from "../components/PublicTournamentTracker";
-import { ViewModeProvider } from "../contexts/ViewModeContext";
+import { ViewModeProvider, useViewMode } from "../contexts/ViewModeContext";
 import ViewModeSwitcher from "../components/ViewModeSwitcher";
 import ThemeSwitcher from "../components/ThemeSwitcher";
 import { useAppTheme } from "../contexts/ThemeContext";
+import MobileBottomNav from "../components/mobile/MobileBottomNav";
 
 const { Title, Text } = Typography;
 
@@ -21,11 +23,21 @@ function PublicReportInner({ token }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [year, setYear] = useState(dayjs().year());
+  const [activeSection, setActiveSection] = useState("monthly-detail");
   const { token: antToken } = theme.useToken();
   const { themeConfig, themeName } = useAppTheme();
+  const { isMobileView } = useViewMode();
   const isDark = themeName === "ai-inspired";
 
   const api = createPublicReportApi(token);
+
+  const SECTIONS = [
+    { key: "monthly-detail", label: "Thống kê tháng", navLabel: "Tháng", icon: <BarChartOutlined />, children: <MonthlyStats year={year} api={api} /> },
+    { key: "yearly", label: "Tổng hợp năm", navLabel: "Năm", icon: <CalendarOutlined />, children: <YearlySummary year={year} api={api} /> },
+    { key: "contributions", label: "Đóng góp thành viên", navLabel: "Đóng góp", icon: <TeamOutlined />, children: <MemberContributions year={year} api={api} /> },
+    { key: "fee-status", label: "Theo dõi phí", navLabel: "Phí", icon: <DollarOutlined />, children: <FeeStatusTracker year={year} api={api} /> },
+    { key: "tournaments", label: "Theo dõi giải đấu", navLabel: "Giải đấu", icon: <TrophyOutlined />, children: <PublicTournamentTracker api={api} /> },
+  ];
 
   useEffect(() => {
     api.meta()
@@ -113,7 +125,12 @@ function PublicReportInner({ token }) {
       </div>
 
       {/* Nội dung */}
-      <div style={{ maxWidth: 1200, margin: "0 auto", padding: "24px 16px" }}>
+      <div style={{
+        maxWidth: 1200,
+        margin: "0 auto",
+        padding: isMobileView ? "16px 12px" : "24px 16px",
+        paddingBottom: isMobileView ? "calc(64px + env(safe-area-inset-bottom, 0px))" : undefined,
+      }}>
         <Card bordered={false} style={{ marginBottom: 16, borderRadius: 12, background: antToken.colorBgContainer }}>
           <Row justify="space-between" align="middle">
             <Title level={5} style={{ margin: 0, color: antToken.colorText }}>Năm tài chính</Title>
@@ -125,22 +142,30 @@ function PublicReportInner({ token }) {
           </Row>
         </Card>
 
-        <Tabs
-          defaultActiveKey="monthly-detail"
-          items={[
-            { key: "monthly-detail", label: "Thống kê tháng", children: <MonthlyStats year={year} api={api} /> },
-            { key: "yearly", label: "Tổng hợp năm", children: <YearlySummary year={year} api={api} /> },
-            { key: "contributions", label: "Đóng góp thành viên", children: <MemberContributions year={year} api={api} /> },
-            { key: "fee-status", label: "Theo dõi phí", children: <FeeStatusTracker year={year} api={api} /> },
-            { key: "tournaments", label: "Theo dõi giải đấu", children: <PublicTournamentTracker api={api} /> },
-          ]}
-        />
+        {isMobileView ? (
+          SECTIONS.find((s) => s.key === activeSection)?.children
+        ) : (
+          <Tabs
+            activeKey={activeSection}
+            onChange={setActiveSection}
+            items={SECTIONS.map(({ key, label, children }) => ({ key, label, children }))}
+          />
+        )}
       </div>
 
       {/* Footer */}
       <div style={{ textAlign: "center", padding: "16px 0 32px", color: antToken.colorTextQuaternary, fontSize: 12 }}>
         Báo cáo này chỉ dành cho xem — mọi dữ liệu là READ-ONLY
       </div>
+
+      {/* Bottom navigation — chỉ trên mobile */}
+      {isMobileView && (
+        <MobileBottomNav
+          items={SECTIONS.map(({ key, navLabel, icon }) => ({ key, label: navLabel, icon }))}
+          current={activeSection}
+          onSelect={setActiveSection}
+        />
+      )}
     </div>
   );
 }
