@@ -324,6 +324,16 @@ export default function BotConfigPanel() {
                     </Text>
                   )}
                 </div>
+                {item.guest_paid_count > 0 && (
+                  <div style={{ marginTop: 8 }}>
+                    <Tag color="orange">Khách mời đã đóng: {item.guest_paid_count}</Tag>
+                    {item.guests_paid?.map((g) => (
+                      <div key={g.id} style={{ fontSize: 13, padding: "2px 0" }}>
+                        • {g.full_name}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </Card>
             ))
           )

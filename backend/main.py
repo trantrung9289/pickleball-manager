@@ -1371,17 +1371,53 @@ def member_contributions(
 
     q = q.group_by(models.Member.id, models.FeeType.id).order_by(models.Member.full_name)
     rows = q.all()
-    return [
+    result = [
         {
             "member_id": r.id,
+            "player_id": None,
             "member_code": r.member_code,
             "full_name": r.full_name,
             "fee_type_name": r.fee_type_name,
             "transaction_count": r.transaction_count,
             "total_amount": float(r.total_amount or 0),
+            "is_guest": False,
         }
         for r in rows
     ]
+
+    # Khách mời (Player.member_id IS NULL) đóng góp cho cùng khoản thu
+    gq = db.query(
+        models.Player.id,
+        models.Player.name,
+        models.FeeType.name.label("fee_type_name"),
+        func.count(models.Transaction.id).label("transaction_count"),
+        func.sum(models.Transaction.amount).label("total_amount"),
+    ).join(models.Transaction, models.Transaction.player_id == models.Player.id)\
+     .join(models.FeeType, models.FeeType.id == models.Transaction.fee_type_id)\
+     .filter(models.Transaction.type == "income", models.Transaction.club_id == perms.club_id)
+
+    if fee_type_id:
+        gq = gq.filter(models.Transaction.fee_type_id == fee_type_id)
+    if year:
+        gq = gq.filter(extract("year", models.Transaction.transaction_date) == year)
+    if month:
+        gq = gq.filter(extract("month", models.Transaction.transaction_date) == month)
+
+    gq = gq.group_by(models.Player.id, models.FeeType.id).order_by(models.Player.name)
+    result += [
+        {
+            "member_id": None,
+            "player_id": r.id,
+            "member_code": None,
+            "full_name": r.name,
+            "fee_type_name": r.fee_type_name,
+            "transaction_count": r.transaction_count,
+            "total_amount": float(r.total_amount or 0),
+            "is_guest": True,
+        }
+        for r in gq.all()
+    ]
+    return sorted(result, key=lambda r: r["full_name"])
 
 
 @app.get("/api/reports/fee-status")
@@ -1418,6 +1454,30 @@ def fee_status(
             "paid": m.id in paid_ids,
         })
     paid_count = sum(1 for r in result if r["paid"])
+
+    # Khách mời đã đóng khoản này trong tháng (không có nghĩa vụ "chưa đóng")
+    guest_rows = db.query(
+        models.Player.id,
+        models.Player.name,
+        func.count(models.Transaction.id).label("transaction_count"),
+        func.sum(models.Transaction.amount).label("total_amount"),
+    ).join(models.Transaction, models.Transaction.player_id == models.Player.id)\
+     .filter(
+        models.Transaction.club_id == perms.club_id,
+        models.Transaction.fee_type_id == fee_type_id,
+        extract("month", models.Transaction.transaction_date) == month,
+        extract("year", models.Transaction.transaction_date) == year,
+     ).group_by(models.Player.id).order_by(models.Player.name).all()
+    guests = [
+        {
+            "player_id": r.id,
+            "full_name": r.name,
+            "transaction_count": r.transaction_count,
+            "total_amount": float(r.total_amount or 0),
+        }
+        for r in guest_rows
+    ]
+
     return {
         "month": month,
         "year": year,
@@ -1425,6 +1485,8 @@ def fee_status(
         "paid": paid_count,
         "unpaid": len(result) - paid_count,
         "members": result,
+        "guests": guests,
+        "guest_paid_count": len(guests),
     }
 
 
@@ -2621,6 +2683,16 @@ def _build_reminder_data(month: int, year: int, db: Session):
             models.Member.id.notin_(paid_ids),
         ).order_by(models.Member.full_name).all()
 
+        # Khách mời đã đóng khoản này trong tháng (thông tin, không tính "chưa đóng")
+        guests_paid = db.query(models.Player).join(
+            models.Transaction, models.Transaction.player_id == models.Player.id
+        ).filter(
+            models.Transaction.club_id == club_id,
+            models.Transaction.fee_type_id == ft.id,
+            extract("month", models.Transaction.transaction_date) == month,
+            extract("year", models.Transaction.transaction_date) == year,
+        ).order_by(models.Player.name).all()
+
         admin_memberships = db.query(models.ClubMembership).filter(
             models.ClubMembership.club_id == club_id,
             models.ClubMembership.role == models.UserRole.admin,
@@ -2638,6 +2710,8 @@ def _build_reminder_data(month: int, year: int, db: Session):
             "year": year,
             "unpaid_count": len(unpaid_members),
             "unpaid_members": [{"id": m.id, "full_name": m.full_name, "phone": m.phone} for m in unpaid_members],
+            "guest_paid_count": len(guests_paid),
+            "guests_paid": [{"id": p.id, "full_name": p.name} for p in guests_paid],
             "admin_chat_ids": chat_ids,
         })
     return result
@@ -2676,6 +2750,10 @@ def send_fee_reminders_frontend(
             continue
         for chat_id in item["admin_chat_ids"]:
             unpaid_count = item["unpaid_count"]
+            guest_line = ""
+            if item.get("guest_paid_count"):
+                guest_names = ", ".join(g["full_name"] for g in item["guests_paid"])
+                guest_line = f"\n\nKhách mời đã đóng ({item['guest_paid_count']} người): {guest_names}"
             if unpaid_count > 0:
                 names = "\n".join(
                     f"  • {m['full_name']}" + (f" ({m['phone']})" if m.get("phone") else "")
@@ -2686,12 +2764,14 @@ def send_fee_reminders_frontend(
                     f"CLB: {item['club_name']}\n"
                     f"Khoản: {item['fee_type_name']}\n\n"
                     f"Thành viên chưa đóng ({unpaid_count} người):\n{names}"
+                    f"{guest_line}"
                 )
             else:
                 text = (
                     f"✅ *Phí tháng {month}/{year} — {item['fee_type_name']}*\n"
                     f"CLB: {item['club_name']}\n\n"
                     f"Tất cả thành viên đã đóng phí!"
+                    f"{guest_line}"
                 )
             try:
                 payload = _json.dumps({"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}).encode()
@@ -2758,11 +2838,16 @@ def send_fee_reminder(
                 f"  • {m['full_name']}" + (f" ({m['phone']})" if m.get("phone") else "")
                 for m in item["unpaid_members"]
             )
+            guest_line = ""
+            if item.get("guest_paid_count"):
+                guest_names = ", ".join(g["full_name"] for g in item["guests_paid"])
+                guest_line = f"\n\nKhách mời đã đóng ({item['guest_paid_count']} người): {guest_names}"
             text = (
                 f"🔔 *Nhắc đóng phí tháng {month}/{year}*\n"
                 f"CLB: {item['club_name']}\n"
                 f"Khoản: {item['fee_type_name']}\n\n"
                 f"Thành viên chưa đóng ({item['unpaid_count']} người):\n{names}"
+                f"{guest_line}"
             )
 
             try:
