@@ -6,7 +6,7 @@ import {
 } from "antd";
 import { PlusOutlined, EditOutlined, DeleteOutlined, CloseOutlined, SaveOutlined, SearchOutlined, DownloadOutlined, FileExcelOutlined, UploadOutlined } from "@ant-design/icons";
 import dayjs from "dayjs";
-import { transactionsApi, feeTypesApi, membersApi } from "../api";
+import { transactionsApi, feeTypesApi, membersApi, playersApi } from "../api";
 import useHotkey from "../hooks/useHotkey";
 import ResponsiveTable from "../components/ResponsiveTable";
 
@@ -27,6 +27,7 @@ export default function Transactions() {
   const [saving, setSaving] = useState(false);
   const [feeTypes, setFeeTypes] = useState([]);
   const [members, setMembers] = useState([]);
+  const [guests, setGuests] = useState([]);
   const [filters, setFilters] = useState({ month: null, year: dayjs().year(), type: null, search: "" });
   const searchRef = useRef(null);
   const currentYear = dayjs().year();
@@ -58,6 +59,7 @@ export default function Transactions() {
   useEffect(() => {
     feeTypesApi.list().then((r) => setFeeTypes(r.data));
     membersApi.list().then((r) => setMembers(r.data));
+    playersApi.list("guest").then((r) => setGuests(r.data));
   }, []);
 
   const openCreate = () => {
@@ -74,6 +76,7 @@ export default function Transactions() {
     setSelectedFeeType(ft || null);
     form.setFieldsValue({
       ...r,
+      assignee: r.member_id ? `m:${r.member_id}` : r.player_id ? `g:${r.player_id}` : undefined,
       transaction_date: r.transaction_date ? dayjs(r.transaction_date) : dayjs(),
     });
     setModalOpen(true);
@@ -99,7 +102,9 @@ export default function Transactions() {
     try { vals = await form.validateFields(); } catch { return; }
 
     const ft = feeTypes.find((f) => f.id === vals.fee_type_id);
-    const member = members.find((m) => m.id === vals.member_id);
+    const [assigneeType, assigneeId] = (vals.assignee || "").split(":");
+    const member = assigneeType === "m" ? members.find((m) => m.id === Number(assigneeId)) : null;
+    const guest = assigneeType === "g" ? guests.find((g) => g.id === Number(assigneeId)) : null;
     const action = editing ? "cập nhật" : "ghi nhận";
     const ok = await confirm({
       title: `Xác nhận ${action} giao dịch?`,
@@ -107,6 +112,7 @@ export default function Transactions() {
         <div style={{ lineHeight: 2 }}>
           <div>Khoản: <b>{ft?.name}</b></div>
           {member && <div>Thành viên: <b>{member.full_name}</b></div>}
+          {guest && <div>Khách mời: <b>{guest.name}</b></div>}
           <div>Số tiền: <b style={{ color: "#1677ff" }}>{fmt(vals.amount)}</b></div>
           <div>Ngày: <b>{vals.transaction_date?.format("DD/MM/YYYY")}</b></div>
         </div>
@@ -116,7 +122,13 @@ export default function Transactions() {
 
     setSaving(true);
     try {
-      const payload = { ...vals, transaction_date: vals.transaction_date.format("YYYY-MM-DD") };
+      const { assignee, ...rest } = vals;
+      const payload = {
+        ...rest,
+        member_id: assigneeType === "m" ? Number(assigneeId) : null,
+        player_id: assigneeType === "g" ? Number(assigneeId) : null,
+        transaction_date: vals.transaction_date.format("YYYY-MM-DD"),
+      };
       if (editing) {
         await transactionsApi.update(editing.id, payload);
         message.success("Đã cập nhật giao dịch");
@@ -228,11 +240,16 @@ export default function Transactions() {
       onFilter: (value, r) => r.fee_type?.id === value,
     },
     {
-      title: "Thành viên",
-      render: (_, r) => r.member?.full_name || "—",
-      sorter: (a, b) => (a.member?.full_name || "").localeCompare(b.member?.full_name || ""),
-      filters: [...new Map(data.filter(r => r.member).map(r => [r.member.id, { text: r.member.full_name, value: r.member.id }])).values()],
-      onFilter: (value, r) => r.member?.id === value,
+      title: "Thành viên / Khách mời",
+      render: (_, r) => r.member?.full_name || (r.player && (
+        <span><Tag color="orange" style={{ marginRight: 4 }}>Khách mời</Tag>{r.player.name}</span>
+      )) || "—",
+      sorter: (a, b) => (a.member?.full_name || a.player?.name || "").localeCompare(b.member?.full_name || b.player?.name || ""),
+      filters: [
+        ...new Map(data.filter(r => r.member).map(r => [`m:${r.member.id}`, { text: r.member.full_name, value: `m:${r.member.id}` }])).values(),
+        ...new Map(data.filter(r => r.player).map(r => [`g:${r.player.id}`, { text: `Khách mời: ${r.player.name}`, value: `g:${r.player.id}` }])).values(),
+      ],
+      onFilter: (value, r) => `m:${r.member?.id}` === value || `g:${r.player?.id}` === value,
     },
     {
       title: "Số tiền", dataIndex: "amount",
@@ -386,10 +403,15 @@ export default function Transactions() {
           </Row>
 
           {(!selectedFeeType || selectedFeeType.type === "income") && (
-            <Form.Item name="member_id" label="Thành viên">
-              <Select showSearch optionFilterProp="children" placeholder="Chọn thành viên (khoản thu)" allowClear>
+            <Form.Item name="assignee" label="Thành viên / Khách mời">
+              <Select showSearch optionFilterProp="children" placeholder="Chọn thành viên hoặc khách mời (khoản thu)" allowClear>
                 {members.map((m) => (
-                  <Select.Option key={m.id} value={m.id}>{m.member_code} - {m.full_name}</Select.Option>
+                  <Select.Option key={`m:${m.id}`} value={`m:${m.id}`}>{m.member_code} - {m.full_name}</Select.Option>
+                ))}
+                {guests.map((g) => (
+                  <Select.Option key={`g:${g.id}`} value={`g:${g.id}`}>
+                    <Tag color="orange" style={{ marginRight: 4 }}>Khách mời</Tag>{g.name}
+                  </Select.Option>
                 ))}
               </Select>
             </Form.Item>

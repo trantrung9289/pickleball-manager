@@ -62,6 +62,8 @@ def _run_migration():
         ("tournament_participants", "partner_player_id", "INTEGER REFERENCES players(id)", None),
         # Bảng club_memberships — thêm telegram_chat_id (đăng nhập bot qua Telegram)
         ("club_memberships", "telegram_chat_id", "INTEGER", None),
+        # Bảng transactions — thêm player_id (gán khoản thu cho khách mời)
+        ("transactions", "player_id", "INTEGER REFERENCES players(id)", None),
     ]
 
     with engine.connect() as conn:
@@ -1131,6 +1133,7 @@ def list_transactions(
     year: Optional[int] = None,
     type: Optional[schemas.FeeTypeCategory] = None,
     member_id: Optional[int] = None,
+    player_id: Optional[int] = None,
     fee_type_id: Optional[int] = None,
     search: Optional[str] = None,
     db: Session = Depends(get_db),
@@ -1145,16 +1148,20 @@ def list_transactions(
         q = q.filter(models.Transaction.type == type)
     if member_id:
         q = q.filter(models.Transaction.member_id == member_id)
+    if player_id:
+        q = q.filter(models.Transaction.player_id == player_id)
     if fee_type_id:
         q = q.filter(models.Transaction.fee_type_id == fee_type_id)
     perms.require_view()
     q = q.filter(models.Transaction.club_id == perms.club_id)
     if search:
         q = q.join(models.Member, models.Transaction.member_id == models.Member.id, isouter=True)\
+             .join(models.Player, models.Transaction.player_id == models.Player.id, isouter=True)\
              .join(models.FeeType, models.Transaction.fee_type_id == models.FeeType.id, isouter=True)\
              .filter(
                 models.Transaction.description.ilike(f"%{search}%") |
                 models.Member.full_name.ilike(f"%{search}%") |
+                models.Player.name.ilike(f"%{search}%") |
                 models.FeeType.name.ilike(f"%{search}%")
              )
     return q.order_by(models.Transaction.transaction_date.desc()).all()

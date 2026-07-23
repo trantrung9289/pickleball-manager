@@ -90,6 +90,7 @@ class Transaction(Base):
     club_id = Column(Integer, ForeignKey("clubs.id"), nullable=True, index=True)
     fee_type_id = Column(Integer, ForeignKey("fee_types.id"), nullable=False)
     member_id = Column(Integer, ForeignKey("members.id"), nullable=True)
+    player_id = Column(Integer, ForeignKey("players.id"), nullable=True)  # khách mời
     type = Column(Enum(FeeTypeCategory), nullable=False)
     amount = Column(Numeric(15, 2), nullable=False)
     transaction_date = Column(Date, nullable=False)
@@ -101,6 +102,7 @@ class Transaction(Base):
 
     fee_type = relationship("FeeType", back_populates="transactions")
     member = relationship("Member", back_populates="transactions")
+    player = relationship("Player")
 
 
 class Club(Base):

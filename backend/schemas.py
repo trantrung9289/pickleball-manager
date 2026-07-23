@@ -202,31 +202,6 @@ class FeeTypeOut(FeeTypeBase):
         from_attributes = True
 
 
-# ── Transaction ───────────────────────────────────────────
-class TransactionBase(BaseModel):
-    fee_type_id: int
-    member_id: Optional[int] = None
-    amount: Decimal
-    transaction_date: date
-    description: Optional[str] = None
-    payment_method: str = "Chuyển khoản"
-
-
-class TransactionCreate(TransactionBase):
-    pass
-
-
-class TransactionOut(TransactionBase):
-    id: int
-    type: FeeTypeCategory
-    created_at: Optional[datetime] = None
-    fee_type: Optional[FeeTypeOut] = None
-    member: Optional[MemberOut] = None
-
-    class Config:
-        from_attributes = True
-
-
 # ── Player (thành viên + khách mời) ──────────────────────
 
 class PlayerCreate(BaseModel):
@@ -246,6 +221,33 @@ class PlayerOut(BaseModel):
     member_id: Optional[int] = None
     club_id: int
     is_guest: bool = False  # computed field
+
+    class Config:
+        from_attributes = True
+
+
+# ── Transaction ───────────────────────────────────────────
+class TransactionBase(BaseModel):
+    fee_type_id: int
+    member_id: Optional[int] = None
+    player_id: Optional[int] = None  # gán khoản thu cho khách mời (Player.member_id IS NULL)
+    amount: Decimal
+    transaction_date: date
+    description: Optional[str] = None
+    payment_method: str = "Chuyển khoản"
+
+
+class TransactionCreate(TransactionBase):
+    pass
+
+
+class TransactionOut(TransactionBase):
+    id: int
+    type: FeeTypeCategory
+    created_at: Optional[datetime] = None
+    fee_type: Optional[FeeTypeOut] = None
+    member: Optional[MemberOut] = None
+    player: Optional[PlayerOut] = None
 
     class Config:
         from_attributes = True
