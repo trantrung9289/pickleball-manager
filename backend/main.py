@@ -1342,15 +1342,14 @@ def report_monthly_detail(
     }
 
 
-@app.get("/api/reports/member-contributions")
-def member_contributions(
+def _query_member_contributions(
+    db: Session,
+    club_id: int,
     fee_type_id: Optional[int] = None,
     year: Optional[int] = None,
     month: Optional[int] = None,
-    db: Session = Depends(get_db),
-    perms: ClubPermissions = Depends(get_club_permission),
 ):
-    perms.require_view()
+    """Logic dùng chung cho báo cáo đóng góp theo thành viên (admin + public)."""
     q = db.query(
         models.Member.id,
         models.Member.member_code,
@@ -1360,7 +1359,7 @@ def member_contributions(
         func.sum(models.Transaction.amount).label("total_amount"),
     ).join(models.Transaction, models.Transaction.member_id == models.Member.id)\
      .join(models.FeeType, models.FeeType.id == models.Transaction.fee_type_id)\
-     .filter(models.Transaction.type == "income", models.Transaction.club_id == perms.club_id)
+     .filter(models.Transaction.type == "income", models.Transaction.club_id == club_id)
 
     if fee_type_id:
         q = q.filter(models.Transaction.fee_type_id == fee_type_id)
@@ -1370,7 +1369,6 @@ def member_contributions(
         q = q.filter(extract("month", models.Transaction.transaction_date) == month)
 
     q = q.group_by(models.Member.id, models.FeeType.id).order_by(models.Member.full_name)
-    rows = q.all()
     result = [
         {
             "member_id": r.id,
@@ -1382,7 +1380,7 @@ def member_contributions(
             "total_amount": float(r.total_amount or 0),
             "is_guest": False,
         }
-        for r in rows
+        for r in q.all()
     ]
 
     # Khách mời (Player.member_id IS NULL) đóng góp cho cùng khoản thu
@@ -1394,7 +1392,7 @@ def member_contributions(
         func.sum(models.Transaction.amount).label("total_amount"),
     ).join(models.Transaction, models.Transaction.player_id == models.Player.id)\
      .join(models.FeeType, models.FeeType.id == models.Transaction.fee_type_id)\
-     .filter(models.Transaction.type == "income", models.Transaction.club_id == perms.club_id)
+     .filter(models.Transaction.type == "income", models.Transaction.club_id == club_id)
 
     if fee_type_id:
         gq = gq.filter(models.Transaction.fee_type_id == fee_type_id)
@@ -1420,23 +1418,15 @@ def member_contributions(
     return sorted(result, key=lambda r: r["full_name"])
 
 
-@app.get("/api/reports/fee-status")
-def fee_status(
-    month: int,
-    year: int,
-    fee_type_id: int,
-    db: Session = Depends(get_db),
-    perms: ClubPermissions = Depends(get_club_permission),
-):
-    """Danh sách thành viên active đã/chưa đóng một khoản phí trong tháng."""
-    perms.require_view()
+def _query_fee_status(db: Session, club_id: int, month: int, year: int, fee_type_id: int):
+    """Logic dùng chung: thành viên active đã/chưa đóng một khoản phí trong tháng (admin + public)."""
     members = db.query(models.Member).filter(
-        models.Member.club_id == perms.club_id,
+        models.Member.club_id == club_id,
         models.Member.status == "active",
     ).order_by(models.Member.full_name).all()
     paid_ids = set(
         r[0] for r in db.query(models.Transaction.member_id).filter(
-            models.Transaction.club_id == perms.club_id,
+            models.Transaction.club_id == club_id,
             models.Transaction.fee_type_id == fee_type_id,
             extract("month", models.Transaction.transaction_date) == month,
             extract("year", models.Transaction.transaction_date) == year,
@@ -1463,7 +1453,7 @@ def fee_status(
         func.sum(models.Transaction.amount).label("total_amount"),
     ).join(models.Transaction, models.Transaction.player_id == models.Player.id)\
      .filter(
-        models.Transaction.club_id == perms.club_id,
+        models.Transaction.club_id == club_id,
         models.Transaction.fee_type_id == fee_type_id,
         extract("month", models.Transaction.transaction_date) == month,
         extract("year", models.Transaction.transaction_date) == year,
@@ -1488,6 +1478,31 @@ def fee_status(
         "guests": guests,
         "guest_paid_count": len(guests),
     }
+
+
+@app.get("/api/reports/member-contributions")
+def member_contributions(
+    fee_type_id: Optional[int] = None,
+    year: Optional[int] = None,
+    month: Optional[int] = None,
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    perms.require_view()
+    return _query_member_contributions(db, perms.club_id, fee_type_id, year, month)
+
+
+@app.get("/api/reports/fee-status")
+def fee_status(
+    month: int,
+    year: int,
+    fee_type_id: int,
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    """Danh sách thành viên active đã/chưa đóng một khoản phí trong tháng."""
+    perms.require_view()
+    return _query_fee_status(db, perms.club_id, month, year, fee_type_id)
 
 
 # ── PUBLIC REPORT LINKS ──────────────────────────────────
@@ -1718,32 +1733,7 @@ def public_report_member_contributions(
     db: Session = Depends(get_db),
 ):
     rec = _validate_token(slug, db)
-    q = db.query(
-        models.Member.id,
-        models.Member.member_code,
-        models.Member.full_name,
-        models.FeeType.name.label("fee_type_name"),
-        func.count(models.Transaction.id).label("transaction_count"),
-        func.sum(models.Transaction.amount).label("total_amount"),
-    ).join(models.Transaction, models.Transaction.member_id == models.Member.id)\
-     .join(models.FeeType, models.FeeType.id == models.Transaction.fee_type_id)\
-     .filter(models.Transaction.type == "income", models.Transaction.club_id == rec.club_id)
-    if fee_type_id:
-        q = q.filter(models.Transaction.fee_type_id == fee_type_id)
-    if year:
-        q = q.filter(extract("year", models.Transaction.transaction_date) == year)
-    if month:
-        q = q.filter(extract("month", models.Transaction.transaction_date) == month)
-    rows = q.group_by(models.Member.id, models.FeeType.id).order_by(models.Member.full_name).all()
-    return [
-        {
-            "member_id": r.id, "member_code": r.member_code, "full_name": r.full_name,
-            "fee_type_name": r.fee_type_name,
-            "transaction_count": r.transaction_count,
-            "total_amount": float(r.total_amount or 0),
-        }
-        for r in rows
-    ]
+    return _query_member_contributions(db, rec.club_id, fee_type_id, year, month)
 
 
 @app.get("/api/public/report/{slug}/fee-status")
@@ -1753,32 +1743,7 @@ def public_report_fee_status(
     db: Session = Depends(get_db),
 ):
     rec = _validate_token(slug, db)
-    members = db.query(models.Member).filter(
-        models.Member.club_id == rec.club_id,
-        models.Member.status == "active",
-    ).order_by(models.Member.full_name).all()
-    paid_ids = set(
-        r[0] for r in db.query(models.Transaction.member_id).filter(
-            models.Transaction.club_id == rec.club_id,
-            models.Transaction.fee_type_id == fee_type_id,
-            extract("month", models.Transaction.transaction_date) == month,
-            extract("year", models.Transaction.transaction_date) == year,
-            models.Transaction.member_id.isnot(None),
-        ).all()
-    )
-    result = [
-        {
-            "member_id": m.id, "member_code": m.member_code, "full_name": m.full_name,
-            "phone": m.phone, "rank": m.rank, "paid": m.id in paid_ids,
-        }
-        for m in members
-    ]
-    paid_count = sum(1 for r in result if r["paid"])
-    return {
-        "month": month, "year": year,
-        "total": len(result), "paid": paid_count, "unpaid": len(result) - paid_count,
-        "members": result,
-    }
+    return _query_fee_status(db, rec.club_id, month, year, fee_type_id)
 
 
 @app.get("/api/public/report/{slug}/fee-types")

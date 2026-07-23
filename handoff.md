@@ -4,7 +4,62 @@
 - Deployed: https://pickleball-manager.fly.dev
 - Branch: main
 - DB: SQLite persistent trên Fly.io (volume)
-- Commit mới nhất đã deploy: xem lịch sử git
+- Commit mới nhất đã deploy: `5db3972`
+
+---
+
+## Phiên làm việc 2026-07-23 (tiếp 2) — Gán khoản thu cho Khách mời
+
+**Yêu cầu người dùng:** "Các khoản thu đều có thể gán cho Khách mời và Thành viên ở tất cả trạng thái" — trước đó `Transaction` chỉ có `member_id`, khách mời (`Player.member_id IS NULL`) hoàn toàn không thể được gán khoản thu, không xuất hiện trong báo cáo, và bot Telegram không biết đến khoản thu từ khách mời.
+
+### 1. Backend — thêm `player_id` vào `Transaction` (commit `6ed16e2`)
+- `backend/models.py`: `Transaction.player_id` (FK `players.id`, nullable) + relationship `player`.
+- `backend/main.py` `_run_migration()`: thêm dòng migration tự động `("transactions", "player_id", "INTEGER REFERENCES players(id)", None)` — pattern y hệt các cột khác trong list này, chạy tự động mỗi lần app khởi động, an toàn/idempotent.
+- `backend/schemas.py`: di chuyển `PlayerOut`/`PlayerCreate` lên TRƯỚC `TransactionBase` (forward-reference), thêm `player_id` vào `TransactionBase`, `player: Optional[PlayerOut]` vào `TransactionOut`.
+- `list_transactions`: thêm filter `player_id`, `search` join thêm `models.Player`.
+- `create_transaction`/`update_transaction`: không cần sửa gì — dùng `data.model_dump()` generic nên field mới tự động đi qua.
+
+### 2. Frontend — selector gộp Thành viên + Khách mời (`Transactions.jsx`)
+- Field form đổi từ `member_id` → `assignee` (string dạng `"m:5"` hoặc `"g:3"`), tách ra `member_id`/`player_id` lúc submit (xem `handleSave`).
+- Cột bảng "Thành viên / Khách mời" hiển thị tag "Khách mời" màu cam khi `r.player` có giá trị.
+- Load thêm `playersApi.list("guest")` cùng lúc với `membersApi.list()`.
+
+### 3. Báo cáo + Bot Telegram cũng bỏ sót khách mời — fix tiếp (commit `5db3972`)
+Sau khi thêm `player_id`, người dùng phát hiện: "trong bot tele: các khoản thu chưa có thu cho khách mời, và trong báo cáo thống kê chưa hiển thị được các khoản thu của khách mời" — vì các endpoint báo cáo/nhắc phí có TỪ TRƯỚC được viết cứng theo `member_id`/bảng `members`, không biết `player_id` mới thêm tồn tại.
+
+- `/api/reports/member-contributions` (`main.py`): thêm query thứ 2 join `Transaction.player_id == Player.id`, gộp kết quả với query member cũ, thêm field `is_guest`/`player_id`, `member_code=None` cho khách mời.
+- `/api/reports/fee-status`: thêm field mới `guests` (list khách mời đã đóng khoản này trong tháng) + `guest_paid_count`. **Không** đưa khách mời vào `members`/`unpaid` — khách mời không có nghĩa vụ đóng định kỳ như thành viên nên không có khái niệm "chưa đóng".
+- `_build_reminder_data` (dùng chung bởi preview/send thủ công + cron nội bộ): thêm `guests_paid`/`guest_paid_count` cho mỗi fee_type; cả 2 nơi build text tin nhắn Telegram (`send_fee_reminders_frontend`, `send_fee_reminder`) đều thêm dòng "Khách mời đã đóng (N người): ..." khi có.
+- Frontend: `ReportContent.jsx` (cột "Thành viên" trong bảng giao dịch, bảng "Đóng góp thành viên" — rowKey/mobileTitle phải xử lý `member_id === null`, bảng "Theo dõi phí" thêm Card riêng liệt kê khách mời đã đóng); `BotConfigPanel.jsx` (modal xem trước nhắc phí thêm khối "Khách mời đã đóng").
+
+### Xác minh đã thực hiện
+- Backend: test round-trip qua Python trực tiếp (import `main` để trigger migration, tạo `Transaction` với `player_id`, serialize qua `TransactionOut.model_validate` — xác nhận JSON đúng cấu trúc).
+- Cả 2 lần deploy: chạy local `uvicorn` trên bản sao `clb.db.bak` của DB dev (không đụng file gốc), tạo JWT thủ công bằng `auth.create_access_token({'sub': 'trantrung9289'})` (user thường có membership, KHÔNG dùng `admin` vì là superuser bị chặn ở club endpoint), gọi `curl` trực tiếp 3 endpoint (`member-contributions`, `fee-status`, `fee-reminders/preview`) — xác nhận cả 3 đều trả về đúng dữ liệu khách mời. Dọn dẹp transaction/player test, khôi phục `clb.db` nguyên trạng sau khi xong.
+- Frontend: `npx vite build` sạch (chỉ warning chunk size, không lỗi).
+- Đã hỏi & được xác nhận trước khi `fly deploy` cả 2 lần (migration cột mới lần 1 — giải thích rõ chỉ ADD COLUMN nullable, không ảnh hưởng số liệu cũ; lần 2 không có thay đổi schema). Cả 2 lần `curl` production trả HTTP 200 sau deploy; lần 1 còn xác nhận qua `fly ssh console` cột `player_id` đã tồn tại trong `/data/clb.db` thật.
+
+**Việc còn để ngỏ (chưa làm, có thể cần sau):** `/api/transactions/export` (xuất Excel) và file mẫu import Excel giao dịch chưa được kiểm tra có hỗ trợ khách mời hay không — nếu người dùng cần xuất/nhập Excel có khách mời thì cần rà lại `export_transactions`/`import_transactions` trong `main.py`.
+
+---
+
+## Phiên làm việc 2026-07-23 (tiếp 3) — Đồng bộ báo cáo public với admin + cơ chế chống lệch tương lai
+
+**Yêu cầu người dùng:** "Cần đồng bộ hiển thị báo cáo trên trang public giống như bên trang quản lý CLB cho phần thu chi vừa chỉnh sửa hôm nay" — phát hiện đúng như dự đoán ở mục "để ngỏ" phiên trước: các endpoint `/api/public/report/{slug}/*` là bản **copy-paste riêng** của endpoint admin, nên khi thêm khách mời vào báo cáo admin (commit `5db3972`) thì bản public bị bỏ sót, không có `player_id`/`is_guest`/`guests`/`guest_paid_count`.
+
+### Root cause
+`PublicReport.jsx` (frontend) tái sử dụng chung component `ReportContent.jsx` với trang admin — UI không có vấn đề gì. Vấn đề nằm ở **backend**: 2 endpoint public (`public_report_member_contributions`, `public_report_fee_status`) có logic SQL viết tay trùng lặp hoàn toàn với 2 endpoint admin (`member_contributions`, `fee_status`), thay vì gọi chung một chỗ. Đây là nguyên nhân gốc khiến 2 bên dễ lệch nhau mỗi khi sửa logic báo cáo.
+
+### Fix — refactor thành hàm dùng chung (không tạo commit riêng cho bug-fix tạm, sửa thẳng kiến trúc)
+- Tách logic ra 2 hàm nội bộ trong `backend/main.py`: `_query_member_contributions(db, club_id, fee_type_id, year, month)` và `_query_fee_status(db, club_id, month, year, fee_type_id)` — nhận `club_id` làm tham số thay vì lấy trực tiếp từ `perms`/`rec`.
+- Endpoint admin (`/api/reports/member-contributions`, `/api/reports/fee-status`) và endpoint public (`/api/public/report/{slug}/member-contributions`, `/api/public/report/{slug}/fee-status`) đều chỉ còn vài dòng gọi hàm dùng chung, khác nhau ở chỗ lấy `club_id` (từ `perms.club_id` vs `rec.club_id` sau `_validate_token`).
+- Kết quả: `main.py` giảm 74 dòng code trùng lặp. Từ nay sửa logic báo cáo thu chi (thêm field, đổi filter, join thêm bảng...) chỉ cần sửa 1 nơi — cả 2 trang tự động đồng bộ.
+
+### Đối chiếu: phần Giải đấu (Tournament) trên trang public — đã kiểm tra, KHÔNG có vấn đề tương tự
+Endpoint admin `/api/tournaments/{tid}/standings` và public `/api/public/report/{slug}/tournaments/{tid}/standings` đều build `p_dicts`/`m_dicts` rồi gọi chung hàm `compute_standings()` — mô hình này đã đúng từ trước, không cần sửa. Khác biệt duy nhất (chủ đích, không phải bug): public list/detail lọc bỏ giải trạng thái `draft`.
+
+### Xác minh
+- `python3 -c "import ast; ast.parse(open('main.py').read())"` → OK (không lỗi cú pháp).
+- Chạy `uvicorn` local trên bản sao `clb_test_copy.db` (không đụng file gốc), tạo 1 `public_report_tokens` test trực tiếp bằng SQL, `curl` cả 2 endpoint (`member-contributions`, `fee-status`) → trả đúng cấu trúc có `player_id`/`is_guest` (member-contributions) và `guests`/`guest_paid_count` (fee-status). Đã dọn dẹp file DB test sau khi xong.
 
 ---
 
