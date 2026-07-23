@@ -4,7 +4,7 @@
 - Deployed: https://pickleball-manager.fly.dev
 - Branch: main
 - DB: SQLite persistent trên Fly.io (volume)
-- Commit mới nhất đã deploy: `5db3972`
+- Commit mới nhất đã deploy: `a9dc1bf`
 
 ---
 
