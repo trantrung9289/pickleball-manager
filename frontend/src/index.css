@@ -1,0 +1,94 @@
+* { box-sizing: border-box; }
+
+body {
+  background: #f0f2f5;
+  margin: 0;
+  font-family: 'Outfit', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  scroll-behavior: smooth;
+}
+
+#root {
+  width: 100% !important;
+  max-width: 100% !important;
+  border: none !important;
+  text-align: left !important;
+  min-height: 100svh;
+}
+
+/* Tabular numbers cho dữ liệu tài chính */
+.ant-statistic-content,
+.ant-table-cell {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Mobile touch targets */
+@media (max-width: 768px) {
+  .ant-btn {
+    min-height: 36px;
+  }
+  .ant-input,
+  .ant-select-selector,
+  .ant-picker {
+    font-size: 16px !important;
+  }
+  .ant-card-body {
+    padding: 12px !important;
+  }
+  .ant-table-wrapper {
+    overflow-x: auto;
+  }
+}
+
+/* Modal full-width trên mobile */
+@media (max-width: 576px) {
+  .ant-modal {
+    max-width: calc(100vw - 16px) !important;
+    margin: 8px auto !important;
+  }
+  .ant-modal-content {
+    border-radius: 12px !important;
+  }
+}
+
+.ant-message {
+  top: 70px !important;
+}
+
+/* Gói 2 — Hover lift cho card, transitions cho interactive elements */
+.ant-card {
+  transition: box-shadow 0.2s ease, transform 0.2s ease;
+}
+.ant-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(0, 60, 30, 0.1) !important;
+}
+
+/* Button active/press feedback */
+.ant-btn:active {
+  transform: scale(0.97) translateY(1px);
+}
+.ant-btn {
+  transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease, transform 0.12s ease !important;
+}
+
+/* Focus ring rõ ràng cho keyboard nav */
+.ant-btn:focus-visible,
+.ant-input:focus-visible,
+.ant-select-selector:focus-visible {
+  outline: 2px solid #27A063;
+  outline-offset: 2px;
+}
+
+/* Gói 3 — Empty state đẹp hơn */
+.ant-empty-description {
+  color: #5A7A8A;
+  font-size: 14px;
+}
+
+/* Skeleton animation mượt hơn */
+.ant-skeleton-content .ant-skeleton-title,
+.ant-skeleton-content .ant-skeleton-paragraph > li {
+  border-radius: 6px !important;
+}
