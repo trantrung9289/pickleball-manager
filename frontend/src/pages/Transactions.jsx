@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from "react";
+import { useCallback, useEffect, useState, useRef } from "react";
 import {
   Table, Button, Space, Tag, Modal, Form, Input, Select,
   InputNumber, DatePicker, message, Typography,
@@ -41,7 +41,7 @@ export default function Transactions() {
   const [importLoading, setImportLoading] = useState(false);
   const [importResult, setImportResult] = useState(null);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
       const params = {};
@@ -53,9 +53,11 @@ export default function Transactions() {
       // Sắp xếp mới nhất lên trên
       setData([...r.data].sort((a, b) => b.transaction_date.localeCompare(a.transaction_date)));
     } finally { setLoading(false); }
-  };
+  }, [filters]);
 
-  useEffect(() => { load(); }, [filters]);
+  // Cờ loading bên trong load() cần bật lại mỗi khi đổi bộ lọc (filters đổi → load đổi).
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => { load(); }, [load]);
   useEffect(() => {
     feeTypesApi.list().then((r) => setFeeTypes(r.data));
     membersApi.list().then((r) => setMembers(r.data));
@@ -210,7 +212,7 @@ export default function Transactions() {
     "escape": () => { if (modalOpen) handleCancel(); else setSelectedRowKeys([]); },
     "delete": () => selectedRowKeys.length > 0 && !modalOpen && handleDeleteSelected(),
     "ctrl+a": () => !modalOpen && setSelectedRowKeys(data.map((d) => d.id)),
-  }, [modalOpen, selectedRowKeys, data]);
+  });
 
   const rowSelection = {
     selectedRowKeys,

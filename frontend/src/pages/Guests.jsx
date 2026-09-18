@@ -1,6 +1,6 @@
-import React, { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef } from "react";
 import {
-  Table, Button, Space, Input, Select, Tag, Modal, Form,
+  Button, Space, Input, Select, Tag, Modal, Form,
   message, Typography, Row, Col, Empty, List, Spin,
 } from "antd";
 import {
@@ -27,7 +27,7 @@ const confirm = (opts) =>
     Modal.confirm({ okText: "Xác nhận", cancelText: "Hủy", ...opts, onOk: () => resolve(true), onCancel: () => resolve(false) })
   );
 
-export default function Guests({ perms }) {
+export default function Guests() {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -48,7 +48,7 @@ export default function Guests({ perms }) {
     "/": () => searchRef.current?.focus(),
     "ctrl+enter": () => modalOpen && handleSave(),
     "escape": () => modalOpen && handleCancel(),
-  }, [modalOpen]);
+  });
 
   const load = async () => {
     setLoading(true);

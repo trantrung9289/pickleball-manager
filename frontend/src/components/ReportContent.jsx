@@ -5,10 +5,10 @@
  *
  * Mỗi component nhận prop `api = { reports, transactions, feeTypes }`.
  */
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import {
-  Table, Select, Typography, Row, Col, Card, Tabs, Statistic,
-  Tag, Empty, Spin, Progress, Alert, Button, Space, theme, Input,
+  Table, Select, Typography, Row, Col, Card, Statistic,
+  Tag, Empty, Spin, Progress, Alert, Button, theme, Input,
 } from "antd";
 import {
   RiseOutlined, FallOutlined, WalletOutlined, SwapOutlined,
@@ -40,7 +40,7 @@ export function YearlySummary({ year, api }) {
     api.reports.summary(year).then((r) =>
       setMonthly(r.data.map((d) => ({ ...d, name: MONTHS[d.month - 1] })))
     );
-  }, [year]);
+  }, [year, api]);
 
   const totalIncome = monthly.reduce((s, d) => s + d.total_income, 0);
   const totalExpense = monthly.reduce((s, d) => s + d.total_expense, 0);
@@ -157,6 +157,8 @@ export function MonthlyStats({ year, api }) {
   const { token: antToken } = theme.useToken();
 
   useEffect(() => {
+    // Cờ loading bật khi bắt đầu fetch, tắt bất đồng bộ ở .finally(); cần chạy lại mỗi khi đổi month/year.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true);
     Promise.all([
       api.reports.monthlyDetail(month, year),
@@ -166,7 +168,7 @@ export function MonthlyStats({ year, api }) {
       // Pre-sort mới nhất lên đầu (áp dụng cả desktop lẫn mobile)
       setTxs([...txRes.data].sort((a, b) => b.transaction_date.localeCompare(a.transaction_date)));
     }).finally(() => setLoading(false));
-  }, [month, year]);
+  }, [month, year, api]);
 
   // Tạo filter options từ data thực tế
   const feeTypeOptions = [...new Set(txs.map(r => r.fee_type?.name).filter(Boolean))].map(v => ({ text: v, value: v }));
@@ -412,7 +414,7 @@ export function MemberContributions({ year, api }) {
 
   useEffect(() => {
     api.feeTypes.list({ type: "income" }).then((r) => setFeeTypes(r.data));
-  }, []);
+  }, [api]);
 
   useEffect(() => {
     api.reports.memberContributions({
@@ -420,7 +422,7 @@ export function MemberContributions({ year, api }) {
       month: monthFilter || undefined,
       year,
     }).then((r) => setContributions(r.data));
-  }, [feeTypeFilter, monthFilter, year]);
+  }, [feeTypeFilter, monthFilter, year, api]);
 
   const filtered = search
     ? contributions.filter(r =>
@@ -435,7 +437,7 @@ export function MemberContributions({ year, api }) {
   const contribCols = [
     {
       title: "Mã TV", dataIndex: "member_code", width: 90,
-      render: (v, r) => v || <Tag color="orange">Khách mời</Tag>,
+      render: (v) => v || <Tag color="orange">Khách mời</Tag>,
       sorter: (a, b) => (a.member_code || "").localeCompare(b.member_code || ""),
     },
     {
@@ -537,17 +539,22 @@ export function FeeStatusTracker({ year, api, showPhone = true }) {
   useEffect(() => {
     api.feeTypes.list().then((r) => {
       setFeeTypes(r.data);
-      if (r.data.length > 0 && !selectedFeeType) setSelectedFeeType(r.data[0].id);
+      // functional update: đọc giá trị hiện tại qua callback thay vì đóng gói biến
+      // selectedFeeType từ closure — effect vẫn chỉ cần chạy 1 lần lúc mount, không
+      // phải refetch mỗi khi người dùng đổi lựa chọn.
+      setSelectedFeeType((prev) => prev ?? (r.data[0]?.id ?? null));
     });
-  }, []);
+  }, [api]);
 
   useEffect(() => {
     if (!selectedFeeType) return;
+    // Cờ loading — xem giải thích ở MonthlyStats phía trên trong file này.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true);
     api.reports.feeStatus(month || undefined, year, selectedFeeType)
       .then((r) => setData(r.data))
       .finally(() => setLoading(false));
-  }, [month, year, selectedFeeType]);
+  }, [month, year, selectedFeeType, api]);
 
   const selectedFeeTypeObj = feeTypes.find(f => f.id === selectedFeeType);
   const isExpense = selectedFeeTypeObj?.type === "expense";

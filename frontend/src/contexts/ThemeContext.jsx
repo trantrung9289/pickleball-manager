@@ -1,6 +1,9 @@
-import React, { createContext, useContext, useState, useMemo } from "react";
+import { createContext, useContext, useState, useMemo } from "react";
 import { theme as antdTheme } from "antd";
 
+// THEMES + useAppTheme cùng file với ThemeProvider là chủ đích (co-location theo domain);
+// tách riêng cần sửa lại import ở toàn bộ trang chỉ để tối ưu Fast Refresh.
+// eslint-disable-next-line react-refresh/only-export-components
 export const THEMES = {
   "ai-minimalist": {
     name: "ai-minimalist",
@@ -96,6 +99,7 @@ export function ThemeProvider({ children }) {
   );
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function useAppTheme() {
   return useContext(ThemeContext);
 }

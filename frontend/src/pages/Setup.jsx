@@ -1,6 +1,6 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import {
-  Card, Form, Input, Button, Steps, Typography, Space,
+  Card, Form, Input, Button, Steps, Typography,
   Row, Col, Divider, message, InputNumber,
 } from "antd";
 import {
@@ -9,7 +9,7 @@ import {
 } from "@ant-design/icons";
 import { useAuth } from "../context/AuthContext";
 
-const { Title, Text, Paragraph } = Typography;
+const { Title, Paragraph } = Typography;
 
 export default function Setup() {
   const { setup } = useAuth();

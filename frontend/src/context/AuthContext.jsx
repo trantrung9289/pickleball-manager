@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from "react";
+import { createContext, useContext, useState, useEffect, useCallback, useMemo } from "react";
 import { authApi } from "../api";
 
 const AuthContext = createContext(null);
@@ -67,7 +67,7 @@ export function AuthProvider({ children }) {
       setMemberships([]);
       _clearMembership();
     }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
   function _selectMembership(m) {
     setSelectedMembership(m);
@@ -99,8 +99,10 @@ export function AuthProvider({ children }) {
   }, [checkStatus, loadMemberships]);
 
   useEffect(() => {
-    // Khởi động lần đầu
+    // Khởi động lần đầu. checkStatus/loadMemberships setState sau await bên trong,
+    // nhưng dùng chung với refreshAll() nên không tách bản inline chỉ để hợp lệ hoá lint.
     const token = localStorage.getItem("token");
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     checkStatus();
     if (token) {
       authApi.me().then(({ data }) => {
@@ -139,7 +141,9 @@ export function AuthProvider({ children }) {
     try {
       const { data: clubData } = await authApi.getClub();
       setClub(clubData);
-    } catch {}
+    } catch {
+      // Không có CLB nào (tài khoản superuser) hoặc lỗi tạm thời — bỏ qua, không chặn đăng nhập
+    }
     if (!data.user.is_superuser) {
       // load memberships — sẽ tự chọn nếu chỉ có 1
       try {
@@ -197,4 +201,6 @@ export function AuthProvider({ children }) {
   );
 }
 
+// Context + hook cùng file là chủ đích (co-location); tách riêng cần sửa lại import ở toàn bộ trang.
+// eslint-disable-next-line react-refresh/only-export-components
 export const useAuth = () => useContext(AuthContext);

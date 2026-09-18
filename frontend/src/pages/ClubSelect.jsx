@@ -1,4 +1,3 @@
-import React from "react";
 import { Typography, Row, Col, Tag, Button } from "antd";
 import { TrophyOutlined, LogoutOutlined, EnvironmentOutlined } from "@ant-design/icons";
 import { useAuth } from "../context/AuthContext";

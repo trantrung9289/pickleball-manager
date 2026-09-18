@@ -5,6 +5,9 @@ backend/__pycache__
 backend/static
 backend/*.pyc
 backend/clb.db
+backend/clb.db-shm
+backend/clb.db-wal
+backend/backups/
 **/__pycache__
 **/*.pyc
 .env.local

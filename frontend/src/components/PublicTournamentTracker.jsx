@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import {
   Select, Tabs, Empty, Spin, Card, Tag, Typography,
   Collapse, Divider, Space, Button, Badge, Modal, Form, Input, AutoComplete, message,
@@ -25,6 +25,11 @@ const SCORE_OPTIONS = Array.from({ length: 100 }, (_, i) => ({ value: String(i).
 function ScoreInput({ value, onChange }) {
   const [text, setText] = useState(String(value ?? 0));
 
+  // Đồng bộ buffer text cục bộ khi prop `value` đổi từ bên ngoài (vd reset form) — đây là
+  // 1 trong số ít trường hợp React khuyến nghị dùng effect ("Adjusting state when a prop
+  // changes"), không phải derived-state anti-pattern; state vẫn cần editable độc lập với
+  // prop trong lúc người dùng gõ nên không dùng key để remount.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { setText(String(value ?? 0)); }, [value]);
 
   const commit = (v) => {
@@ -216,7 +221,7 @@ function StandingsTable({ tournament, group, api }) {
 
   useEffect(() => {
     api.tournaments.standings(tournament.id, group).then(r => setRows(r.data));
-  }, [tournament.id, group, doneCount]);
+  }, [tournament.id, group, doneCount, api]);
 
   const cols = [
     { title: "#", dataIndex: "rank", width: 40, align: "center",
@@ -426,7 +431,7 @@ export default function PublicTournamentTracker({ api }) {
         setSelectedId(active.id);
       }
     }).finally(() => setLoading(false));
-  }, []);
+  }, [api]);
 
   const loadDetail = useCallback((silent) => {
     if (!selectedId) return;
@@ -435,10 +440,13 @@ export default function PublicTournamentTracker({ api }) {
     api.tournaments.detail(selectedId)
       .then(r => setTournament(r.data))
       .finally(() => { setLoading(false); setRefreshing(false); });
-  }, [selectedId]);
+  }, [selectedId, api]);
 
   useEffect(() => {
     if (!selectedId) return;
+    // loadDetail(false) bật setLoading(true) đồng bộ — cờ loading cần bật lại mỗi khi
+    // đổi giải đấu đang xem (selectedId đổi), không phải derived-state anti-pattern.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadDetail(false);
     pollRef.current = setInterval(() => loadDetail(true), POLL_MS);
     return () => clearInterval(pollRef.current);

@@ -1,4 +1,3 @@
-import React from "react";
 import { Button, Dropdown, Space } from "antd";
 import { DownOutlined } from "@ant-design/icons";
 import { useAppTheme, THEMES } from "../contexts/ThemeContext";

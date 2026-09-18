@@ -1,6 +1,6 @@
-import React, { useEffect, useState, useRef } from "react";
+import { useCallback, useEffect, useState, useRef } from "react";
 import {
-  Table, Button, Space, Input, Select, Tag, Modal, Form,
+  Button, Space, Input, Select, Tag, Modal, Form,
   DatePicker, message, Typography, Row, Col, Popover,
   Upload, Alert, Divider, Progress,
 } from "antd";
@@ -8,7 +8,7 @@ import {
   PlusOutlined, EditOutlined, DeleteOutlined, SearchOutlined,
   SaveOutlined, InfoCircleOutlined, DownloadOutlined,
   FileExcelOutlined, UploadOutlined, CheckCircleOutlined,
-  CloseCircleOutlined, WarningOutlined, FileAddOutlined,
+  CloseCircleOutlined, WarningOutlined,
 } from "@ant-design/icons";
 import dayjs from "dayjs";
 import { membersApi } from "../api";
@@ -46,7 +46,6 @@ export default function Members() {
   const [importOpen, setImportOpen] = useState(false);
   const [importLoading, setImportLoading] = useState(false);
   const [importResult, setImportResult] = useState(null);
-  const fileInputRef = useRef(null);
 
   useHotkey({
     "n": () => !modalOpen && openCreate(),
@@ -54,17 +53,17 @@ export default function Members() {
     "/": () => searchRef.current?.focus(),
     "ctrl+enter": () => modalOpen && handleSave(),
     "escape": () => modalOpen && handleCancel(),
-  }, [modalOpen]);
+  });
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
       const res = await membersApi.list({ search: search || undefined, status: statusFilter || undefined });
       setData(res.data);
     } finally { setLoading(false); }
-  };
+  }, [search, statusFilter]);
 
-  useEffect(() => { load(); }, [search, statusFilter]);
+  useEffect(() => { load(); }, [load]);
 
   const openCreate = () => { setEditing(null); form.resetFields(); setModalOpen(true); };
   const openEdit = (r) => {

@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback } from "react";
 import {
   Card, Input, Button, message, Space, Typography, Tree,
   Switch, Table, Modal, DatePicker, Spin, Tag, Divider,
@@ -73,12 +73,10 @@ export default function BotConfigPanel() {
   const [sending, setSending]               = useState(false);
   const [showPreview, setShowPreview]       = useState(false);
 
-  useEffect(() => {
-    loadConfig();
-    loadFeeTypes();
-  }, []); // eslint-disable-line
-
-  const loadConfig = async () => {
+  // Khai báo TRƯỚC useEffect gọi chúng — const không hoisted như function declaration,
+  // trước đây "chạy được" chỉ vì hiệu ứng phụ chạy sau khi component render xong (closure
+  // over biến khai báo sau), nhưng dễ vỡ nếu code sau này gọi trực tiếp trong lúc render.
+  const loadConfig = useCallback(async () => {
     setLoading(true);
     try {
       const res = await fetch(`${API_BASE}/api/bot-config`, { headers: authHeaders() });
@@ -96,15 +94,24 @@ export default function BotConfigPanel() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
-  const loadFeeTypes = async () => {
+  const loadFeeTypes = useCallback(async () => {
     try {
       const res = await fetch(`${API_BASE}/api/fee-types`, { headers: authHeaders() });
       if (!res.ok) return;
       setFeeTypes(await res.json());
     } catch { /* silent */ }
-  };
+  }, []);
+
+  useEffect(() => {
+    // loadConfig/loadFeeTypes setState sau await bên trong nhưng được gọi trực tiếp
+    // (không phải trong .then) nên lint coi là "đồng bộ"; cần giữ tách riêng để tái sử
+    // dụng ở nút "Tải lại".
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    loadConfig();
+    loadFeeTypes();
+  }, [loadConfig, loadFeeTypes]);
 
   const handleCheck = useCallback((checked) => {
     setCheckedKeys(Array.isArray(checked) ? checked : checked.checked);

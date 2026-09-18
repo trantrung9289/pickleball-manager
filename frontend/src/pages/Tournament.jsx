@@ -1,9 +1,9 @@
-import React, { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback } from "react";
 import {
-  Table, Button, Space, Tag, Modal, Form, Input, Select,
+  Button, Space, Tag, Modal, Form, Input, Select,
   message, Typography, Row, Col, Card, Steps,
   InputNumber, Tabs, Badge, Statistic, Empty,
-  Divider, Alert, Transfer, Tooltip, Checkbox, Collapse, AutoComplete, Switch,
+  Divider, Alert, Checkbox, Collapse, AutoComplete, Switch,
 } from "antd";
 import {
   PlusOutlined, ThunderboltOutlined, TrophyOutlined,
@@ -708,6 +708,11 @@ const SCORE_OPTIONS = Array.from({ length: 100 }, (_, i) => ({ value: String(i).
 function ScoreInput({ value, onChange }) {
   const [text, setText] = useState(String(value ?? 0));
 
+  // Đồng bộ buffer text cục bộ khi prop `value` đổi từ bên ngoài (vd reset form) — đây là
+  // 1 trong số ít trường hợp React khuyến nghị dùng effect ("Adjusting state when a prop
+  // changes"), không phải derived-state anti-pattern; state vẫn cần editable độc lập với
+  // prop trong lúc người dùng gõ nên không dùng key để remount.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { setText(String(value ?? 0)); }, [value]);
 
   const commit = (v) => {
@@ -916,12 +921,6 @@ function StandingsTable({ tournament, group }) {
     { title: "Điểm", dataIndex: "points", width: 55, align: "center",
       render: v => <b style={{ color: "#1677ff", fontSize: 15 }}>{v}</b> },
   ];
-
-  const mobileTitle = (r) => {
-    const name = r.team_name || r.full_name || "—";
-    const rankIcon = r.rank === 1 ? "🥇" : r.rank === 2 ? "🥈" : r.rank === 3 ? "🥉" : `#${r.rank}`;
-    return <span>{rankIcon} {name}</span>;
-  };
 
   return (
     <ResponsiveTable columns={cols} dataSource={rows} rowKey="participant_id" size="small"
@@ -1356,7 +1355,7 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated }) {
     const r = await tournamentsApi.get(tournament.id);
     setTournament(r.data);
     onUpdated && onUpdated(r.data);
-  }, [tournament.id]);
+  }, [tournament.id, onUpdated]);
 
   const handleStatusChange = async (newStatus) => {
     const labels = { active: "Đang diễn ra", completed: "Kết thúc", draft: "Nháp" };
@@ -1756,12 +1755,11 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated }) {
 // ── Trang chính ───────────────────────────────────────────
 export default function Tournament() {
   const [tournaments, setTournaments] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true); // true ngay từ đầu vì effect mount tự fetch
   const [creating, setCreating] = useState(false);
   const [detail, setDetail] = useState(null);
 
   const load = async () => {
-    setLoading(true);
     try { const r = await tournamentsApi.list(); setTournaments(r.data); }
     finally { setLoading(false); }
   };

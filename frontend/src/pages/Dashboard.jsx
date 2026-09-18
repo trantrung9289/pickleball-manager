@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from "react";
-import { Row, Col, Card, Statistic, Typography, Skeleton, Tag, Divider } from "antd";
+import { useEffect, useState } from "react";
+import { Row, Col, Card, Statistic, Typography, Skeleton, Tag } from "antd";
 import {
   TeamOutlined, RiseOutlined, FallOutlined, WalletOutlined,
   TrophyOutlined, CalendarOutlined,
@@ -32,7 +32,7 @@ export default function Dashboard() {
     );
     reportsApi.monthlyDetail(month, year).then((r) => setThisMonth(r.data));
     tournamentsApi.list().then((r) => setTournaments(r.data));
-  }, []);
+  }, [month, year]);
 
   if (!overview) return (
     <div>

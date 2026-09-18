@@ -1,4 +1,3 @@
-import React from "react";
 import { AppstoreOutlined } from "@ant-design/icons";
 
 export default function MobileBottomNav({ items, current, onSelect, onMore, moreActive }) {

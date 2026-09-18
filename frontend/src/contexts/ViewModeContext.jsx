@@ -1,8 +1,11 @@
-import React, { createContext, useState, useContext, useEffect } from 'react';
+import { createContext, useState, useContext, useEffect } from 'react';
 import { useResponsive } from '../hooks/useResponsive';
 
 const ViewModeContext = createContext();
 
+// useViewMode + ViewModeProvider cùng file là chủ đích (co-location); tách riêng cần
+// sửa lại import ở toàn bộ trang chỉ để tối ưu Fast Refresh.
+// eslint-disable-next-line react-refresh/only-export-components
 export const useViewMode = () => {
   const ctx = useContext(ViewModeContext);
   if (!ctx) throw new Error('useViewMode must be used within ViewModeProvider');

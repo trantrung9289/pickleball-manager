@@ -17,5 +17,18 @@ export default defineConfig([
       globals: globals.browser,
       parserOptions: { ecmaFeatures: { jsx: true } },
     },
+    rules: {
+      // Cho phép pattern `const { key1, key2, ...rest } = obj` để loại field trước khi
+      // gửi payload (dùng ở Tournament.jsx, Transactions.jsx) mà không cần cố dùng biến đó.
+      // varsIgnorePattern/argsIgnorePattern: tiền tố `_` báo hiệu "cố ý không dùng".
+      'no-unused-vars': ['error', {
+        varsIgnorePattern: '^_', argsIgnorePattern: '^_', ignoreRestSiblings: true,
+      }],
+    },
+  },
+  {
+    // File cấu hình Vite chạy trong Node, không phải trình duyệt
+    files: ['vite.config.js'],
+    languageOptions: { globals: globals.node },
   },
 ])

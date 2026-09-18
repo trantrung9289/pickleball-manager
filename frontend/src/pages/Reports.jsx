@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Typography, Row, Select, Tabs, Button, Space, Table, Tag, Modal,
   Form, Input, message, Tooltip, Badge,
@@ -30,13 +30,12 @@ const EXPIRY_OPTIONS = [
 
 function PublicLinksManager() {
   const [links, setLinks] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true); // true ngay từ đầu vì effect mount tự fetch
   const [modalOpen, setModalOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form] = Form.useForm();
 
   const load = async () => {
-    setLoading(true);
     try {
       const r = await reportLinksApi.list();
       setLinks(r.data);

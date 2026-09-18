@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { Card, Form, Input, Button, Typography, message, Alert, Checkbox, theme } from "antd";
 import {
   UserOutlined, LockOutlined, TrophyOutlined,
@@ -22,14 +22,16 @@ export default function Login({ onBack, adminMode = false, onSwitchMode }) {
 
   const [loading, setLoading]       = useState(false);
   const [wrongMode, setWrongMode]   = useState(false);
-  const [rememberUser, setRememberUser] = useState(false);
+  // Lazy init: đọc localStorage ngay lúc khởi tạo state thay vì set trong effect
+  const [rememberUser, setRememberUser] = useState(() => !!localStorage.getItem(KEY_USER));
   const [form] = Form.useForm();
 
-  // Pre-fill tên đăng nhập từ localStorage khi mở trang (không còn pre-fill mật khẩu)
+  // form.setFieldValue là API mệnh lệnh của antd (không phải React state) nên vẫn cần effect;
+  // form từ Form.useForm() ổn định giữa các lần render.
   useEffect(() => {
     const savedUser = localStorage.getItem(KEY_USER);
-    if (savedUser) { form.setFieldValue("username", savedUser); setRememberUser(true); }
-  }, []);
+    if (savedUser) form.setFieldValue("username", savedUser);
+  }, [form]);
 
   const handleLogin = async (values) => {
     setLoading(true);

@@ -1,13 +1,13 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import {
-  Table, Button, Space, Tag, Modal, Form, Input, Select,
+  Button, Space, Tag, Modal, Form, Input, Select,
   InputNumber, Switch, message, Typography, Row, Tabs, Statistic, Card, Col,
   Upload, Alert, Divider, Progress,
 } from "antd";
 import {
   PlusOutlined, EditOutlined, DeleteOutlined, SaveOutlined,
   RiseOutlined, FallOutlined, FileExcelOutlined, DownloadOutlined,
-  UploadOutlined, CheckCircleOutlined, CloseCircleOutlined, WarningOutlined,
+  UploadOutlined,
 } from "@ant-design/icons";
 import dayjs from "dayjs";
 import ResponsiveTable from "../components/ResponsiveTable";
@@ -41,7 +41,7 @@ export default function FeeTypes() {
     "r": () => load(),
     "ctrl+enter": () => modalOpen && handleSave(),
     "escape": () => modalOpen && handleCancel(),
-  }, [modalOpen]);
+  });
 
   const load = async () => {
     setLoading(true);

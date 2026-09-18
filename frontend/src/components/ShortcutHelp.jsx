@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { Modal, Table, Tag, Tooltip } from "antd";
 import { QuestionCircleOutlined } from "@ant-design/icons";
 import useHotkey from "../hooks/useHotkey";

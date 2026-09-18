@@ -1,14 +1,13 @@
-import React, { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 import {
-  Layout, Menu, Typography, theme, Row, Col, Table, Button, Modal,
+  Layout, Menu, Typography, theme, Row, Col, Button, Modal,
   Form, Input, Switch, Select, Space, Tag, Popconfirm, message,
-  Avatar, Dropdown, Tooltip, Checkbox, Divider, Alert,
+  Avatar, Dropdown, Tooltip, Checkbox, Alert,
 } from "antd";
 import {
   TeamOutlined, TrophyOutlined, LinkOutlined, LogoutOutlined,
   PlusOutlined, EditOutlined, DeleteOutlined, SettingOutlined,
   UserOutlined, ArrowLeftOutlined, CrownOutlined,
-  MinusCircleOutlined, EyeOutlined, FormOutlined, EditFilled, ScissorOutlined,
 } from "@ant-design/icons";
 import { adminApi } from "../api";
 import { useAuth } from "../context/AuthContext";
@@ -30,7 +29,7 @@ export default function AdminPortal({ onBack }) {
   const [users, setUsers] = useState([]);
   const [clubs, setClubs] = useState([]);
   const [memberships, setMemberships] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true); // true ngay từ đầu vì effect mount tự fetch
 
   const [userModal, setUserModal] = useState({ open: false, record: null });
   const [clubModal, setClubModal] = useState({ open: false, record: null });
@@ -45,7 +44,10 @@ export default function AdminPortal({ onBack }) {
   const loadMemberships = async () => { const { data } = await adminApi.listMemberships(); setMemberships(data); };
 
   useEffect(() => {
-    setLoading(true);
+    // loadUsers/loadClubs/loadMemberships setState sau await bên trong nhưng được gọi
+    // trực tiếp (không phải trong .then) nên lint coi là "đồng bộ"; giữ tách riêng để
+    // tái sử dụng sau khi tạo/sửa/xoá (refetch danh sách).
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     Promise.all([loadUsers(), loadClubs(), loadMemberships()]).finally(() => setLoading(false));
   }, []);
 
@@ -219,7 +221,7 @@ export default function AdminPortal({ onBack }) {
           return <Text type="secondary" style={{ fontSize: 12 }}>—</Text>;
         return (
           <div>
-            {managed.map((c, i) => (
+            {managed.map((c) => (
               <div key={c.id} style={{ fontSize: 12, lineHeight: "22px" }}>
                 <Tag color="cyan" style={{ fontSize: 11, marginRight: 4 }}>{c.id}</Tag>
                 {c.name}

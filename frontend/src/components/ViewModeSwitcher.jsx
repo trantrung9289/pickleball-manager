@@ -1,4 +1,3 @@
-import React from 'react';
 import { Button, Dropdown, Space } from 'antd';
 import { DesktopOutlined, MobileOutlined, SyncOutlined, DownOutlined } from '@ant-design/icons';
 import { useViewMode } from '../contexts/ViewModeContext';

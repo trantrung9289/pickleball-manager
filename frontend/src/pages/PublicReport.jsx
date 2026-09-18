@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Typography, Select, Tabs, Spin, Result, Card, Tag, Space, Row, Col, theme,
 } from "antd";
@@ -29,7 +29,7 @@ function PublicReportInner({ token }) {
   const { isMobileView } = useViewMode();
   const isDark = themeName === "ai-inspired";
 
-  const api = createPublicReportApi(token);
+  const api = useMemo(() => createPublicReportApi(token), [token]);
 
   const SECTIONS = [
     { key: "monthly-detail", label: "Thống kê tháng", navLabel: "Tháng", icon: <BarChartOutlined />, children: <MonthlyStats year={year} api={api} /> },
@@ -52,7 +52,7 @@ function PublicReportInner({ token }) {
         else setError("Không thể tải báo cáo. Vui lòng thử lại sau.");
       })
       .finally(() => setLoading(false));
-  }, [token]);
+  }, [token, api]);
 
   const currentYear = dayjs().year();
   const YEARS = Array.from({ length: 5 }, (_, i) => currentYear - 2 + i);
