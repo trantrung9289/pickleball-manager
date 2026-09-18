@@ -131,6 +131,7 @@ export const tournamentsApi = {
   replaceParticipant: (tid, pid, data) => api.patch(`/api/tournaments/${tid}/participants/${pid}`, data),
   addParticipant: (tid, data) => api.post(`/api/tournaments/${tid}/participants`, data),
   removeParticipant: (tid, pid) => api.delete(`/api/tournaments/${tid}/participants/${pid}`),
+  withdraw: (tid, pid) => api.post(`/api/tournaments/${tid}/participants/${pid}/withdraw`),
 };
 
 export const reportLinksApi = {

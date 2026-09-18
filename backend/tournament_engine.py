@@ -328,6 +328,9 @@ def compute_standings(
     """
     Tính bảng xếp hạng vòng bảng.
     Điểm: Thắng = 1, Thua = 0 (không tính hòa).
+    Trận walkover (đối thủ bỏ giải, is_walkover=True): vẫn tính thắng/thua/điểm xếp hạng như
+    thắng thật, nhưng KHÔNG cộng vào hiệu số bàn thắng/bàn thua — tránh 1 đội được lợi hiệu
+    số ảo khi so tie-break với các đội thi đấu thật.
     Tiebreaker: điểm → đối đầu trực tiếp giữa các đội bằng điểm (điểm, hiệu số, ghi được)
                 → hiệu số toàn giải → điểm ghi được toàn giải.
     """
@@ -350,12 +353,22 @@ def compute_standings(
         if m.get("status") != "completed":
             continue
         p1, p2 = m.get("p1_id"), m.get("p2_id")
-        s1 = int(m.get("score1") or 0)
-        s2 = int(m.get("score2") or 0)
         if p1 not in stats or p2 not in stats:
             continue
         stats[p1]["played"] += 1
         stats[p2]["played"] += 1
+
+        if m.get("is_walkover"):
+            # Đối thủ bỏ giải: tính thắng/thua/điểm, không tính hiệu số (không có tỉ số thật)
+            winner = m.get("winner_id")
+            if winner == p1:
+                stats[p1]["won"] += 1; stats[p1]["points"] += 1; stats[p2]["lost"] += 1
+            elif winner == p2:
+                stats[p2]["won"] += 1; stats[p2]["points"] += 1; stats[p1]["lost"] += 1
+            continue
+
+        s1 = int(m.get("score1") or 0)
+        s2 = int(m.get("score2") or 0)
         stats[p1]["goals_for"] += s1
         stats[p1]["goals_against"] += s2
         stats[p2]["goals_for"] += s2
@@ -377,7 +390,9 @@ def compute_standings(
     completed_matches = [m for m in matches if m.get("status") == "completed"]
 
     def head_to_head_key(pid: int, tied_ids: set) -> tuple:
-        """Hệ số đối đầu: chỉ tính các trận giữa những đội đang bằng điểm nhau."""
+        """Hệ số đối đầu: chỉ tính các trận giữa những đội đang bằng điểm nhau.
+        Trận walkover vẫn tính thắng/thua đối đầu, không cộng vào hiệu số/điểm ghi được
+        (nhất quán với compute_standings ở trên)."""
         h_points = h_for = h_against = 0
         for m in completed_matches:
             p1, p2 = m.get("p1_id"), m.get("p2_id")
@@ -385,6 +400,10 @@ def compute_standings(
                 continue
             other = p2 if p1 == pid else p1
             if other not in tied_ids:
+                continue
+            if m.get("is_walkover"):
+                if m.get("winner_id") == pid:
+                    h_points += 1
                 continue
             s1 = int(m.get("score1") or 0)
             s2 = int(m.get("score2") or 0)

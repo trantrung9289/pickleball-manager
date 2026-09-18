@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import func, extract, text
+from sqlalchemy import func, extract, text, or_
 from typing import Optional, List
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
@@ -95,6 +95,15 @@ def _run_migration():
         # Bảng tournaments — PIN nhập điểm qua trang public
         ("tournaments", "score_pin_hash", "VARCHAR(100)", None),
         ("tournaments", "public_scoring_enabled", "BOOLEAN DEFAULT 0 NOT NULL", None),
+        # Bảng tournaments — bật/tắt trận tranh giải 3 (knockout/combined)
+        ("tournaments", "third_place_enabled", "BOOLEAN DEFAULT 0 NOT NULL", None),
+        # Bảng tournament_participants — trạng thái bỏ giải giữa chừng
+        ("tournament_participants", "status", "VARCHAR(20) DEFAULT 'active' NOT NULL", None),
+        # Bảng tournament_matches — thắng do đối thủ bỏ giải (walkover) + định tuyến người thua
+        # sang trận tranh giải 3 (chỉ set trên 2 trận bán kết)
+        ("tournament_matches", "is_walkover", "BOOLEAN DEFAULT 0 NOT NULL", None),
+        ("tournament_matches", "loser_next_match_id", "INTEGER REFERENCES tournament_matches(id)", None),
+        ("tournament_matches", "loser_next_match_slot", "INTEGER", None),
     ]
 
     with engine.connect() as conn:
@@ -1906,6 +1915,7 @@ def public_tournament_standings(
     m_dicts = [{
         "p1_id": m.p1_id, "p2_id": m.p2_id,
         "score1": m.score1, "score2": m.score2, "status": m.status,
+        "winner_id": m.winner_id, "is_walkover": m.is_walkover,
     } for m in matches]
 
     return compute_standings(m_dicts, p_dicts, group=group)
@@ -1939,6 +1949,10 @@ def public_update_score(
 
     _check_scorable(t, match, data.score1, data.score2)
     _apply_match_score(db, match, data.score1, data.score2)
+    db.flush()
+    # Người thắng vừa được đưa vào vòng sau — nếu đối thủ ở đó đã bỏ giải từ trước, xử
+    # thắng ngay thay vì để trận đó treo chờ (bỏ giải xảy ra trước khi trận này có kết quả).
+    _advance_byes_and_walkovers(db, tid)
     db.commit(); db.refresh(match)
     return match
 
@@ -2157,6 +2171,7 @@ def create_tournament(
         num_groups=data.num_groups, description=data.description,
         score_pin_hash=hash_password(data.score_pin) if data.score_pin else None,
         public_scoring_enabled=data.public_scoring_enabled,
+        third_place_enabled=data.third_place_enabled,
     )
     db.add(t); db.flush()
 
@@ -2227,7 +2242,7 @@ def get_tournament(
     return t
 
 
-SETUP_FIELDS = {"format", "team_type", "pairing_mode", "rank_rules", "num_groups"}
+SETUP_FIELDS = {"format", "team_type", "pairing_mode", "rank_rules", "num_groups", "third_place_enabled"}
 ALLOWED_STATUS_TRANSITIONS = {
     models.TournamentStatus.draft: {models.TournamentStatus.active},
     models.TournamentStatus.active: {models.TournamentStatus.completed},
@@ -2398,41 +2413,113 @@ def _participant_rank(p: models.TournamentParticipant) -> str:
     return ""
 
 
-def _advance_byes(db: Session, tid: int) -> int:
-    """Trận knockout chỉ có 1 đội (bye) → tự hoàn thành, đưa đội đó lên vòng sau.
-    Lặp tới khi không còn thay đổi. Trả về số trận bye đã xử lý."""
+def _resolve_group_walkovers(db: Session, tid: int) -> int:
+    """Trận vòng bảng/vòng tròn còn pending mà ĐÚNG 1 bên đã bỏ giải → xử thắng cho bên
+    kia (is_walkover=True, không tính hiệu số khi xếp hạng — xem compute_standings)."""
+    pending = db.query(models.TournamentMatch).filter(
+        models.TournamentMatch.tournament_id == tid,
+        models.TournamentMatch.phase == "group",
+        models.TournamentMatch.status == models.MatchStatus.pending,
+    ).all()
+    handled = 0
+    for m in pending:
+        p1_out = m.p1 is not None and m.p1.status == models.ParticipantStatus.withdrawn
+        p2_out = m.p2 is not None and m.p2.status == models.ParticipantStatus.withdrawn
+        if p1_out == p2_out:
+            continue  # cả 2 cùng bỏ giải, hoặc cả 2 vẫn thi đấu — không tự xử
+        m.winner_id = m.p2_id if p1_out else m.p1_id
+        m.status = models.MatchStatus.completed
+        m.is_walkover = True
+        handled += 1
+    return handled
+
+
+def _advance_byes_and_walkovers(db: Session, tid: int) -> int:
+    """Trận knockout tự hoàn thành khi 1 bên trống (bye cấu trúc, số đội không phải luỹ
+    thừa 2) HOẶC đã bỏ giải (withdrawn) — bên còn lại tự động thắng/vào vòng sau, và nếu
+    trận đó có gắn loser_next_match_id (bán kết, khi bật tranh giải 3) thì người thua cũng
+    được định tuyến sang đó. Lặp tới khi không còn thay đổi vì bỏ giải có thể dây chuyền
+    qua nhiều vòng liên tiếp (người vừa thắng nhờ walkover lại gặp đối thủ cũng đã bỏ giải)."""
     handled = 0
     while True:
         changed = False
-        byes = db.query(models.TournamentMatch).filter(
+        pending = db.query(models.TournamentMatch).filter(
             models.TournamentMatch.tournament_id == tid,
             models.TournamentMatch.phase == "knockout",
             models.TournamentMatch.status == models.MatchStatus.pending,
-            models.TournamentMatch.next_match_id.isnot(None),
-            ((models.TournamentMatch.p1_id.is_(None)) != (models.TournamentMatch.p2_id.is_(None))),
         ).order_by(models.TournamentMatch.match_number).all()
-        for m in byes:
-            # Chỉ là bye thật khi không còn trận nào cấp slot còn trống này
-            empty_slot = 1 if m.p1_id is None else 2
-            feeder = db.query(models.TournamentMatch).filter(
-                models.TournamentMatch.next_match_id == m.id,
-                models.TournamentMatch.next_match_slot == empty_slot,
-            ).first()
-            if feeder is not None:
-                continue
-            m.winner_id = m.p1_id or m.p2_id
+        for m in pending:
+            p1_out = m.p1_id is None or (m.p1 is not None and m.p1.status == models.ParticipantStatus.withdrawn)
+            p2_out = m.p2_id is None or (m.p2 is not None and m.p2.status == models.ParticipantStatus.withdrawn)
+            if p1_out == p2_out:
+                continue  # cả 2 hợp lệ (trận thật) hoặc cả 2 out (chưa xử được) — bỏ qua
+            # Nếu là bye cấu trúc (1 bên chưa có ai, không phải do bỏ giải), chỉ xử khi
+            # chắc chắn không còn trận nào khác sắp cấp người vào ô trống đó — kể cả định
+            # tuyến qua đường THUA (loser_next_match_id, dùng cho trận tranh giải 3), không
+            # chỉ đường THẮNG (next_match_id), nếu không sẽ tưởng nhầm slot 2 của tranh giải 3
+            # là bye trong lúc bán kết còn lại chưa đấu xong.
+            if (m.p1_id is None) != (m.p2_id is None):
+                empty_slot = 1 if m.p1_id is None else 2
+                feeder = db.query(models.TournamentMatch).filter(
+                    or_(
+                        (models.TournamentMatch.next_match_id == m.id)
+                        & (models.TournamentMatch.next_match_slot == empty_slot),
+                        (models.TournamentMatch.loser_next_match_id == m.id)
+                        & (models.TournamentMatch.loser_next_match_slot == empty_slot),
+                    )
+                ).first()
+                if feeder is not None:
+                    continue
+            winner_id = m.p2_id if p1_out else m.p1_id
+            loser_id = m.p1_id if winner_id == m.p2_id else m.p2_id
+            m.winner_id = winner_id
             m.status = models.MatchStatus.completed
-            nxt = db.get(models.TournamentMatch, m.next_match_id)
+            if m.p1_id is not None and m.p2_id is not None:
+                m.is_walkover = True  # đủ 2 bên thật nhưng 1 bên bỏ giải — không phải bye
+            nxt = db.get(models.TournamentMatch, m.next_match_id) if m.next_match_id else None
             if nxt is not None:
-                if m.next_match_slot == 1:
-                    nxt.p1_id = m.winner_id
-                else:
-                    nxt.p2_id = m.winner_id
+                if m.next_match_slot == 1: nxt.p1_id = winner_id
+                else: nxt.p2_id = winner_id
+            if loser_id is not None and m.loser_next_match_id:
+                lm = db.get(models.TournamentMatch, m.loser_next_match_id)
+                if lm is not None:
+                    if m.loser_next_match_slot == 1: lm.p1_id = loser_id
+                    else: lm.p2_id = loser_id
             db.flush()
             handled += 1
             changed = True
         if not changed:
             return handled
+
+
+def _maybe_add_third_place(db: Session, tid: int, t: "models.Tournament") -> None:
+    """Nếu bật 'Tranh giải 3' và bracket vừa sinh có vòng bán kết thật (đúng 2 trận ở vòng
+    kế chung kết — cần ≥4 đội, không tính vòng chỉ có 1 trận chung kết duy nhất), tạo thêm
+    1 trận song song với chung kết và gắn loser_next_match_id trên 2 trận bán kết để người
+    thua tự động vào đây ngay khi bán kết có kết quả (qua _apply_match_score /
+    _advance_byes_and_walkovers). An toàn khi gọi lại nhiều lần (không tạo trùng)."""
+    if not t.third_place_enabled:
+        return
+    ko_matches = db.query(models.TournamentMatch).filter(
+        models.TournamentMatch.tournament_id == tid,
+        models.TournamentMatch.phase == "knockout",
+    ).all()
+    if not ko_matches:
+        return
+    if any(m.round_name == "Tranh giải 3" for m in ko_matches):
+        return
+    max_round = max(m.round_number for m in ko_matches)
+    semis = [m for m in ko_matches if m.round_number == max_round - 1]
+    if len(semis) != 2:
+        return  # bracket quá nhỏ (chỉ có chung kết, không có vòng bán kết) → không áp dụng được
+    max_match_number = max(m.match_number for m in ko_matches)
+    third = models.TournamentMatch(
+        tournament_id=tid, round_number=max_round, round_name="Tranh giải 3",
+        match_number=max_match_number + 1, phase="knockout", group_name=None,
+    )
+    db.add(third); db.flush()
+    semis[0].loser_next_match_id = third.id; semis[0].loser_next_match_slot = 1
+    semis[1].loser_next_match_id = third.id; semis[1].loser_next_match_slot = 2
 
 
 @app.post("/api/tournaments/{tid}/generate", response_model=schemas.TournamentOut)
@@ -2499,7 +2586,8 @@ def generate_tournament(
 
     _save_matches(db, tid, raw)
     db.flush()
-    _advance_byes(db, tid)
+    _maybe_add_third_place(db, tid, t)
+    _advance_byes_and_walkovers(db, tid)
     t.status = models.TournamentStatus.active
     db.commit(); db.refresh(t)
     return t
@@ -2555,6 +2643,7 @@ def start_knockout(
         m_dicts = [{
             "p1_id": m.p1_id, "p2_id": m.p2_id,
             "score1": m.score1, "score2": m.score2, "status": m.status,
+            "winner_id": m.winner_id, "is_walkover": m.is_walkover,
         } for m in gmatches]
         group_standings[gname] = compute_standings(m_dicts, p_dicts, group=None)
 
@@ -2586,28 +2675,42 @@ def start_knockout(
             match.next_match_slot = slot
 
     db.flush()
-    _advance_byes(db, tid)
+    _maybe_add_third_place(db, tid, t)
+    _advance_byes_and_walkovers(db, tid)
     db.commit(); db.refresh(t)
     return t
 
 
 def _reset_downstream(db: Session, match: models.TournamentMatch) -> None:
-    """Kết quả của `match` thay đổi → rút đội thắng cũ khỏi trận sau; nếu trận sau đã có
-    kết quả thì xoá kết quả đó và lan tiếp (đệ quy) để bracket luôn nhất quán."""
-    if not match.next_match_id:
-        return
-    nxt = db.get(models.TournamentMatch, match.next_match_id)
-    if nxt is None:
-        return
-    if match.next_match_slot == 1:
-        nxt.p1_id = None
-    else:
-        nxt.p2_id = None
-    if nxt.status == models.MatchStatus.completed or nxt.score1 is not None:
-        nxt.score1 = nxt.score2 = None
-        nxt.winner_id = None
-        nxt.status = models.MatchStatus.pending
-        _reset_downstream(db, nxt)
+    """Kết quả của `match` thay đổi → rút đội thắng cũ khỏi trận sau (và đội thua cũ khỏi
+    trận tranh giải 3 nếu có); nếu trận sau đã có kết quả thì xoá kết quả đó và lan tiếp
+    (đệ quy) để bracket luôn nhất quán."""
+    if match.next_match_id:
+        nxt = db.get(models.TournamentMatch, match.next_match_id)
+        if nxt is not None:
+            if match.next_match_slot == 1:
+                nxt.p1_id = None
+            else:
+                nxt.p2_id = None
+            if nxt.status == models.MatchStatus.completed or nxt.score1 is not None:
+                nxt.score1 = nxt.score2 = None
+                nxt.winner_id = None
+                nxt.status = models.MatchStatus.pending
+                nxt.is_walkover = False
+                _reset_downstream(db, nxt)
+    if match.loser_next_match_id:
+        lm = db.get(models.TournamentMatch, match.loser_next_match_id)
+        if lm is not None:
+            if match.loser_next_match_slot == 1:
+                lm.p1_id = None
+            else:
+                lm.p2_id = None
+            if lm.status == models.MatchStatus.completed or lm.score1 is not None:
+                lm.score1 = lm.score2 = None
+                lm.winner_id = None
+                lm.status = models.MatchStatus.pending
+                lm.is_walkover = False
+                # Trận tranh giải 3 là chặng cuối (không có next/loser tiếp theo) — không cần đệ quy
 
 
 def _check_scorable(t: models.Tournament, match: models.TournamentMatch, score1: int, score2: int) -> None:
@@ -2626,6 +2729,7 @@ def _apply_match_score(db: Session, match: models.TournamentMatch, score1: int, 
     match.score1 = score1
     match.score2 = score2
     match.status = models.MatchStatus.completed
+    match.is_walkover = False  # nhập tay có tỉ số thật — không còn là walkover
 
     # Xác định winner
     if score1 > score2:
@@ -2645,6 +2749,18 @@ def _apply_match_score(db: Session, match: models.TournamentMatch, score1: int, 
                 next_m.p1_id = match.winner_id
             else:
                 next_m.p2_id = match.winner_id
+
+    # Đưa người thua vào trận tranh giải 3 (chỉ set trên 2 trận bán kết khi bật tính năng)
+    if match.winner_id and match.loser_next_match_id:
+        loser_id = match.p2_id if match.winner_id == match.p1_id else match.p1_id
+        loser_m = db.query(models.TournamentMatch).filter(
+            models.TournamentMatch.id == match.loser_next_match_id
+        ).first()
+        if loser_m:
+            if match.loser_next_match_slot == 1:
+                loser_m.p1_id = loser_id
+            else:
+                loser_m.p2_id = loser_id
 
 
 @app.post("/api/tournaments/{tid}/matches/{mid}/score", response_model=schemas.MatchOut)
@@ -2666,6 +2782,10 @@ def update_score(
 
     _check_scorable(t, match, data.score1, data.score2)
     _apply_match_score(db, match, data.score1, data.score2)
+    db.flush()
+    # Người thắng vừa được đưa vào vòng sau — nếu đối thủ ở đó đã bỏ giải từ trước, xử
+    # thắng ngay thay vì để trận đó treo chờ (bỏ giải xảy ra trước khi trận này có kết quả).
+    _advance_byes_and_walkovers(db, tid)
     db.commit(); db.refresh(match)
     return match
 
@@ -2736,6 +2856,37 @@ def replace_participant_slot(
     return p
 
 
+@app.post("/api/tournaments/{tid}/participants/{pid}/withdraw", response_model=schemas.TournamentOut)
+def withdraw_participant(
+    tid: int, pid: int,
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    """Đánh dấu 1 đội bỏ giải giữa chừng (không đến thi đấu tiếp) — KHÔNG xoá, giữ nguyên
+    lịch sử các trận đã đấu. Các trận CHƯA đấu còn lại của đội này: đối thủ được xử thắng
+    (walkover) — tính thắng/thua/điểm xếp hạng như thắng thật, KHÔNG cộng vào hiệu số bàn
+    thắng/bàn thua (đã thống nhất với người dùng 2026-09-18). Không thể hoàn tác."""
+    perms.require_edit()
+    t = db.query(models.Tournament).filter(models.Tournament.id == tid, models.Tournament.club_id == perms.club_id).first()
+    if not t: raise HTTPException(404, "Không tìm thấy giải đấu")
+    if t.status != models.TournamentStatus.active:
+        raise HTTPException(400, "Chỉ có thể xử bỏ giải khi giải đấu đang diễn ra")
+    p = db.query(models.TournamentParticipant).filter(
+        models.TournamentParticipant.id == pid, models.TournamentParticipant.tournament_id == tid,
+    ).first()
+    if not p: raise HTTPException(404, "Không tìm thấy đội/người chơi")
+    if p.status == models.ParticipantStatus.withdrawn:
+        raise HTTPException(400, "Đội này đã được đánh dấu bỏ giải rồi")
+
+    p.status = models.ParticipantStatus.withdrawn
+    db.flush()
+    _resolve_group_walkovers(db, tid)
+    _advance_byes_and_walkovers(db, tid)
+
+    db.commit(); db.refresh(t)
+    return t
+
+
 @app.get("/api/tournaments/{tid}/standings")
 def get_standings(
     tid: int,
@@ -2769,6 +2920,7 @@ def get_standings(
     m_dicts = [{
         "p1_id": m.p1_id, "p2_id": m.p2_id,
         "score1": m.score1, "score2": m.score2, "status": m.status,
+        "winner_id": m.winner_id, "is_walkover": m.is_walkover,
     } for m in matches]
 
     return compute_standings(m_dicts, p_dicts, group=group)

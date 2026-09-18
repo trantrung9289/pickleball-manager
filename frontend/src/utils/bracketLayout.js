@@ -50,14 +50,19 @@ export function roundNameFromEnd(roundIndexFromEnd) {
  * feederIds = id 2 trận vòng trước dẫn thắng vào đây (qua next_match_id), null nếu là vòng đầu.
  */
 export function buildRealBracketNodes(matches) {
+  // Trận "Tranh giải 3" không đi theo đường THẮNG (next_match_id) như cây chính — nó được
+  // 2 trận bán kết trỏ tới qua loser_next_match_id (đường THUA riêng). Tách ra, vẽ như một
+  // ô độc lập cạnh "Vô địch" (xem findThirdPlaceMatch) thay vì lẫn vào hình học cây chính.
+  const main = matches.filter((m) => m.round_name !== "Tranh giải 3");
+
   const byRound = {};
-  matches.forEach((m) => {
+  main.forEach((m) => {
     (byRound[m.round_number] = byRound[m.round_number] || []).push(m);
   });
   const roundNumbers = Object.keys(byRound).map(Number).sort((a, b) => a - b);
 
   const feedersByNextId = {};
-  matches.forEach((m) => {
+  main.forEach((m) => {
     if (m.next_match_id) {
       (feedersByNextId[m.next_match_id] = feedersByNextId[m.next_match_id] || []).push(m);
     }
@@ -74,6 +79,14 @@ export function buildRealBracketNodes(matches) {
         match: m,
       }))
   );
+}
+
+/** Trận tranh giải 3 (nếu có) + 2 trận bán kết đã "thua" vào đây, để hiển thị tên/điểm. */
+export function findThirdPlaceMatch(matches) {
+  const third = matches.find((m) => m.round_name === "Tranh giải 3");
+  if (!third) return null;
+  const feeders = matches.filter((m) => m.loser_next_match_id === third.id);
+  return { match: third, feeders };
 }
 
 /**

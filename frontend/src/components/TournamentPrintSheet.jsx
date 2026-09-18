@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { tournamentsApi } from "../api";
 import {
   projectedQualifierLabels, buildProjectedBracketNodes, buildRealBracketNodes, computeBracketGeometry,
+  findThirdPlaceMatch,
 } from "../utils/bracketLayout";
 
 // Giống hệt teamLabel/teamRank trong Tournament.jsx và PublicTournamentTracker.jsx (đã trùng lặp
@@ -63,6 +64,21 @@ function MatchRows({ matches }) {
             )}
             {rMatches.map((m) => {
               const scored = m.status === "completed" && m.score1 != null;
+              if (m.is_walkover) {
+                const winnerLabel = teamLabel(m.winner_id === m.p1_id ? m.p1 : m.p2);
+                return (
+                  <div key={m.id} style={{
+                    display: "flex", alignItems: "center", gap: 10, padding: "5px 2px", borderBottom: "1px solid #e5e5e5",
+                  }}>
+                    <div style={{ width: 20, fontSize: 11, color: "#999", textAlign: "right" }}>{m.match_number}</div>
+                    <div style={{ flex: 1, fontSize: 13.5, textAlign: "right" }}>{teamLabel(m.p1)}</div>
+                    <div style={{ flex: "0 0 auto", fontSize: 11.5, color: "#b8860b", fontStyle: "italic", padding: "0 4px" }}>
+                      {winnerLabel} thắng — đối thủ bỏ giải
+                    </div>
+                    <div style={{ flex: 1, fontSize: 13.5 }}>{teamLabel(m.p2)}</div>
+                  </div>
+                );
+              }
               return (
                 <div key={m.id} style={{
                   display: "flex", alignItems: "center", gap: 10, padding: "5px 2px", borderBottom: "1px solid #e5e5e5",
@@ -215,6 +231,30 @@ function BracketDiagram({ roundsNodes, content, roundTitles }) {
   );
 }
 
+// Ô "Hạng 3" hiển thị riêng cạnh sơ đồ chính (trận này không nằm trong cây next_match_id)
+function ThirdPlaceBox({ thirdPlaceInfo }) {
+  if (!thirdPlaceInfo) return null;
+  const { match: m, feeders } = thirdPlaceInfo;
+  const nameFor = (side) => {
+    const pid = side === 1 ? m.p1_id : m.p2_id;
+    if (pid) return teamLabel(side === 1 ? m.p1 : m.p2);
+    const feeder = feeders.find((f) => f.loser_next_match_slot === side);
+    return feeder ? `Thua ${feeder.round_name} #${feeder.match_number}` : null;
+  };
+  const scored = m.status === "completed" && m.score1 != null;
+  return (
+    <div style={{ marginTop: 16 }}>
+      <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase", color: "#555", marginBottom: 4 }}>
+        Tranh giải 3
+      </div>
+      <div style={{ width: BOX_W, border: "1.5px solid #333", borderRadius: 4, background: "#fff" }}>
+        <Slot label={nameFor(1)} score={m.score1} scored={scored} />
+        <Slot label={nameFor(2)} score={m.score2} scored={scored} last />
+      </div>
+    </div>
+  );
+}
+
 function Slot({ label, score, scored, last }) {
   return (
     <div style={{
@@ -282,10 +322,12 @@ function RoundRobinSheet({ tournament, standings }) {
 function KnockoutSheet({ tournament }) {
   const roundsNodes = buildRealBracketNodes(tournament.matches);
   const roundTitles = roundsNodes.map((r) => r[0]?.match?.round_name || `Vòng`);
+  const thirdPlaceInfo = findThirdPlaceMatch(tournament.matches);
   return (
     <div className="print-page print-landscape">
       <SheetHeader tournament={tournament} subtitle="SƠ ĐỒ ĐẤU LOẠI TRỰC TIẾP" />
       <BracketDiagram roundsNodes={roundsNodes} content={realBracketContent} roundTitles={roundTitles} />
+      <ThirdPlaceBox thirdPlaceInfo={thirdPlaceInfo} />
       <div className="print-footnote">
         Trận có 1 đội trống ("bye") tự động miễn vào vòng sau, không cần ghi điểm.
       </div>
@@ -303,7 +345,13 @@ function CombinedSheet({ tournament, standingsByGroup }) {
   if (hasRealKO) {
     const roundsNodes = buildRealBracketNodes(koMatches);
     const roundTitles = roundsNodes.map((r) => r[0]?.match?.round_name || "Vòng");
-    bracketEl = <BracketDiagram roundsNodes={roundsNodes} content={realBracketContent} roundTitles={roundTitles} />;
+    const thirdPlaceInfo = findThirdPlaceMatch(koMatches);
+    bracketEl = (
+      <>
+        <BracketDiagram roundsNodes={roundsNodes} content={realBracketContent} roundTitles={roundTitles} />
+        <ThirdPlaceBox thirdPlaceInfo={thirdPlaceInfo} />
+      </>
+    );
   } else {
     const labels = projectedQualifierLabels(groups);
     const roundsNodes = buildProjectedBracketNodes(labels);

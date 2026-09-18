@@ -267,6 +267,7 @@ class TournamentCreate(BaseModel):
     teams: Optional[List[Dict]] = None       # doubles: [{member_id?, player_id?, partner_member_id?, partner_player_id?, team_name?}]
     score_pin: Optional[str] = None          # PIN 4 số — cho phép nhập điểm qua public
     public_scoring_enabled: bool = False
+    third_place_enabled: bool = False        # có trận tranh giải 3 không (knockout/combined, cần ≥4 đội)
 
 
 class TournamentUpdate(BaseModel):
@@ -278,6 +279,7 @@ class TournamentUpdate(BaseModel):
     pairing_mode: Optional[str] = None
     rank_rules: Optional[List[Dict[str, str]]] = None
     num_groups: Optional[int] = Field(default=None, ge=1, le=16)
+    third_place_enabled: Optional[bool] = None
 
 
 class ParticipantSlotUpdate(BaseModel):
@@ -304,6 +306,7 @@ class ParticipantOut(BaseModel):
     team_name: Optional[str] = None
     seed: Optional[int] = None
     group_name: Optional[str] = None
+    status: str = "active"   # active | withdrawn (bỏ giải)
     member: Optional[MemberOut] = None
     partner: Optional[MemberOut] = None
     player: Optional[PlayerOut] = None
@@ -326,8 +329,10 @@ class MatchOut(BaseModel):
     score2: Optional[int] = None
     winner_id: Optional[int] = None
     status: str
+    is_walkover: bool = False   # thắng do đối thủ bỏ giải — không có tỉ số thật
     next_match_id: Optional[int] = None
     next_match_slot: Optional[int] = None
+    loser_next_match_id: Optional[int] = None
     p1: Optional[ParticipantOut] = None
     p2: Optional[ParticipantOut] = None
     winner: Optional[ParticipantOut] = None
@@ -348,6 +353,7 @@ class TournamentOut(BaseModel):
     description: Optional[str] = None
     created_at: Optional[datetime] = None
     public_scoring_enabled: bool = False
+    third_place_enabled: bool = False
     has_score_pin: bool = False
     participants: List[ParticipantOut] = []
     matches: List[MatchOut] = []
@@ -384,6 +390,7 @@ class PublicParticipantOut(BaseModel):
     team_name: Optional[str] = None
     seed: Optional[int] = None
     group_name: Optional[str] = None
+    status: str = "active"
     member: Optional[PublicPersonOut] = None
     partner: Optional[PublicPersonOut] = None
     player: Optional[PublicPlayerOut] = None
@@ -406,6 +413,7 @@ class PublicMatchOut(BaseModel):
     score2: Optional[int] = None
     winner_id: Optional[int] = None
     status: str
+    is_walkover: bool = False
     next_match_id: Optional[int] = None
     next_match_slot: Optional[int] = None
     p1: Optional[PublicParticipantOut] = None
@@ -426,6 +434,7 @@ class PublicTournamentOut(BaseModel):
     description: Optional[str] = None
     created_at: Optional[datetime] = None
     public_scoring_enabled: bool = False
+    third_place_enabled: bool = False
     has_score_pin: bool = False
     participants: List[PublicParticipantOut] = []
     matches: List[PublicMatchOut] = []

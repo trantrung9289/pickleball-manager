@@ -63,6 +63,7 @@ function CreateWizard({ onCreated, onClose }) {
 
   // Bước 3: ghép đội
   const [teamType, setTeamType] = useState("singles");
+  const [thirdPlaceEnabled, setThirdPlaceEnabled] = useState(false);
   // doubles – method: "manual" | "by_rank"
   const [doubleMethod, setDoubleMethod] = useState("manual");
   // doubles – rank rules: [{rank1, rank2}] for auto-pairing
@@ -220,6 +221,7 @@ function CreateWizard({ onCreated, onClose }) {
         pairing_mode: "random",
         public_scoring_enabled: pinEnabled,
         score_pin: pinEnabled ? pinValue : null,
+        third_place_enabled: (vals.format === "knockout" || vals.format === "combined") ? thirdPlaceEnabled : false,
       };
       if (teamType === "doubles") {
         // Gửi teams không kèm _key1/_key2 (internal tracking only)
@@ -312,6 +314,13 @@ function CreateWizard({ onCreated, onClose }) {
               </Col>
             </Row>
           </Form.Item>
+          {(format === "knockout" || format === "combined") && (
+            <Form.Item label=" " colon={false}>
+              <Checkbox checked={thirdPlaceEnabled} onChange={(e) => setThirdPlaceEnabled(e.target.checked)}>
+                Có trận tranh giải 3 <Text type="secondary" style={{ fontSize: 12 }}>(2 người thua bán kết đấu với nhau — cần ít nhất 4 đội)</Text>
+              </Checkbox>
+            </Form.Item>
+          )}
           <Form.Item name="description" label="Mô tả (không bắt buộc)">
             <Input.TextArea rows={2} />
           </Form.Item>
@@ -667,6 +676,12 @@ function CreateWizard({ onCreated, onClose }) {
                       <div style={{ fontWeight: 600 }}>{vals.num_groups || 2} bảng</div>
                     </Col>
                   )}
+                  {(vals.format === "knockout" || vals.format === "combined") && thirdPlaceEnabled && (
+                    <Col span={12} style={{ marginTop: 12 }}>
+                      <div style={{ marginBottom: 8 }}><Text type="secondary">Tranh giải 3</Text></div>
+                      <Tag color="gold">Có</Tag>
+                    </Col>
+                  )}
                 </Row>
               </Card>
             );
@@ -805,28 +820,39 @@ function ScoreModal({ match, tournament, onSaved, onClose }) {
 // ── Bracket knockout ─────────────────────────────────────
 function KnockoutBracket({ matches }) {
   const { isMobileView } = useViewMode();
-  const rounds = [...new Set(matches.map(m => m.round_number))].sort((a, b) => a - b);
+  // Trận "Tranh giải 3" đi theo đường thua (loser_next_match_id), không phải cây thắng chính —
+  // tách riêng để không lẫn vào cùng cột với Chung kết (cả hai có cùng round_number).
+  const thirdPlace = matches.find(m => m.round_name === "Tranh giải 3");
+  const mainMatches = thirdPlace ? matches.filter(m => m.id !== thirdPlace.id) : matches;
+  const rounds = [...new Set(mainMatches.map(m => m.round_number))].sort((a, b) => a - b);
 
   // Mobile: Collapse theo từng vòng (dọc)
   if (isMobileView) {
     return (
-      <Collapse
-        defaultActiveKey={rounds.map(String)}
-        items={rounds.map(r => {
-          const rMatches = matches.filter(m => m.round_number === r);
-          const rName = rMatches[0]?.round_name || `Vòng ${r}`;
-          const done = rMatches.filter(m => m.status === "completed").length;
-          return {
-            key: String(r),
-            label: <Text strong style={{ color: "#1677ff" }}>{rName} ({done}/{rMatches.length})</Text>,
-            children: (
-              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                {rMatches.map(m => <BracketCard key={m.id} match={m} />)}
-              </div>
-            ),
-          };
-        })}
-      />
+      <>
+        <Collapse
+          defaultActiveKey={rounds.map(String)}
+          items={rounds.map(r => {
+            const rMatches = mainMatches.filter(m => m.round_number === r);
+            const rName = rMatches[0]?.round_name || `Vòng ${r}`;
+            const done = rMatches.filter(m => m.status === "completed").length;
+            return {
+              key: String(r),
+              label: <Text strong style={{ color: "#1677ff" }}>{rName} ({done}/{rMatches.length})</Text>,
+              children: (
+                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                  {rMatches.map(m => <BracketCard key={m.id} match={m} />)}
+                </div>
+              ),
+            };
+          })}
+        />
+        {thirdPlace && (
+          <Card size="small" style={{ marginTop: 12 }} title={<Text strong style={{ color: "#d48806" }}>Tranh giải 3</Text>}>
+            <BracketCard match={thirdPlace} />
+          </Card>
+        )}
+      </>
     );
   }
 
@@ -834,9 +860,10 @@ function KnockoutBracket({ matches }) {
   return (
     <div style={{ overflowX: "auto" }}>
       <div style={{ display: "flex", gap: 24, minWidth: rounds.length * 220 }}>
-        {rounds.map(r => {
-          const rMatches = matches.filter(m => m.round_number === r);
+        {rounds.map((r, i) => {
+          const rMatches = mainMatches.filter(m => m.round_number === r);
           const rName = rMatches[0]?.round_name || `Vòng ${r}`;
+          const isFinalRound = i === rounds.length - 1;
           return (
             <div key={r} style={{ flex: "0 0 200px" }}>
               <Text strong style={{ display: "block", textAlign: "center", marginBottom: 8, color: "#1677ff" }}>
@@ -845,6 +872,14 @@ function KnockoutBracket({ matches }) {
               <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
                 {rMatches.map(m => <BracketCard key={m.id} match={m} />)}
               </div>
+              {isFinalRound && thirdPlace && (
+                <div style={{ marginTop: 24 }}>
+                  <Text strong style={{ display: "block", textAlign: "center", marginBottom: 8, color: "#d48806" }}>
+                    Tranh giải 3
+                  </Text>
+                  <BracketCard match={thirdPlace} />
+                </div>
+              )}
             </div>
           );
         })}
@@ -855,20 +890,28 @@ function KnockoutBracket({ matches }) {
 
 // ── Lịch thi đấu tách theo vòng ───────────────────────────
 function RoundedSchedule({ matches, columns, mobileProps }) {
-  const rounds = [...new Set(matches.map(m => m.round_number))].sort((a, b) => a - b);
+  // Tách trận "Tranh giải 3" ra khỏi vòng cuối — nó dùng chung round_number với Chung kết
+  // (do cùng là vòng cuối cùng của bracket) nên cần nhóm riêng để không bị gộp nhãn sai.
+  const thirdPlace = matches.find(m => m.round_name === "Tranh giải 3");
+  const mainMatches = thirdPlace ? matches.filter(m => m.id !== thirdPlace.id) : matches;
+  const rounds = [...new Set(mainMatches.map(m => m.round_number))].sort((a, b) => a - b);
   const roundCols = columns.filter(c => c.dataIndex !== "round_name");
+  const groups = rounds.map(r => ({
+    key: String(r),
+    rMatches: mainMatches.filter(m => m.round_number === r),
+  }));
+  if (thirdPlace) groups.push({ key: "third-place", rMatches: [thirdPlace] });
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      {rounds.map(r => {
-        const rMatches = matches.filter(m => m.round_number === r);
-        const rName = rMatches[0]?.round_name || `Vòng ${r}`;
+      {groups.map(({ key, rMatches }) => {
+        const rName = rMatches[0]?.round_name || `Vòng ${key}`;
         const done = rMatches.filter(m => m.status === "completed").length;
         return (
           <Card
-            key={r}
+            key={key}
             size="small"
-            title={<Text strong style={{ color: "#1677ff" }}>{rName}</Text>}
+            title={<Text strong style={{ color: key === "third-place" ? "#d48806" : "#1677ff" }}>{rName}</Text>}
             extra={<Tag color={done === rMatches.length ? "success" : "default"}>{done}/{rMatches.length}</Tag>}
           >
             <ResponsiveTable
@@ -889,6 +932,11 @@ function BracketCard({ match }) {
   const p2 = teamLabel(match?.p2) || (match?.p2_id ? "?" : "BYE");
   const done = match.status === "completed";
   const w = match.winner_id;
+  const cell = (score) => {
+    if (!done) return "–";
+    if (match.is_walkover) return <Text style={{ fontSize: 11, color: "#d48806" }}>XT</Text>;
+    return score;
+  };
 
   return (
     <Card size="small" style={{ borderRadius: 8, borderColor: done ? "#52c41a" : "#d9d9d9" }}>
@@ -897,7 +945,7 @@ function BracketCard({ match }) {
           {p1}
         </Text>
         <Text style={{ minWidth: 24, textAlign: "center", fontWeight: 700 }}>
-          {done ? match.score1 : "–"}
+          {cell(match.score1)}
         </Text>
       </div>
       <Divider style={{ margin: "4px 0" }} />
@@ -906,7 +954,7 @@ function BracketCard({ match }) {
           {p2}
         </Text>
         <Text style={{ minWidth: 24, textAlign: "center", fontWeight: 700 }}>
-          {done ? match.score2 : "–"}
+          {cell(match.score2)}
         </Text>
       </div>
     </Card>
@@ -1211,6 +1259,7 @@ function EditSetupModal({ tournament, onSaved, onClose }) {
       await tournamentsApi.update(tournament.id, {
         format: vals.format,
         num_groups: vals.format === "combined" ? (vals.num_groups || 2) : undefined,
+        third_place_enabled: (vals.format === "knockout" || vals.format === "combined") ? !!vals.third_place_enabled : false,
       });
       message.success("Đã lưu cấu hình");
       onSaved();
@@ -1222,7 +1271,7 @@ function EditSetupModal({ tournament, onSaved, onClose }) {
   return (
     <Modal title="Sửa cài đặt giải đấu" open onCancel={onClose} width={680} footer={<Button onClick={onClose}>Đóng</Button>}>
       <Divider orientation="left" style={{ marginTop: 0 }}>Thể thức</Divider>
-      <Form form={form} layout="inline" initialValues={{ format: tournament.format, num_groups: tournament.num_groups }}>
+      <Form form={form} layout="inline" initialValues={{ format: tournament.format, num_groups: tournament.num_groups, third_place_enabled: tournament.third_place_enabled }}>
         <Form.Item name="format" label="Thể thức">
           <Select style={{ width: 220 }} onChange={setFormat}>
             {Object.entries(FORMAT_MAP).map(([k, v]) => (
@@ -1233,6 +1282,11 @@ function EditSetupModal({ tournament, onSaved, onClose }) {
         {format === "combined" && (
           <Form.Item name="num_groups" label="Số bảng">
             <InputNumber min={2} max={8} style={{ width: 100 }} />
+          </Form.Item>
+        )}
+        {(format === "knockout" || format === "combined") && (
+          <Form.Item name="third_place_enabled" valuePropName="checked" style={{ marginBottom: 12 }}>
+            <Checkbox>Có trận tranh giải 3</Checkbox>
           </Form.Item>
         )}
         <Form.Item>
@@ -1438,6 +1492,28 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated }) {
     } finally { setStartingKO(false); }
   };
 
+  const handleWithdraw = async (p) => {
+    const ok = await confirm({
+      title: "Xử bỏ giải?",
+      content: (
+        <div>
+          <b>{p.team_name || teamLabel(p)}</b> sẽ bị đánh dấu bỏ giải — không thể hoàn tác.
+          Các trận chưa đấu còn lại của đội này sẽ tự động xử thắng cho đối thủ
+          (không tính vào hiệu số). Các trận đã đấu giữ nguyên kết quả.
+        </div>
+      ),
+      okButtonProps: { danger: true }, okText: "Xử bỏ giải",
+    });
+    if (!ok) return;
+    try {
+      await tournamentsApi.withdraw(tournament.id, p.id);
+      await reload();
+      message.success("Đã xử bỏ giải");
+    } catch (e) {
+      message.error(e?.response?.data?.detail || "Không thể xử bỏ giải");
+    }
+  };
+
   const handleEditInfo = async () => {
     const vals = await editForm.validateFields();
     await tournamentsApi.update(tournament.id, vals);
@@ -1469,9 +1545,12 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated }) {
     },
     {
       title: "Tỉ số", align: "center", width: 90,
-      render: (_, m) => m.status === "completed"
-        ? <b style={{ fontSize: 16 }}>{m.score1} – {m.score2}</b>
-        : <Tag>Chưa đấu</Tag>,
+      render: (_, m) => {
+        if (m.is_walkover) return <Tag color="gold">Xử thắng</Tag>;
+        return m.status === "completed"
+          ? <b style={{ fontSize: 16 }}>{m.score1} – {m.score2}</b>
+          : <Tag>Chưa đấu</Tag>;
+      },
     },
     {
       title: "Đội 2",
@@ -1507,10 +1586,15 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated }) {
     mobileTitle: (m) => {
       const p1 = teamLabel(m.p1) || "BYE";
       const p2 = teamLabel(m.p2) || "BYE";
-      const score = m.status === "completed"
-        ? <b style={{ color: "#1677ff" }}> {m.score1}–{m.score2}</b>
-        : <Tag style={{ marginLeft: 4 }}>Chưa đấu</Tag>;
-      return <span>{p1} vs {p2}{score}</span>;
+      let score;
+      if (m.is_walkover) {
+        score = <Tag color="gold" style={{ marginLeft: 4 }}>Xử thắng</Tag>;
+      } else if (m.status === "completed") {
+        score = <b style={{ color: "#1677ff" }}> {m.score1}–{m.score2}</b>;
+      } else {
+        score = <Tag style={{ marginLeft: 4 }}>Chưa đấu</Tag>;
+      }
+      return <span>{p1} vs {p2} {score}</span>;
     },
     mobileHideColumns: ["Đội 1", "Tỉ số", "Đội 2", "Kết quả"],
   };
@@ -1523,12 +1607,24 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated }) {
     children: (
       <ResponsiveTable
         columns={[
-          { title: "Đội", dataIndex: "team_name", render: (v, r) => v || teamLabel(r) },
+          {
+            title: "Đội", dataIndex: "team_name",
+            render: (v, r) => (
+              <span style={r.status === "withdrawn" ? { textDecoration: "line-through", color: "#999" } : undefined}>
+                {v || teamLabel(r)}
+              </span>
+            ),
+          },
           { title: "Bảng", dataIndex: "group_name", width: 70, render: v => v ? <Tag>{v}</Tag> : "—" },
+          {
+            title: "Trạng thái", dataIndex: "status", width: 110,
+            render: v => v === "withdrawn" ? <Tag color="error">Đã bỏ giải</Tag> : <Tag color="success">Đang thi đấu</Tag>,
+          },
           {
             title: "", width: 130, align: "right",
             render: (_, r) => (
-              <Button size="small" icon={<UserAddOutlined />} onClick={() => setReplaceTarget({ participant: r, slot: "main" })}>
+              <Button size="small" icon={<UserAddOutlined />} disabled={r.status === "withdrawn"}
+                onClick={() => setReplaceTarget({ participant: r, slot: "main" })}>
                 Thay {r.member?.full_name || r.player?.name || "người 1"}
               </Button>
             ),
@@ -1536,16 +1632,30 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated }) {
           ...(tournament.team_type === "doubles" ? [{
             title: "", width: 130, align: "right",
             render: (_, r) => (
-              <Button size="small" icon={<UserAddOutlined />} onClick={() => setReplaceTarget({ participant: r, slot: "partner" })}>
+              <Button size="small" icon={<UserAddOutlined />} disabled={r.status === "withdrawn"}
+                onClick={() => setReplaceTarget({ participant: r, slot: "partner" })}>
                 Thay {r.partner?.full_name || r.partner_player?.name || "người 2"}
               </Button>
             ),
           }] : []),
+          {
+            title: "", width: 110, align: "right",
+            render: (_, r) => (
+              tournament.status === "active" && r.status !== "withdrawn" && (
+                <Button size="small" danger onClick={() => handleWithdraw(r)}>Bỏ giải</Button>
+              )
+            ),
+          },
         ]}
         dataSource={tournament.participants}
         rowKey="id" size="small" pagination={false}
-        mobileTitle={(r) => <span>{r.team_name || teamLabel(r)} {r.group_name && <Tag style={{ marginLeft: 6 }}>{r.group_name}</Tag>}</span>}
-        mobileHideColumns={["Đội", "Bảng"]}
+        mobileTitle={(r) => (
+          <span style={r.status === "withdrawn" ? { textDecoration: "line-through", color: "#999" } : undefined}>
+            {r.team_name || teamLabel(r)} {r.group_name && <Tag style={{ marginLeft: 6 }}>{r.group_name}</Tag>}
+            {r.status === "withdrawn" && <Tag color="error" style={{ marginLeft: 6 }}>Bỏ giải</Tag>}
+          </span>
+        )}
+        mobileHideColumns={["Đội", "Bảng", "Trạng thái"]}
       />
     ),
   });

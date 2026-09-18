@@ -41,6 +41,11 @@ class MatchStatus(str, enum.Enum):
     completed = "completed"
 
 
+class ParticipantStatus(str, enum.Enum):
+    active = "active"
+    withdrawn = "withdrawn"   # bỏ giải giữa chừng — giữ lại lịch sử các trận đã đấu
+
+
 class Member(Base):
     __tablename__ = "members"
 
@@ -199,6 +204,7 @@ class Tournament(Base):
     created_at = Column(DateTime, server_default=func.now())
     score_pin_hash = Column(String(100), nullable=True)          # hash mã PIN 4 số — cho phép nhập điểm qua public
     public_scoring_enabled = Column(Boolean, default=False)      # công tắc bật/tắt, độc lập với việc đã có PIN
+    third_place_enabled = Column(Boolean, default=False)         # có trận tranh giải 3 (knockout/combined) không
 
     participants = relationship("TournamentParticipant", back_populates="tournament", cascade="all, delete-orphan")
     matches = relationship("TournamentMatch", back_populates="tournament", cascade="all, delete-orphan")
@@ -223,6 +229,7 @@ class TournamentParticipant(Base):
     team_name         = Column(String(200), nullable=True)
     seed              = Column(Integer, nullable=True)
     group_name        = Column(String(10), nullable=True)
+    status            = Column(Enum(ParticipantStatus), default=ParticipantStatus.active)
 
     tournament = relationship("Tournament", back_populates="participants")
     member     = relationship("Member", foreign_keys=[member_id], back_populates="tournament_participations")
@@ -266,10 +273,14 @@ class TournamentMatch(Base):
     score2 = Column(Integer, nullable=True)
     winner_id = Column(Integer, ForeignKey("tournament_participants.id"), nullable=True)
     status = Column(Enum(MatchStatus), default=MatchStatus.pending)
+    is_walkover = Column(Boolean, default=False)  # thắng do đối thủ bỏ giải — không tính hiệu số khi xếp hạng
 
-    # bracket linkage for knockout
+    # bracket linkage for knockout: người THẮNG đi đâu
     next_match_id = Column(Integer, ForeignKey("tournament_matches.id"), nullable=True)
     next_match_slot = Column(Integer, nullable=True)  # 1 or 2
+    # người THUA đi đâu — chỉ set trên 2 trận bán kết khi bật tranh giải 3
+    loser_next_match_id = Column(Integer, ForeignKey("tournament_matches.id"), nullable=True)
+    loser_next_match_slot = Column(Integer, nullable=True)  # 1 or 2
 
     tournament = relationship("Tournament", back_populates="matches")
     p1 = relationship("TournamentParticipant", foreign_keys=[p1_id])
