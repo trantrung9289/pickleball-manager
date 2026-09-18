@@ -525,7 +525,8 @@ export function MemberContributions({ year, api }) {
 }
 
 // ── Tab 4: Theo dõi phí thành viên ──────────────────────────────────────────
-export function FeeStatusTracker({ year, api }) {
+// showPhone=false trên trang public: backend không trả SĐT, UI cũng không hiện cột/CSV
+export function FeeStatusTracker({ year, api, showPhone = true }) {
   const [month, setMonth] = useState(dayjs().month() + 1);
   const [feeTypes, setFeeTypes] = useState([]);
   const [selectedFeeType, setSelectedFeeType] = useState(null);
@@ -559,9 +560,9 @@ export function FeeStatusTracker({ year, api }) {
   const exportCSV = () => {
     if (!data) return;
     const ftName = selectedFeeTypeObj?.name || "phi";
-    const headers = ["Mã TV,Họ và tên,SĐT,Hạng,Trạng thái"];
+    const headers = [showPhone ? "Mã TV,Họ và tên,SĐT,Hạng,Trạng thái" : "Mã TV,Họ và tên,Hạng,Trạng thái"];
     const rows = data.members.map(m => [
-      m.member_code, `"${m.full_name}"`, m.phone || "", m.rank || "",
+      m.member_code, `"${m.full_name}"`, ...(showPhone ? [m.phone || ""] : []), m.rank || "",
       m.paid ? paidLabel : unpaidLabel,
     ].join(","));
     const blob = new Blob(["﻿" + [headers, ...rows].join("\n")], { type: "text/csv;charset=utf-8;" });
@@ -594,10 +595,10 @@ export function FeeStatusTracker({ year, api }) {
       title: "Họ và tên", dataIndex: "full_name",
       sorter: (a, b) => a.full_name.localeCompare(b.full_name),
     },
-    {
+    ...(showPhone ? [{
       title: "SĐT", dataIndex: "phone", width: 130,
       sorter: (a, b) => (a.phone || "").localeCompare(b.phone || ""),
-    },
+    }] : []),
     {
       title: "Hạng", dataIndex: "rank", width: 90,
       render: (v) => v ? <Tag color="purple">{v}</Tag> : "—",

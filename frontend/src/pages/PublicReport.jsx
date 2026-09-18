@@ -35,7 +35,7 @@ function PublicReportInner({ token }) {
     { key: "monthly-detail", label: "Thống kê tháng", navLabel: "Tháng", icon: <BarChartOutlined />, children: <MonthlyStats year={year} api={api} /> },
     { key: "yearly", label: "Tổng hợp năm", navLabel: "Năm", icon: <CalendarOutlined />, children: <YearlySummary year={year} api={api} /> },
     { key: "contributions", label: "Đóng góp thành viên", navLabel: "Đóng góp", icon: <TeamOutlined />, children: <MemberContributions year={year} api={api} /> },
-    { key: "fee-status", label: "Theo dõi phí", navLabel: "Phí", icon: <DollarOutlined />, children: <FeeStatusTracker year={year} api={api} /> },
+    { key: "fee-status", label: "Theo dõi phí", navLabel: "Phí", icon: <DollarOutlined />, children: <FeeStatusTracker year={year} api={api} showPhone={false} /> },
     { key: "tournaments", label: "Theo dõi giải đấu", navLabel: "Giải đấu", icon: <TrophyOutlined />, children: <PublicTournamentTracker api={api} /> },
   ];
 

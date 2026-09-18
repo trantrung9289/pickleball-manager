@@ -356,6 +356,84 @@ class TournamentOut(BaseModel):
         from_attributes = True
 
 
+# ── Public (không đăng nhập): chỉ tên + hạng, KHÔNG có SĐT/email/địa chỉ/ghi chú ──
+class PublicPersonOut(BaseModel):
+    id: int
+    full_name: str
+    rank: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class PublicPlayerOut(BaseModel):
+    id: int
+    name: str
+    rank: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class PublicParticipantOut(BaseModel):
+    id: int
+    member_id: Optional[int] = None
+    player_id: Optional[int] = None
+    partner_member_id: Optional[int] = None
+    partner_player_id: Optional[int] = None
+    team_name: Optional[str] = None
+    seed: Optional[int] = None
+    group_name: Optional[str] = None
+    member: Optional[PublicPersonOut] = None
+    partner: Optional[PublicPersonOut] = None
+    player: Optional[PublicPlayerOut] = None
+    partner_player: Optional[PublicPlayerOut] = None
+
+    class Config:
+        from_attributes = True
+
+
+class PublicMatchOut(BaseModel):
+    id: int
+    round_number: int
+    round_name: Optional[str] = None
+    match_number: int
+    group_name: Optional[str] = None
+    phase: str
+    p1_id: Optional[int] = None
+    p2_id: Optional[int] = None
+    score1: Optional[int] = None
+    score2: Optional[int] = None
+    winner_id: Optional[int] = None
+    status: str
+    next_match_id: Optional[int] = None
+    next_match_slot: Optional[int] = None
+    p1: Optional[PublicParticipantOut] = None
+    p2: Optional[PublicParticipantOut] = None
+    winner: Optional[PublicParticipantOut] = None
+
+    class Config:
+        from_attributes = True
+
+
+class PublicTournamentOut(BaseModel):
+    id: int
+    name: str
+    format: TournamentFormat
+    status: TournamentStatus
+    team_type: str = "singles"
+    num_groups: int
+    description: Optional[str] = None
+    created_at: Optional[datetime] = None
+    public_scoring_enabled: bool = False
+    has_score_pin: bool = False
+    participants: List[PublicParticipantOut] = []
+    matches: List[PublicMatchOut] = []
+
+    class Config:
+        from_attributes = True
+
+
 class ScoreUpdate(BaseModel):
     score1: int
     score2: int

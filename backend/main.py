@@ -15,6 +15,7 @@ def _now_vn() -> datetime:
 from decimal import Decimal
 from pathlib import Path
 import io
+import os
 import re
 import secrets
 import openpyxl
@@ -32,6 +33,32 @@ from auth import (
 )
 
 Base.metadata.create_all(bind=engine)
+
+
+# ── Helpers cách ly đa CLB: mọi id nhận từ body phải thuộc CLB hiện tại ──
+def _get_member_in_club(db: Session, member_id: int, club_id: int) -> "models.Member":
+    m = db.query(models.Member).filter(
+        models.Member.id == member_id, models.Member.club_id == club_id
+    ).first()
+    if not m:
+        raise HTTPException(404, f"Thành viên #{member_id} không thuộc câu lạc bộ này")
+    return m
+
+
+def _get_player_in_club(db: Session, player_id: int, club_id: int) -> "models.Player":
+    pl = db.query(models.Player).filter(
+        models.Player.id == player_id, models.Player.club_id == club_id
+    ).first()
+    if not pl:
+        raise HTTPException(404, f"Khách mời #{player_id} không thuộc câu lạc bộ này")
+    return pl
+
+
+def _check_people_in_club(db: Session, club_id: int, member_id=None, player_id=None) -> None:
+    if member_id is not None:
+        _get_member_in_club(db, member_id, club_id)
+    if player_id is not None:
+        _get_player_in_club(db, player_id, club_id)
 
 # ── MIGRATION: tự động thêm cột mới vào các bảng cũ khi deploy ──
 def _run_migration():
@@ -154,7 +181,15 @@ def _setup_bot_user():
 
 _setup_bot_user()
 
-app = FastAPI(title="Quản lý CLB Thể thao", version="1.0.0")
+_IS_PRODUCTION = bool(os.environ.get("FLY_APP_NAME") or os.environ.get("APP_ENV") == "production")
+
+app = FastAPI(
+    title="Quản lý CLB Thể thao", version="1.0.0",
+    # Không lộ schema API (kể cả /api/internal/*) ra Internet trên production
+    docs_url=None if _IS_PRODUCTION else "/docs",
+    redoc_url=None if _IS_PRODUCTION else "/redoc",
+    openapi_url=None if _IS_PRODUCTION else "/openapi.json",
+)
 
 # ── Rate limiting (public report endpoints) ──
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -1182,6 +1217,7 @@ def create_transaction(
     ft = db.query(models.FeeType).filter(models.FeeType.id == data.fee_type_id, models.FeeType.club_id == perms.club_id).first()
     if not ft:
         raise HTTPException(404, "Loại khoản không tồn tại")
+    _check_people_in_club(db, perms.club_id, data.member_id, data.player_id)
     tx = models.Transaction(**data.model_dump(), type=ft.type, club_id=perms.club_id)
     db.add(tx)
     db.commit()
@@ -1204,6 +1240,7 @@ def update_transaction(
     ft = db.query(models.FeeType).filter(models.FeeType.id == data.fee_type_id, models.FeeType.club_id == perms.club_id).first()
     if not ft:
         raise HTTPException(404, "Loại khoản không tồn tại")
+    _check_people_in_club(db, perms.club_id, data.member_id, data.player_id)
     for k, v in data.model_dump().items():
         setattr(tx, k, v)
     tx.type = ft.type
@@ -1423,7 +1460,7 @@ def _query_member_contributions(
     return sorted(result, key=lambda r: r["full_name"])
 
 
-def _query_fee_status(db: Session, club_id: int, month: Optional[int], year: int, fee_type_id: int):
+def _query_fee_status(db: Session, club_id: int, month: Optional[int], year: int, fee_type_id: int, include_phone: bool = True):
     """Logic dùng chung: thành viên active đã/chưa đóng một khoản phí trong tháng hoặc cả năm (admin + public)."""
     members = db.query(models.Member).filter(
         models.Member.club_id == club_id,
@@ -1440,14 +1477,16 @@ def _query_fee_status(db: Session, club_id: int, month: Optional[int], year: int
     paid_ids = set(r[0] for r in paid_q.all())
     result = []
     for m in members:
-        result.append({
+        row = {
             "member_id": m.id,
             "member_code": m.member_code,
             "full_name": m.full_name,
-            "phone": m.phone,
             "rank": m.rank,
             "paid": m.id in paid_ids,
-        })
+        }
+        if include_phone:
+            row["phone"] = m.phone
+        result.append(row)
     paid_count = sum(1 for r in result if r["paid"])
 
     # Khách mời đã đóng khoản này trong tháng/năm (không có nghĩa vụ "chưa đóng")
@@ -1534,7 +1573,8 @@ def create_report_link(
     perms: ClubPermissions = Depends(get_club_permission),
     current_user: models.User = Depends(get_current_user),
 ):
-    perms.require_view()
+    # Link công khai phát tán toàn bộ thu chi + tên thành viên → cần quyền chỉnh sửa
+    perms.require_edit()
     token_str = secrets.token_urlsafe(32)
     expires_at_val = None
     if data.get("expires_at"):
@@ -1597,7 +1637,7 @@ def toggle_report_link(
     db: Session = Depends(get_db),
     perms: ClubPermissions = Depends(get_club_permission),
 ):
-    perms.require_view()
+    perms.require_edit()
     rec = db.query(models.PublicReportToken).filter(
         models.PublicReportToken.id == link_id,
         models.PublicReportToken.club_id == perms.club_id,
@@ -1615,7 +1655,7 @@ def delete_report_link(
     db: Session = Depends(get_db),
     perms: ClubPermissions = Depends(get_club_permission),
 ):
-    perms.require_view()
+    perms.require_delete()
     rec = db.query(models.PublicReportToken).filter(
         models.PublicReportToken.id == link_id,
         models.PublicReportToken.club_id == perms.club_id,
@@ -1750,7 +1790,8 @@ def public_report_fee_status(
     db: Session = Depends(get_db),
 ):
     rec = _validate_token(slug, db)
-    return _query_fee_status(db, rec.club_id, month, year, fee_type_id)
+    # Public: không trả số điện thoại thành viên
+    return _query_fee_status(db, rec.club_id, month, year, fee_type_id, include_phone=False)
 
 
 @app.get("/api/public/report/{slug}/fee-types")
@@ -1816,7 +1857,7 @@ def public_tournaments_list(request: Request, slug: str, db: Session = Depends(g
     ]
 
 
-@app.get("/api/public/report/{slug}/tournaments/{tid}", response_model=schemas.TournamentOut)
+@app.get("/api/public/report/{slug}/tournaments/{tid}", response_model=schemas.PublicTournamentOut)
 @limiter.limit("60/minute")
 def public_tournament_detail(request: Request, slug: str, tid: int, db: Session = Depends(get_db)):
     rec = _validate_token(slug, db)
@@ -2133,6 +2174,8 @@ def create_tournament(
             p1 = team.get("player_id")
             m2 = team.get("partner_member_id")
             p2 = team.get("partner_player_id")
+            _check_people_in_club(db, perms.club_id, m1, p1)
+            _check_people_in_club(db, perms.club_id, m2, p2)
             tname = team.get("team_name") or None
             if not tname:
                 n1 = _resolve_name(db, m1, p1)
@@ -2149,14 +2192,14 @@ def create_tournament(
         # Singles: kết hợp member_ids (thành viên) + player_ids (khách mời)
         idx = 0
         for mid in (data.member_ids or []):
-            member = db.query(models.Member).filter(models.Member.id == mid).first()
+            member = _get_member_in_club(db, mid, perms.club_id)
             pt = models.TournamentParticipant(
                 tournament_id=t.id, member_id=mid,
-                team_name=member.full_name if member else None, seed=idx + 1,
+                team_name=member.full_name, seed=idx + 1,
             )
             db.add(pt); idx += 1
         for pid in (data.player_ids or []):
-            pname = db.query(models.Player.name).filter(models.Player.id == pid).scalar() or "Khách"
+            pname = _get_player_in_club(db, pid, perms.club_id).name or "Khách"
             pt = models.TournamentParticipant(
                 tournament_id=t.id, player_id=pid,
                 team_name=pname, seed=idx + 1,
@@ -2255,6 +2298,8 @@ def add_participant(
         raise HTTPException(400, "Cần chọn thành viên hoặc khách mời")
     if data.member_id and data.player_id:
         raise HTTPException(400, "Chỉ chọn 1 trong 2: thành viên hoặc khách mời")
+    _check_people_in_club(db, perms.club_id, data.member_id, data.player_id)
+    _check_people_in_club(db, perms.club_id, data.partner_member_id, data.partner_player_id)
 
     others = db.query(models.TournamentParticipant).filter(models.TournamentParticipant.tournament_id == tid).all()
     for o in others:
@@ -2348,7 +2393,7 @@ def generate_tournament(
 ):
     """Sinh lịch đấu bảng (xóa lịch cũ nếu có). Với combined: chỉ sinh vòng bảng."""
     perms.require_edit()
-    t = db.query(models.Tournament).filter(models.Tournament.id == tid).first()
+    t = db.query(models.Tournament).filter(models.Tournament.id == tid, models.Tournament.club_id == perms.club_id).first()
     if not t: raise HTTPException(404, "Không tìm thấy giải đấu")
 
     # Xóa matches cũ
@@ -2397,7 +2442,7 @@ def start_knockout(
 ):
     """Tính kết quả vòng bảng và sinh lịch knockout (combined format)."""
     perms.require_edit()
-    t = db.query(models.Tournament).filter(models.Tournament.id == tid).first()
+    t = db.query(models.Tournament).filter(models.Tournament.id == tid, models.Tournament.club_id == perms.club_id).first()
     if not t: raise HTTPException(404, "Không tìm thấy giải đấu")
     if t.format.value != "combined":
         raise HTTPException(400, "Chỉ áp dụng cho thể thức kết hợp")
@@ -2490,6 +2535,8 @@ def update_score(
     perms: ClubPermissions = Depends(get_club_permission),
 ):
     perms.require_edit()
+    t = db.query(models.Tournament).filter(models.Tournament.id == tid, models.Tournament.club_id == perms.club_id).first()
+    if not t: raise HTTPException(404, "Không tìm thấy giải đấu")
     match = db.query(models.TournamentMatch).filter(
         models.TournamentMatch.id == mid,
         models.TournamentMatch.tournament_id == tid
@@ -2532,6 +2579,7 @@ def replace_participant_slot(
         raise HTTPException(400, "Cần chọn thành viên hoặc khách mời để thay")
     if data.member_id and data.player_id:
         raise HTTPException(400, "Chỉ chọn 1 trong 2: thành viên hoặc khách mời")
+    _check_people_in_club(db, perms.club_id, data.member_id, data.player_id)
 
     # Không cho trùng người đã có mặt ở vị trí khác trong cùng giải
     others = db.query(models.TournamentParticipant).filter(
@@ -2574,7 +2622,7 @@ def get_standings(
     perms: ClubPermissions = Depends(get_club_permission),
 ):
     perms.require_view()
-    t = db.query(models.Tournament).filter(models.Tournament.id == tid).first()
+    t = db.query(models.Tournament).filter(models.Tournament.id == tid, models.Tournament.club_id == perms.club_id).first()
     if not t: raise HTTPException(404, "Không tìm thấy giải đấu")
 
     matches_q = db.query(models.TournamentMatch).filter(
