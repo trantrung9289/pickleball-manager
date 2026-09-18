@@ -8,3 +8,9 @@ backend/clb.db
 **/*.pyc
 .git
 .env*
+backend/static
+backend/tests
+backend/pytest.ini
+handoff.md
+.claude
+*.md

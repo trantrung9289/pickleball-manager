@@ -5,6 +5,7 @@ export default defineConfig({
   plugins: [react()],
   build: {
     outDir: '../backend/static',
+    emptyOutDir: true,   // dọn asset build cũ (trước đây tích luỹ 49 MB)
     rollupOptions: {
       output: {
         manualChunks(id) {
