@@ -37,14 +37,34 @@ def _round_name(r: int, total_rounds: int) -> str:
     return f"Vòng {r}"
 
 
-def _knockout_bracket(players: List) -> List[Dict]:
-    """Sinh bracket loại trực tiếp với next_match linkage."""
+def _seed_order(size: int) -> List[int]:
+    """Thứ tự vị trí bracket chuẩn (1-indexed seed): size 8 → [1, 8, 4, 5, 2, 7, 3, 6].
+    Hạt giống 1 và 2 ở hai nhánh đối diện; bye (seed > n) rơi vào hạt giống cao nhất."""
+    order = [1]
+    while len(order) < size:
+        m = len(order) * 2
+        order = [x for s_ in order for x in (s_, m + 1 - s_)]
+    return order
+
+
+def _knockout_bracket(players: List, seeded: bool = True) -> List[Dict]:
+    """Sinh bracket loại trực tiếp với next_match linkage.
+
+    players: danh sách theo thứ tự hạt giống (đã shuffle nếu cần).
+    seeded=True  → xếp theo seeding chuẩn, bye dành cho hạt giống cao, không có trận None-None.
+    seeded=False → dùng nguyên thứ tự truyền vào làm cặp (chỉ khi len là luỹ thừa 2).
+    """
     n = len(players)
+    if n < 2:
+        raise ValueError("Cần ít nhất 2 đội để sinh bracket loại trực tiếp")
     size = 1
     while size < n:
         size *= 2
 
-    full = list(players) + [None] * (size - n)
+    if seeded or size != n:
+        full = [players[seed - 1] if seed <= n else None for seed in _seed_order(size)]
+    else:
+        full = list(players)
     rounds_total = int(math.log2(size)) if size > 1 else 1
     all_matches: List[Dict] = []
     match_num = 0
@@ -167,7 +187,17 @@ def generate_knockout_from_groups(
         ko_players.append(firsts.get(eg))
         ko_players.append(seconds.get(eg))
 
-    raw = _knockout_bracket(ko_players)
+    ko_players = [p for p in ko_players if p is not None]
+    n_ko = len(ko_players)
+    if n_ko >= 2 and (n_ko & (n_ko - 1)) == 0:
+        # Đủ luỹ thừa 2: giữ nguyên luật ghép nhất bảng lẻ vs nhì bảng chẵn
+        raw = _knockout_bracket(ko_players, seeded=False)
+    else:
+        # Số đội lẻ (vd 3 bảng = 6 đội): seeding nhất bảng trước, nhì bảng theo thứ tự ngược
+        # để bye rơi vào các đội nhất bảng và tránh cùng bảng gặp nhau ngay vòng 1
+        seeds = [firsts[g] for g in group_letters if firsts.get(g) is not None]
+        seeds += [seconds[g] for g in reversed(group_letters) if seconds.get(g) is not None]
+        raw = _knockout_bracket(seeds, seeded=True)
     match_num = existing_match_count
     matches = []
     for m in raw:
@@ -298,7 +328,8 @@ def compute_standings(
     """
     Tính bảng xếp hạng vòng bảng.
     Điểm: Thắng = 1, Thua = 0 (không tính hòa).
-    Tiebreaker: điểm → hiệu số → bàn thắng.
+    Tiebreaker: điểm → đối đầu trực tiếp giữa các đội bằng điểm (điểm, hiệu số, ghi được)
+                → hiệu số toàn giải → điểm ghi được toàn giải.
     """
     stats: Dict[int, Dict] = {}
     for p in participants:
@@ -364,23 +395,20 @@ def compute_standings(
                 h_points += 1
         return (-h_points, -(h_for - h_against), -h_for)
 
-    # Nhóm theo điểm số, trong mỗi nhóm bằng điểm ưu tiên hiệu số chung,
-    # chỉ khi bằng cả điểm lẫn hiệu số mới xét đến hệ số đối đầu.
+    # Nhóm theo điểm số; trong mỗi nhóm bằng điểm: đối đầu trực tiếp trước,
+    # rồi mới tới hiệu số / điểm ghi được toàn giải.
     rows.sort(key=lambda x: (-x["points"], -x["goal_diff"], -x["goals_for"]))
     ordered: List[Dict] = []
     i = 0
     while i < len(rows):
         j = i
-        while (
-            j < len(rows)
-            and rows[j]["points"] == rows[i]["points"]
-            and rows[j]["goal_diff"] == rows[i]["goal_diff"]
-        ):
+        while j < len(rows) and rows[j]["points"] == rows[i]["points"]:
             j += 1
         tied_group = rows[i:j]
         if len(tied_group) > 1:
             tied_ids = {r["participant_id"] for r in tied_group}
-            tied_group.sort(key=lambda x: head_to_head_key(x["participant_id"], tied_ids) + (-x["goals_for"],))
+            tied_group.sort(key=lambda x: head_to_head_key(x["participant_id"], tied_ids)
+                            + (-x["goal_diff"], -x["goals_for"]))
         ordered.extend(tied_group)
         i = j
 

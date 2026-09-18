@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, List, Any, Dict
 from datetime import date, datetime
 from decimal import Decimal
@@ -260,7 +260,7 @@ class TournamentCreate(BaseModel):
     team_type: str = "singles"          # singles | doubles
     pairing_mode: str = "random"
     rank_rules: Optional[List[Dict[str, str]]] = None
-    num_groups: int = 2
+    num_groups: int = Field(default=2, ge=1, le=16)
     description: Optional[str] = None
     member_ids: Optional[List[int]] = None   # singles: thành viên CLB
     player_ids: Optional[List[int]] = None   # singles: khách mời (Player.id)
@@ -277,7 +277,7 @@ class TournamentUpdate(BaseModel):
     team_type: Optional[str] = None
     pairing_mode: Optional[str] = None
     rank_rules: Optional[List[Dict[str, str]]] = None
-    num_groups: Optional[int] = None
+    num_groups: Optional[int] = Field(default=None, ge=1, le=16)
 
 
 class ParticipantSlotUpdate(BaseModel):
@@ -435,8 +435,8 @@ class PublicTournamentOut(BaseModel):
 
 
 class ScoreUpdate(BaseModel):
-    score1: int
-    score2: int
+    score1: int = Field(ge=0, le=999)
+    score2: int = Field(ge=0, le=999)
 
 
 class ScorePinUpdate(BaseModel):
@@ -446,8 +446,8 @@ class ScorePinUpdate(BaseModel):
 
 class PublicScoreUpdate(BaseModel):
     pin: str
-    score1: int
-    score2: int
+    score1: int = Field(ge=0, le=999)
+    score2: int = Field(ge=0, le=999)
 
 
 # ── Reports ───────────────────────────────────────────────

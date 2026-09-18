@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import func, extract
+from sqlalchemy import func, extract, text
 from typing import Optional, List
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
@@ -117,70 +117,6 @@ def _run_migration():
 _run_migration()
 
 
-def _setup_bot_user():
-    """Tự động tạo tài khoản bot nếu BOT_USERNAME + BOT_PASSWORD được set."""
-    import os
-    bot_username = os.environ.get("BOT_USERNAME")
-    bot_password = os.environ.get("BOT_PASSWORD")
-    if not bot_username or not bot_password:
-        return
-
-    from database import SessionLocal
-    db = SessionLocal()
-    try:
-        # Kiểm tra user đã tồn tại chưa
-        existing = db.query(models.User).filter(models.User.username == bot_username).first()
-        if not existing:
-            bot_user = models.User(
-                username=bot_username,
-                password_hash=hash_password(bot_password),
-                full_name="Telegram Bot",
-                role=models.UserRole.admin,
-                is_superuser=False,
-            )
-            db.add(bot_user)
-            db.flush()
-
-            # Gán vào tất cả CLB hiện có
-            clubs = db.query(models.Club).all()
-            for club in clubs:
-                membership = models.ClubMembership(
-                    user_id=bot_user.id,
-                    club_id=club.id,
-                    role=models.UserRole.admin,
-                    can_view=True, can_create=True, can_edit=True, can_delete=True,
-                )
-                db.add(membership)
-
-            db.commit()
-            print(f"[bot] Đã tạo tài khoản bot '{bot_username}'")
-        else:
-            # Cập nhật password nếu đổi
-            existing.password_hash = hash_password(bot_password)
-            # Đảm bảo có membership trong tất cả CLB
-            clubs = db.query(models.Club).all()
-            for club in clubs:
-                ms = db.query(models.ClubMembership).filter(
-                    models.ClubMembership.user_id == existing.id,
-                    models.ClubMembership.club_id == club.id,
-                ).first()
-                if not ms:
-                    db.add(models.ClubMembership(
-                        user_id=existing.id, club_id=club.id,
-                        role=models.UserRole.admin,
-                        can_view=True, can_create=True, can_edit=True, can_delete=True,
-                    ))
-            db.commit()
-            print(f"[bot] Tài khoản bot '{bot_username}' đã được cập nhật")
-    except Exception as e:
-        db.rollback()
-        print(f"[bot] Lỗi setup bot user: {e}")
-    finally:
-        db.close()
-
-
-_setup_bot_user()
-
 _IS_PRODUCTION = bool(os.environ.get("FLY_APP_NAME") or os.environ.get("APP_ENV") == "production")
 
 app = FastAPI(
@@ -207,6 +143,14 @@ app.add_middleware(
 )
 
 STATIC_DIR = Path(__file__).parent / "static"
+
+
+# ── HEALTH (dùng cho Fly checks + entrypoint; không lộ dữ liệu) ──
+
+@app.get("/api/health")
+def health(db: Session = Depends(get_db)):
+    db.execute(text("SELECT 1"))
+    return {"ok": True}
 
 
 # ── AUTH & CLUB ───────────────────────────────────────────
@@ -793,6 +737,16 @@ def delete_member(
     ).first()
     if not m:
         raise HTTPException(404, "Không tìm thấy thành viên")
+    tx_count = db.query(models.Transaction).filter(models.Transaction.member_id == member_id).count()
+    if tx_count:
+        raise HTTPException(400, f"Không thể xoá: thành viên có {tx_count} giao dịch. "
+                                 "Hãy chuyển trạng thái sang 'Ngừng hoạt động' để giữ lịch sử thu chi.")
+    in_tournament = db.query(models.TournamentParticipant).filter(
+        (models.TournamentParticipant.member_id == member_id) |
+        (models.TournamentParticipant.partner_member_id == member_id)
+    ).first()
+    if in_tournament:
+        raise HTTPException(400, "Không thể xoá: thành viên đang có tên trong giải đấu")
     db.delete(m)
     db.commit()
 
@@ -1940,6 +1894,7 @@ def public_update_score(
     ).first()
     if not match: raise HTTPException(404, "Không tìm thấy trận đấu")
 
+    _check_scorable(t, match, data.score1, data.score2)
     _apply_match_score(db, match, data.score1, data.score2)
     db.commit(); db.refresh(match)
     return match
@@ -2174,6 +2129,10 @@ def create_tournament(
             p1 = team.get("player_id")
             m2 = team.get("partner_member_id")
             p2 = team.get("partner_player_id")
+            if not (m1 or p1) or not (m2 or p2):
+                raise HTTPException(400, f"Đội #{idx + 1}: đấu đôi cần đủ 2 người")
+            if (m1 and p1) or (m2 and p2):
+                raise HTTPException(400, f"Đội #{idx + 1}: mỗi vị trí chỉ chọn thành viên HOẶC khách mời")
             _check_people_in_club(db, perms.club_id, m1, p1)
             _check_people_in_club(db, perms.club_id, m2, p2)
             tname = team.get("team_name") or None
@@ -2384,40 +2343,104 @@ def _save_matches(db, tid: int, raw_matches: list, offset_idx: int = 0):
     return saved
 
 
+def _participant_rank(p: models.TournamentParticipant) -> str:
+    """Hạng của participant: thành viên hoặc khách mời (participant có thể không có member)."""
+    if p.member is not None:
+        return p.member.rank or ""
+    if p.player is not None:
+        return p.player.rank or ""
+    return ""
+
+
+def _advance_byes(db: Session, tid: int) -> int:
+    """Trận knockout chỉ có 1 đội (bye) → tự hoàn thành, đưa đội đó lên vòng sau.
+    Lặp tới khi không còn thay đổi. Trả về số trận bye đã xử lý."""
+    handled = 0
+    while True:
+        changed = False
+        byes = db.query(models.TournamentMatch).filter(
+            models.TournamentMatch.tournament_id == tid,
+            models.TournamentMatch.phase == "knockout",
+            models.TournamentMatch.status == models.MatchStatus.pending,
+            models.TournamentMatch.next_match_id.isnot(None),
+            ((models.TournamentMatch.p1_id.is_(None)) != (models.TournamentMatch.p2_id.is_(None))),
+        ).order_by(models.TournamentMatch.match_number).all()
+        for m in byes:
+            # Chỉ là bye thật khi không còn trận nào cấp slot còn trống này
+            empty_slot = 1 if m.p1_id is None else 2
+            feeder = db.query(models.TournamentMatch).filter(
+                models.TournamentMatch.next_match_id == m.id,
+                models.TournamentMatch.next_match_slot == empty_slot,
+            ).first()
+            if feeder is not None:
+                continue
+            m.winner_id = m.p1_id or m.p2_id
+            m.status = models.MatchStatus.completed
+            nxt = db.get(models.TournamentMatch, m.next_match_id)
+            if nxt is not None:
+                if m.next_match_slot == 1:
+                    nxt.p1_id = m.winner_id
+                else:
+                    nxt.p2_id = m.winner_id
+            db.flush()
+            handled += 1
+            changed = True
+        if not changed:
+            return handled
+
+
 @app.post("/api/tournaments/{tid}/generate", response_model=schemas.TournamentOut)
 def generate_tournament(
     tid: int,
     shuffle: bool = True,
+    force: bool = False,
     db: Session = Depends(get_db),
     perms: ClubPermissions = Depends(get_club_permission),
 ):
-    """Sinh lịch đấu bảng (xóa lịch cũ nếu có). Với combined: chỉ sinh vòng bảng."""
+    """Sinh lịch đấu bảng (xóa lịch cũ nếu có). Với combined: chỉ sinh vòng bảng.
+    force=true mới được sinh lại khi đã có trận có kết quả (xoá toàn bộ kết quả)."""
     perms.require_edit()
     t = db.query(models.Tournament).filter(models.Tournament.id == tid, models.Tournament.club_id == perms.club_id).first()
     if not t: raise HTTPException(404, "Không tìm thấy giải đấu")
+    if t.status == models.TournamentStatus.completed:
+        raise HTTPException(400, "Giải đấu đã kết thúc, không thể sinh lại lịch")
+
+    scored = db.query(models.TournamentMatch).filter(
+        models.TournamentMatch.tournament_id == tid,
+        models.TournamentMatch.score1.isnot(None),
+    ).count()
+    if scored and not force:
+        raise HTTPException(400, f"Đã có {scored} trận có kết quả. Sinh lại lịch sẽ xoá toàn bộ kết quả — cần xác nhận (force=true)")
+
+    participants = list(t.participants)
+    if len(participants) < 2:
+        raise HTTPException(400, "Cần ít nhất 2 đội/người chơi để sinh lịch")
+    if t.format.value == "combined":
+        if t.num_groups < 1:
+            raise HTTPException(400, "Số bảng phải ≥ 1")
+        if len(participants) < 2 * t.num_groups:
+            raise HTTPException(400, f"{t.num_groups} bảng cần ít nhất {2 * t.num_groups} đội (hiện có {len(participants)})")
 
     # Xóa matches cũ
     db.query(models.TournamentMatch).filter(models.TournamentMatch.tournament_id == tid).delete()
 
-    participants = t.participants
     pid_list = [p.id for p in participants]
+    if shuffle:
+        import random
+        random.shuffle(pid_list)
 
     if t.format.value == "combined":
-        # Phân bảng: gán group_name rồi sinh round-robin từng bảng
+        # Phân bảng theo ĐÚNG thứ tự pid_list (đã shuffle) — engine cũng chia i % num_groups
         letters = "ABCDEFGHIJKLMNOP"
-        if shuffle:
-            import random
-            random.shuffle(pid_list)
-        for i, p in enumerate(participants):
-            p.group_name = letters[i % t.num_groups]
+        by_id = {p.id: p for p in participants}
+        for i, pid in enumerate(pid_list):
+            by_id[pid].group_name = letters[i % t.num_groups]
         db.flush()
-        # Rebuild pid_list theo thứ tự đã shuffle
-        group_map: dict = {}
-        for p in participants:
-            group_map.setdefault(p.group_name, []).append(p.id)
         raw = generate_group_schedule(pid_list, t.num_groups, shuffle=False)
     else:
-        member_ranks = {p.id: (p.member.rank or "") for p in participants}
+        for p in participants:
+            p.group_name = None
+        member_ranks = {p.id: _participant_rank(p) for p in participants}
         raw = generate_schedule(
             format=t.format.value,
             participant_ids=pid_list,
@@ -2425,10 +2448,12 @@ def generate_tournament(
             rank_rules=t.rank_rules,
             member_ranks=member_ranks,
             num_groups=t.num_groups,
-            shuffle=shuffle,
+            shuffle=False,   # đã shuffle ở trên
         )
 
     _save_matches(db, tid, raw)
+    db.flush()
+    _advance_byes(db, tid)
     t.status = models.TournamentStatus.active
     db.commit(); db.refresh(t)
     return t
@@ -2446,6 +2471,23 @@ def start_knockout(
     if not t: raise HTTPException(404, "Không tìm thấy giải đấu")
     if t.format.value != "combined":
         raise HTTPException(400, "Chỉ áp dụng cho thể thức kết hợp")
+    if t.status != models.TournamentStatus.active:
+        raise HTTPException(400, "Giải đấu phải đang diễn ra để khởi động vòng loại trực tiếp")
+    if db.query(models.TournamentMatch).filter(
+        models.TournamentMatch.tournament_id == tid, models.TournamentMatch.phase == "knockout"
+    ).count():
+        raise HTTPException(400, "Vòng loại trực tiếp đã được khởi động rồi")
+    group_total = db.query(models.TournamentMatch).filter(
+        models.TournamentMatch.tournament_id == tid, models.TournamentMatch.phase == "group"
+    ).count()
+    group_pending = db.query(models.TournamentMatch).filter(
+        models.TournamentMatch.tournament_id == tid, models.TournamentMatch.phase == "group",
+        models.TournamentMatch.status != models.MatchStatus.completed,
+    ).count()
+    if group_total == 0:
+        raise HTTPException(400, "Chưa sinh lịch vòng bảng")
+    if group_pending:
+        raise HTTPException(400, f"Còn {group_pending} trận vòng bảng chưa có kết quả")
 
     # Tính standings từng bảng
     participants = t.participants
@@ -2497,11 +2539,44 @@ def start_knockout(
             match.next_match_id = saved_ko[idx][0].id
             match.next_match_slot = slot
 
+    db.flush()
+    _advance_byes(db, tid)
     db.commit(); db.refresh(t)
     return t
 
 
+def _reset_downstream(db: Session, match: models.TournamentMatch) -> None:
+    """Kết quả của `match` thay đổi → rút đội thắng cũ khỏi trận sau; nếu trận sau đã có
+    kết quả thì xoá kết quả đó và lan tiếp (đệ quy) để bracket luôn nhất quán."""
+    if not match.next_match_id:
+        return
+    nxt = db.get(models.TournamentMatch, match.next_match_id)
+    if nxt is None:
+        return
+    if match.next_match_slot == 1:
+        nxt.p1_id = None
+    else:
+        nxt.p2_id = None
+    if nxt.status == models.MatchStatus.completed or nxt.score1 is not None:
+        nxt.score1 = nxt.score2 = None
+        nxt.winner_id = None
+        nxt.status = models.MatchStatus.pending
+        _reset_downstream(db, nxt)
+
+
+def _check_scorable(t: models.Tournament, match: models.TournamentMatch, score1: int, score2: int) -> None:
+    """Điều kiện chung cho nhập điểm (admin + public)."""
+    if t.status != models.TournamentStatus.active:
+        raise HTTPException(400, "Chỉ nhập điểm khi giải đấu đang diễn ra")
+    if match.p1_id is None or match.p2_id is None:
+        raise HTTPException(400, "Trận đấu chưa đủ 2 đội (đang chờ kết quả vòng trước)")
+    if match.phase == "knockout" and score1 == score2:
+        raise HTTPException(400, "Trận loại trực tiếp không được hoà")
+
+
 def _apply_match_score(db: Session, match: models.TournamentMatch, score1: int, score2: int):
+    if match.status == models.MatchStatus.completed or match.score1 is not None:
+        _reset_downstream(db, match)   # sửa kết quả → dọn nhánh sau trước
     match.score1 = score1
     match.score2 = score2
     match.status = models.MatchStatus.completed
@@ -2543,6 +2618,7 @@ def update_score(
     ).first()
     if not match: raise HTTPException(404, "Không tìm thấy trận đấu")
 
+    _check_scorable(t, match, data.score1, data.score2)
     _apply_match_score(db, match, data.score1, data.score2)
     db.commit(); db.refresh(match)
     return match

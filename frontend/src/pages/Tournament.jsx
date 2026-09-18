@@ -1377,14 +1377,18 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated }) {
 
   const handleGenerate = async (shuffle = true) => {
     const label = shuffle ? "xáo ngẫu nhiên" : "giữ thứ tự";
+    // Đã có trận có kết quả → backend yêu cầu force=true; cảnh báo rõ trước khi xoá kết quả
+    const scored = (tournament.matches || []).filter((m) => m.score1 != null).length;
     const ok = await confirm({
-      title: "Sinh lịch vòng bảng?",
-      content: `Ghép cặp: ${label}. Lịch cũ (nếu có) sẽ bị thay thế.`,
+      title: scored ? "Sinh lại lịch và XOÁ toàn bộ kết quả?" : "Sinh lịch vòng bảng?",
+      content: scored
+        ? `Đã có ${scored} trận có kết quả. Sinh lại (${label}) sẽ xoá hết kết quả đã nhập. Không thể hoàn tác.`
+        : `Ghép cặp: ${label}. Lịch cũ (nếu có) sẽ bị thay thế.`,
     });
     if (!ok) return;
     setGenerating(true);
     try {
-      await tournamentsApi.generate(tournament.id, shuffle);
+      await tournamentsApi.generate(tournament.id, shuffle, scored > 0);
       await reload();
       message.success("Đã tạo lịch thi đấu!");
     } finally { setGenerating(false); }

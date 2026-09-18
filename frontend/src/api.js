@@ -119,7 +119,7 @@ export const tournamentsApi = {
   create: (data) => api.post("/api/tournaments", data),
   update: (id, data) => api.put(`/api/tournaments/${id}`, data),
   delete: (id) => api.delete(`/api/tournaments/${id}`),
-  generate: (id, shuffle = true) => api.post(`/api/tournaments/${id}/generate?shuffle=${shuffle}`),
+  generate: (id, shuffle = true, force = false) => api.post(`/api/tournaments/${id}/generate?shuffle=${shuffle}&force=${force}`),
   startKnockout: (id) => api.post(`/api/tournaments/${id}/start-knockout`),
   score: (tid, mid, data) => api.post(`/api/tournaments/${tid}/matches/${mid}/score`, data),
   updateScorePin: (tid, data) => api.patch(`/api/tournaments/${tid}/score-pin`, data),
