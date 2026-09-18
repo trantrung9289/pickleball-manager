@@ -92,3 +92,36 @@ body {
 .ant-skeleton-content .ant-skeleton-paragraph > li {
   border-radius: 6px !important;
 }
+
+/* ── Bảng in thi đấu (TournamentPrintSheet) ───────────────────────────────────
+   .print-sheet-root được render qua React portal vào document.body, nằm ngoài
+   #root nên ẩn/hiện độc lập với toàn bộ giao diện ứng dụng khi in. */
+.print-sheet-root { display: none; }
+@media print {
+  #root { display: none !important; }
+  .print-sheet-root { display: block !important; }
+  .print-page { break-after: page; }
+  .print-page:last-child { break-after: auto; }
+}
+.print-page {
+  background: #fff;
+  color: #141413;
+  font-family: -apple-system, "Segoe UI", Roboto, system-ui, sans-serif;
+  padding: 14mm;
+  box-sizing: border-box;
+}
+.print-portrait { width: 210mm; min-height: 297mm; }
+.print-landscape { width: 297mm; min-height: 210mm; }
+.print-footnote {
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid #ddd;
+  font-size: 10px;
+  color: #aaa;
+  text-align: center;
+}
+@media screen {
+  /* Xem trước ngoài màn hình (không dùng trong luồng in bình thường, chỉ để debug) */
+  .print-sheet-root.debug-visible { display: block; background: #525659; padding: 24px; }
+  .print-sheet-root.debug-visible .print-page { margin: 0 auto 24px; box-shadow: 0 4px 18px rgba(0,0,0,.4); }
+}

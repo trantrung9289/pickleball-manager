@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
+import { createPortal } from "react-dom";
 import {
   Button, Space, Tag, Modal, Form, Input, Select,
   message, Typography, Row, Col, Card, Steps,
@@ -9,10 +10,11 @@ import {
   PlusOutlined, ThunderboltOutlined, TrophyOutlined,
   EditOutlined, DeleteOutlined, ReloadOutlined,
   CheckCircleOutlined, SaveOutlined, ArrowRightOutlined,
-  UserOutlined, TeamOutlined, UserAddOutlined,
+  UserOutlined, TeamOutlined, UserAddOutlined, PrinterOutlined,
 } from "@ant-design/icons";
 import { tournamentsApi, membersApi, playersApi } from "../api";
 import ResponsiveTable from "../components/ResponsiveTable";
+import TournamentPrintSheet from "../components/TournamentPrintSheet";
 import { useViewMode } from "../contexts/ViewModeContext";
 
 const { Title, Text } = Typography;
@@ -1365,6 +1367,18 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated }) {
   const [replaceTarget, setReplaceTarget] = useState(null); // { participant, slot: "main"|"partner" }
   const [editSetupModal, setEditSetupModal] = useState(false);
   const [scorePinModal, setScorePinModal] = useState(false);
+  const [printing, setPrinting] = useState(false);
+
+  useEffect(() => {
+    if (!printing) return;
+    const onAfterPrint = () => setPrinting(false);
+    window.addEventListener("afterprint", onAfterPrint);
+    return () => window.removeEventListener("afterprint", onAfterPrint);
+  }, [printing]);
+  const handlePrintReady = useCallback(() => {
+    // Đợi 1 tick để React commit xong nội dung trước khi mở hộp thoại in
+    setTimeout(() => window.print(), 30);
+  }, []);
 
   const reload = useCallback(async () => {
     const r = await tournamentsApi.get(tournament.id);
@@ -1658,6 +1672,11 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated }) {
             </Button>
           )}
           <Button icon={<ReloadOutlined />} onClick={reload}>Làm mới</Button>
+          {matches.length > 0 && (
+            <Button icon={<PrinterOutlined />} loading={printing} onClick={() => setPrinting(true)}>
+              In bảng thi đấu
+            </Button>
+          )}
           {tournament.status === "active" && (
             <>
               {fmt !== "combined" && (
@@ -1749,6 +1768,11 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated }) {
           onSaved={() => { setScorePinModal(false); reload(); }}
           onClose={() => setScorePinModal(false)}
         />
+      )}
+
+      {printing && createPortal(
+        <TournamentPrintSheet tournament={tournament} onReady={handlePrintReady} />,
+        document.body
       )}
 
       <Modal title="Sửa thông tin giải đấu" open={editNameModal}
