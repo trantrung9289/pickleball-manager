@@ -15,13 +15,17 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
-// Tự logout nếu 401
+// Tự logout nếu 401 — trừ chính request đăng nhập (sai mật khẩu không phải phiên hết hạn,
+// reload ở đây sẽ nuốt luôn thông báo lỗi và làm mất "mode" đang chọn ở App.jsx)
 api.interceptors.response.use(
   (r) => r,
   (err) => {
-    if (err.response?.status === 401) {
+    const isLoginRequest = err.config?.url?.includes("/api/auth/login");
+    if (err.response?.status === 401 && !isLoginRequest) {
       localStorage.removeItem("token");
       localStorage.removeItem("user");
+      localStorage.removeItem("selectedMembership");
+      localStorage.removeItem("selectedClubId");
       window.location.href = "/";
     }
     return Promise.reject(err);

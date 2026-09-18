@@ -19,7 +19,7 @@ fi
 
 # ── 1. Migration (idempotent) ───────────────────────────────────────────────
 log "🔄 Chạy database migration..."
-if ! python migrations/add_players_tables.py || ! python migrations/add_fee_reminder.py; then
+if ! python migrations/add_players_tables.py || ! python migrations/add_fee_reminder.py || ! python migrations/add_reminder_chat_id.py || ! python migrations/add_missing_indexes.py; then
   log "❌ Migration thất bại — dừng khởi động"
   exit 1
 fi

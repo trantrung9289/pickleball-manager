@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from "react";
-import { Card, Form, Input, Button, Typography, message, Alert, Checkbox, Space, theme } from "antd";
+import { Card, Form, Input, Button, Typography, message, Alert, Checkbox, theme } from "antd";
 import {
   UserOutlined, LockOutlined, TrophyOutlined,
-  ArrowLeftOutlined, SettingOutlined, InfoCircleOutlined,
+  ArrowLeftOutlined, SettingOutlined,
 } from "@ant-design/icons";
 import { useAuth } from "../context/AuthContext";
 import { useAppTheme } from "../contexts/ThemeContext";
@@ -10,7 +10,8 @@ import { useAppTheme } from "../contexts/ThemeContext";
 const { Title, Text } = Typography;
 
 const KEY_USER = "rememberedUsername";
-const KEY_PWD  = "rememberedPassword";
+// Không còn lưu mật khẩu trong localStorage (bản rõ, đọc được bởi bất kỳ XSS nào).
+// Trình duyệt đã có password manager riêng cho việc này (autoComplete="current-password" bên dưới).
 
 // adminMode=true  → trang này dùng cho Quản trị viên hệ thống
 // adminMode=false → trang này dùng cho Thành viên CLB
@@ -22,22 +23,13 @@ export default function Login({ onBack, adminMode = false, onSwitchMode }) {
   const [loading, setLoading]       = useState(false);
   const [wrongMode, setWrongMode]   = useState(false);
   const [rememberUser, setRememberUser] = useState(false);
-  const [rememberPwd, setRememberPwd]   = useState(false);
   const [form] = Form.useForm();
 
-  // Pre-fill từ localStorage khi mở trang
+  // Pre-fill tên đăng nhập từ localStorage khi mở trang (không còn pre-fill mật khẩu)
   useEffect(() => {
     const savedUser = localStorage.getItem(KEY_USER);
-    const savedPwd  = localStorage.getItem(KEY_PWD);
     if (savedUser) { form.setFieldValue("username", savedUser); setRememberUser(true); }
-    if (savedPwd)  { form.setFieldValue("password", savedPwd);  setRememberPwd(true); }
   }, []);
-
-  // Khi bỏ tích "Ghi nhớ mật khẩu" → xoá ngay lập tức
-  const handleRememberPwdChange = (checked) => {
-    setRememberPwd(checked);
-    if (!checked) localStorage.removeItem(KEY_PWD);
-  };
 
   const handleLogin = async (values) => {
     setLoading(true);
@@ -48,13 +40,9 @@ export default function Login({ onBack, adminMode = false, onSwitchMode }) {
       if (adminMode && !loggedUser.is_superuser) { setWrongMode("member"); return; }
       if (!adminMode && loggedUser.is_superuser)  { setWrongMode("admin");  return; }
 
-      // Lưu / xoá tuỳ checkbox
       rememberUser
         ? localStorage.setItem(KEY_USER, values.username)
         : localStorage.removeItem(KEY_USER);
-      rememberPwd
-        ? localStorage.setItem(KEY_PWD, values.password)
-        : localStorage.removeItem(KEY_PWD);
 
     } catch (err) {
       message.error(err.response?.data?.detail || "Sai tên đăng nhập hoặc mật khẩu");
@@ -155,32 +143,11 @@ export default function Login({ onBack, adminMode = false, onSwitchMode }) {
               />
             </Form.Item>
 
-            {/* Nhóm checkbox ghi nhớ */}
             <Form.Item style={{ marginBottom: 16 }}>
-              <Space direction="vertical" size={6}>
-                <Checkbox checked={rememberUser} onChange={(e) => setRememberUser(e.target.checked)}>
-                  <Text style={{ fontSize: 13, color: antToken.colorText }}>Ghi nhớ tài khoản</Text>
-                </Checkbox>
-                <Checkbox checked={rememberPwd} onChange={(e) => handleRememberPwdChange(e.target.checked)}>
-                  <Text style={{ fontSize: 13, color: antToken.colorText }}>Ghi nhớ mật khẩu</Text>
-                </Checkbox>
-              </Space>
+              <Checkbox checked={rememberUser} onChange={(e) => setRememberUser(e.target.checked)}>
+                <Text style={{ fontSize: 13, color: antToken.colorText }}>Ghi nhớ tài khoản</Text>
+              </Checkbox>
             </Form.Item>
-
-            {/* Cảnh báo bảo mật khi tích ghi nhớ mật khẩu */}
-            {rememberPwd && (
-              <Alert
-                type="warning"
-                icon={<InfoCircleOutlined />}
-                showIcon
-                style={{ marginBottom: 16, fontSize: 12 }}
-                message={
-                  <Text style={{ fontSize: 12 }}>
-                    Mật khẩu được lưu trên thiết bị này. Không nên dùng trên máy công cộng.
-                  </Text>
-                }
-              />
-            )}
 
             <Form.Item style={{ marginBottom: 8 }}>
               <Button type="primary" htmlType="submit" size="large" block loading={loading}>

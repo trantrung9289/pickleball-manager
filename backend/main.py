@@ -131,7 +131,21 @@ app = FastAPI(
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
-limiter = Limiter(key_func=get_remote_address)
+
+
+def _rate_limit_key(request):
+    """IP thật của client, không phải IP proxy nội bộ của Fly.
+
+    Uvicorn không chạy với --proxy-headers nên request.client.host luôn là IP của
+    Fly edge proxy — nếu dùng get_remote_address() thẳng, MỌI client (kể cả bot gọi
+    qua localhost) bị gộp chung một "xô" rate limit. Fly tự set header Fly-Client-IP
+    ở edge (client không ghi đè được vì app chỉ nhận traffic qua proxy này), nên có
+    thể tin cậy trực tiếp mà không cần bật proxy-headers cho toàn bộ uvicorn.
+    """
+    return request.headers.get("fly-client-ip") or get_remote_address(request)
+
+
+limiter = Limiter(key_func=_rate_limit_key)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
@@ -315,9 +329,34 @@ def admin_update_club(cid: int, payload: schemas.ClubUpdate, db: Session = Depen
 
 @app.delete("/api/admin/clubs/{cid}")
 def admin_delete_club(cid: int, db: Session = Depends(get_db), su = Depends(require_superuser)):
+    """Xoá CLB và TOÀN BỘ dữ liệu liên quan. Không thể hoàn tác.
+
+    Nhiều bảng (members, fee_types, transactions, tournaments, club_memberships,
+    public_report_tokens) không khai báo ON DELETE ở tầng DB, nên với
+    PRAGMA foreign_keys=ON phải xoá tường minh theo đúng thứ tự phụ thuộc, thay vì
+    để SQLite chặn bằng IntegrityError hoặc (trước đây, khi FK tắt) âm thầm để lại
+    dữ liệu mồ côi. players có ON DELETE CASCADE/SET NULL sẵn ở tầng DB nên tự xử lý."""
     club = db.query(models.Club).filter(models.Club.id == cid).first()
     if not club: raise HTTPException(404, "Không tìm thấy CLB")
-    db.delete(club); db.commit()
+
+    for t in db.query(models.Tournament).filter(models.Tournament.club_id == cid).all():
+        db.delete(t)  # cascade participants + matches qua ORM relationship
+    db.flush()
+
+    db.query(models.Transaction).filter(models.Transaction.club_id == cid).delete(synchronize_session=False)
+    db.query(models.ReminderLog).filter(models.ReminderLog.club_id == cid).delete(synchronize_session=False)
+    db.query(models.PublicReportToken).filter(models.PublicReportToken.club_id == cid).delete(synchronize_session=False)
+
+    member_ids = [m.id for m in db.query(models.Member.id).filter(models.Member.club_id == cid).all()]
+    if member_ids:
+        db.query(models.User).filter(models.User.member_id.in_(member_ids)).update(
+            {"member_id": None}, synchronize_session=False)
+    db.query(models.Member).filter(models.Member.club_id == cid).delete(synchronize_session=False)
+    db.query(models.FeeType).filter(models.FeeType.club_id == cid).delete(synchronize_session=False)
+    db.query(models.ClubMembership).filter(models.ClubMembership.club_id == cid).delete(synchronize_session=False)
+
+    db.delete(club)  # players.club_id (ON DELETE CASCADE) tự dọn ở đây
+    db.commit()
     return {"ok": True}
 
 @app.get("/api/admin/memberships", response_model=List[schemas.MembershipOut])
@@ -932,6 +971,10 @@ def delete_fee_type(
     ft = db.query(models.FeeType).filter(models.FeeType.id == ft_id, models.FeeType.club_id == perms.club_id).first()
     if not ft:
         raise HTTPException(404, "Không tìm thấy loại khoản")
+    tx_count = db.query(models.Transaction).filter(models.Transaction.fee_type_id == ft_id).count()
+    if tx_count:
+        raise HTTPException(400, f"Không thể xoá: có {tx_count} giao dịch đang dùng khoản này")
+    db.query(models.ReminderLog).filter(models.ReminderLog.fee_type_id == ft_id).delete(synchronize_session=False)
     db.delete(ft)
     db.commit()
 
@@ -2018,6 +2061,9 @@ def delete_player(
     ).first()
     if used:
         raise HTTPException(400, "Không thể xóa: player đang tham gia giải đấu")
+    tx_count = db.query(models.Transaction).filter(models.Transaction.player_id == pid).count()
+    if tx_count:
+        raise HTTPException(400, f"Không thể xóa: có {tx_count} giao dịch gắn với khách mời này")
     db.delete(p); db.commit()
 
 
@@ -2972,7 +3018,7 @@ def send_fee_reminder(
         raise HTTPException(500, "BOT_TOKEN chưa được cấu hình")
 
     data = _build_reminder_data(month, year, db)
-    today = date.today()
+    today = _now_vn().date()   # giờ VN, không phải UTC của máy chủ Fly
     sent_count = 0
     skipped_count = 0
     errors = []
@@ -2984,13 +3030,15 @@ def send_fee_reminder(
             continue
 
         for chat_id in item["admin_chat_ids"]:
-            # Kiểm tra đã gửi hôm nay chưa
+            # Kiểm tra ĐÚNG chat_id này đã gửi hôm nay chưa (trước đây chỉ theo club/fee_type/ngày
+            # nên admin thứ 2 trở đi của cùng CLB luôn bị coi là "đã gửi" ngay sau admin đầu tiên)
             existing = db.query(models.ReminderLog).filter(
                 models.ReminderLog.club_id == item["club_id"],
                 models.ReminderLog.fee_type_id == item["fee_type_id"],
                 models.ReminderLog.month == month,
                 models.ReminderLog.year == year,
                 models.ReminderLog.send_date == today,
+                models.ReminderLog.chat_id == chat_id,
             ).first()
             if existing:
                 skipped_count += 1
@@ -3026,18 +3074,20 @@ def send_fee_reminder(
                 with _urllib_req.urlopen(req, timeout=10) as resp:
                     resp.read()
 
-                # Ghi log (UNIQUE constraint tránh trùng)
+                # Ghi log theo đúng chat_id (UNIQUE constraint tránh trùng)
                 log = models.ReminderLog(
                     club_id=item["club_id"],
                     fee_type_id=item["fee_type_id"],
                     month=month,
                     year=year,
                     send_date=today,
+                    chat_id=chat_id,
                 )
                 db.add(log)
                 db.commit()
                 sent_count += 1
             except Exception as exc:
+                db.rollback()   # commit thất bại (vd IntegrityError) không được để rớt sang vòng lặp sau
                 errors.append({"chat_id": chat_id, "error": str(exc)})
 
     return {

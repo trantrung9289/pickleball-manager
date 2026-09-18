@@ -297,9 +297,10 @@ class ReminderLog(Base):
     month       = Column(Integer, nullable=False)
     year        = Column(Integer, nullable=False)
     send_date   = Column(Date, nullable=False)
+    chat_id     = Column(Integer, nullable=True)  # 1 dòng / admin — trước đây theo cả CLB nên chỉ admin đầu nhận được nhắc
     sent_at     = Column(DateTime, server_default=func.now())
 
     from sqlalchemy import UniqueConstraint as _UC
     __table_args__ = (
-        _UC("club_id", "fee_type_id", "month", "year", "send_date", name="uq_reminder_per_day"),
+        _UC("club_id", "fee_type_id", "month", "year", "send_date", "chat_id", name="uq_reminder_per_day_per_admin"),
     )
