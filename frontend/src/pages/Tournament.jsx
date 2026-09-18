@@ -54,7 +54,8 @@ function CreateWizard({ onCreated, onClose }) {
 
   // Bước 1: chọn người chơi (thành viên + khách mời)
   const [selectedIds, setSelectedIds] = useState([]);          // member IDs đã chọn
-  const [guestPlayers, setGuestPlayers] = useState([]);        // [{id, name, phone, rank}] đã tạo qua API
+  const [allGuests, setAllGuests] = useState([]);               // toàn bộ khách mời đã có trong CLB
+  const [selectedGuestIds, setSelectedGuestIds] = useState([]); // khách mời được chọn cho giải này
   const [guestForm] = Form.useForm();
   const [addingGuest, setAddingGuest] = useState(false);
 
@@ -77,9 +78,11 @@ function CreateWizard({ onCreated, onClose }) {
 
   useEffect(() => {
     membersApi.list().then((r) => setAllMembers(r.data));
+    playersApi.list("guest").then((r) => setAllGuests(r.data));
   }, []);
 
   const selectedMembers = allMembers.filter(m => selectedIds.includes(m.id));
+  const guestPlayers = allGuests.filter(g => selectedGuestIds.includes(g.id));
   const totalSelected = selectedIds.length + guestPlayers.length;
 
   // Pool chung cho ghép đội đôi (key: "m-{id}" hoặc "g-{id}")
@@ -99,22 +102,21 @@ function CreateWizard({ onCreated, onClose }) {
   };
   const keyToName = (key) => allPool.find(p => p.key === key)?.name || "?";
 
-  // Thêm khách mời qua API rồi lưu vào guestPlayers
+  // Thêm khách mời mới qua API, thêm vào danh sách chung và tự động chọn cho giải này
   const handleAddGuest = async () => {
     let vals;
     try { vals = await guestForm.validateFields(); } catch { return; }
     setAddingGuest(true);
     try {
       const res = await playersApi.create({ name: vals.name, phone: vals.phone || null, email: vals.email || null, rank: vals.rank || "Chưa xếp hạng" });
-      setGuestPlayers(prev => [...prev, { id: res.data.id, name: res.data.name, phone: res.data.phone, rank: res.data.rank }]);
+      setAllGuests(prev => [res.data, ...prev]);
+      setSelectedGuestIds(prev => [...prev, res.data.id]);
       guestForm.resetFields();
       message.success(`Đã thêm khách mời: ${res.data.name}`);
     } catch (err) {
       message.error(err.response?.data?.detail || "Không thể thêm khách mời");
     } finally { setAddingGuest(false); }
   };
-
-  const removeGuest = (id) => setGuestPlayers(prev => prev.filter(g => g.id !== id));
 
   // Thêm 1 đội thủ công (hỗ trợ cả member và guest)
   const addTeamManual = () => {
@@ -272,6 +274,42 @@ function CreateWizard({ onCreated, onClose }) {
               <InputNumber min={2} max={8} style={{ width: 120 }} />
             </Form.Item>
           )}
+          <Form.Item label="Loại đội">
+            <Row gutter={12}>
+              <Col span={12}>
+                <Card
+                  size="small"
+                  hoverable
+                  onClick={() => setTeamType("singles")}
+                  style={{ borderColor: teamType === "singles" ? "#1677ff" : "#d9d9d9", cursor: "pointer" }}
+                >
+                  <Space>
+                    <UserOutlined style={{ fontSize: 20, color: teamType === "singles" ? "#1677ff" : "#999" }} />
+                    <div>
+                      <div style={{ fontWeight: 600 }}>Đấu đơn</div>
+                      <Text type="secondary" style={{ fontSize: 12 }}>Mỗi người chơi là 1 đội</Text>
+                    </div>
+                  </Space>
+                </Card>
+              </Col>
+              <Col span={12}>
+                <Card
+                  size="small"
+                  hoverable
+                  onClick={() => setTeamType("doubles")}
+                  style={{ borderColor: teamType === "doubles" ? "#1677ff" : "#d9d9d9", cursor: "pointer" }}
+                >
+                  <Space>
+                    <TeamOutlined style={{ fontSize: 20, color: teamType === "doubles" ? "#1677ff" : "#999" }} />
+                    <div>
+                      <div style={{ fontWeight: 600 }}>Đấu đôi</div>
+                      <Text type="secondary" style={{ fontSize: 12 }}>2 người ghép thành 1 đội</Text>
+                    </div>
+                  </Space>
+                </Card>
+              </Col>
+            </Row>
+          </Form.Item>
           <Form.Item name="description" label="Mô tả (không bắt buộc)">
             <Input.TextArea rows={2} />
           </Form.Item>
@@ -368,41 +406,54 @@ function CreateWizard({ onCreated, onClose }) {
                       </Form>
                     </Card>
 
-                    {guestPlayers.length === 0 ? (
-                      <Empty description="Chưa có khách mời nào" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+                    {allGuests.length === 0 ? (
+                      <Empty description="Chưa có khách mời nào — thêm mới ở trên" image={Empty.PRESENTED_IMAGE_SIMPLE} />
                     ) : (
-                      <ResponsiveTable
-                        size="small"
-                        pagination={false}
-                        dataSource={guestPlayers}
-                        rowKey="id"
-                        columns={[
-                          { title: "#", render: (_, __, i) => i + 1, width: 40, align: "center" },
-                          { title: "Họ và tên", dataIndex: "name",
-                            render: v => <><Tag color="orange" style={{ marginRight: 6 }}>Khách</Tag>{v}</> },
-                          { title: "SĐT", dataIndex: "phone", width: 120, render: v => v || "—" },
-                          {
-                            title: "Hạng", dataIndex: "rank", width: 120,
-                            render: v => {
-                              const colorMap = { A: "red", B: "gold", C: "blue", D: "green", "Hạt giống 1": "purple", "Hạt giống 2": "purple", "Hạt giống 3": "purple" };
-                              return <Tag color={colorMap[v] || "default"}>{v || "Chưa xếp hạng"}</Tag>;
+                      <>
+                        <div style={{ marginBottom: 12, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                          <Checkbox
+                            checked={allGuests.length > 0 && selectedGuestIds.length === allGuests.length}
+                            indeterminate={selectedGuestIds.length > 0 && selectedGuestIds.length < allGuests.length}
+                            onChange={e => setSelectedGuestIds(e.target.checked ? allGuests.map(g => g.id) : [])}
+                          >
+                            Chọn tất cả khách mời ({allGuests.length})
+                          </Checkbox>
+                          {selectedGuestIds.length > 0 && (
+                            <Button size="small" type="link" onClick={() => setSelectedGuestIds([])}>
+                              Bỏ chọn ({selectedGuestIds.length})
+                            </Button>
+                          )}
+                        </div>
+                        <ResponsiveTable
+                          rowSelection={{
+                            selectedRowKeys: selectedGuestIds,
+                            onChange: keys => setSelectedGuestIds(keys),
+                          }}
+                          size="small"
+                          pagination={{ pageSize: 10 }}
+                          dataSource={allGuests}
+                          rowKey="id"
+                          columns={[
+                            { title: "Họ và tên", dataIndex: "name",
+                              render: v => <><Tag color="orange" style={{ marginRight: 6 }}>Khách</Tag>{v}</> },
+                            { title: "SĐT", dataIndex: "phone", width: 120, render: v => v || "—" },
+                            {
+                              title: "Hạng", dataIndex: "rank", width: 120,
+                              render: v => {
+                                const colorMap = { A: "red", B: "gold", C: "blue", D: "green", "Hạt giống 1": "purple", "Hạt giống 2": "purple", "Hạt giống 3": "purple" };
+                                return <Tag color={colorMap[v] || "default"}>{v || "Chưa xếp hạng"}</Tag>;
+                              },
                             },
-                          },
-                          {
-                            title: "Thao tác", width: 60, align: "center",
-                            render: (_, r) => (
-                              <Button danger size="small" onClick={() => removeGuest(r.id)}>Xóa</Button>
-                            ),
-                          },
-                        ]}
-                        mobileTitle={(r) => (
-                          <span>
-                            <Tag color="orange" style={{ marginRight: 6 }}>Khách</Tag>
-                            {r.name}
-                          </span>
-                        )}
-                        mobileHideColumns={["#", "Họ và tên"]}
-                      />
+                          ]}
+                          mobileTitle={(r) => (
+                            <span>
+                              <Tag color="orange" style={{ marginRight: 6 }}>Khách</Tag>
+                              {r.name}
+                            </span>
+                          )}
+                          mobileHideColumns={["Họ và tên"]}
+                        />
+                      </>
                     )}
                   </>
                 ),
@@ -415,42 +466,6 @@ function CreateWizard({ onCreated, onClose }) {
       {/* ── Bước 2: Ghép đội ── */}
       {step === 2 && (
         <div>
-          {/* Chọn loại đội */}
-          <Row gutter={12} style={{ marginBottom: 16 }}>
-            <Col span={12}>
-              <Card
-                size="small"
-                hoverable
-                onClick={() => setTeamType("singles")}
-                style={{ borderColor: teamType === "singles" ? "#1677ff" : "#d9d9d9", cursor: "pointer" }}
-              >
-                <Space>
-                  <UserOutlined style={{ fontSize: 20, color: teamType === "singles" ? "#1677ff" : "#999" }} />
-                  <div>
-                    <div style={{ fontWeight: 600 }}>Đấu đơn</div>
-                    <Text type="secondary" style={{ fontSize: 12 }}>Mỗi người là 1 đội ({selectedIds.length} đội)</Text>
-                  </div>
-                </Space>
-              </Card>
-            </Col>
-            <Col span={12}>
-              <Card
-                size="small"
-                hoverable
-                onClick={() => setTeamType("doubles")}
-                style={{ borderColor: teamType === "doubles" ? "#1677ff" : "#d9d9d9", cursor: "pointer" }}
-              >
-                <Space>
-                  <TeamOutlined style={{ fontSize: 20, color: teamType === "doubles" ? "#1677ff" : "#999" }} />
-                  <div>
-                    <div style={{ fontWeight: 600 }}>Đấu đôi</div>
-                    <Text type="secondary" style={{ fontSize: 12 }}>2 người ghép thành 1 đội</Text>
-                  </div>
-                </Space>
-              </Card>
-            </Col>
-          </Row>
-
           {teamType === "singles" && (
             <Alert
               type="success" showIcon
