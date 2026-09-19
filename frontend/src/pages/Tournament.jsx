@@ -64,7 +64,7 @@ function CreateWizard({ onCreated, onClose }) {
 
   // Bước 3: ghép đội
   const [teamType, setTeamType] = useState("singles");
-  const [thirdPlaceEnabled, setThirdPlaceEnabled] = useState(false);
+  const [thirdPlaceEnabled, setThirdPlaceEnabled] = useState(true);
   // doubles – method: "manual" | "by_rank"
   const [doubleMethod, setDoubleMethod] = useState("manual");
   // doubles – rank rules: [{rank1, rank2}] for auto-pairing
