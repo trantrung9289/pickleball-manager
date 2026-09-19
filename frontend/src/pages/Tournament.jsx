@@ -16,6 +16,7 @@ import { tournamentsApi, membersApi, playersApi } from "../api";
 import ResponsiveTable from "../components/ResponsiveTable";
 import TournamentPrintSheet from "../components/TournamentPrintSheet";
 import { useViewMode } from "../contexts/ViewModeContext";
+import { buildRealBracketNodes, computeBracketGeometry, findThirdPlaceMatch } from "../utils/bracketLayout";
 
 const { Title, Text } = Typography;
 
@@ -818,7 +819,7 @@ function ScoreModal({ match, tournament, onSaved, onClose }) {
 }
 
 // ── Bracket knockout ─────────────────────────────────────
-function KnockoutBracket({ matches }) {
+function KnockoutBracket({ matches, onScoreClick }) {
   const { isMobileView } = useViewMode();
   // Trận "Tranh giải 3" đi theo đường thua (loser_next_match_id), không phải cây thắng chính —
   // tách riêng để không lẫn vào cùng cột với Chung kết (cả hai có cùng round_number).
@@ -826,7 +827,8 @@ function KnockoutBracket({ matches }) {
   const mainMatches = thirdPlace ? matches.filter(m => m.id !== thirdPlace.id) : matches;
   const rounds = [...new Set(mainMatches.map(m => m.round_number))].sort((a, b) => a - b);
 
-  // Mobile: Collapse theo từng vòng (dọc)
+  // Mobile: Collapse theo từng vòng (dọc) — cây nhánh có đường nối chỉ hợp lý ở màn hình
+  // rộng, trên di động giữ danh sách thẻ theo vòng như cũ (đọc dọc tự nhiên hơn khi cuộn).
   if (isMobileView) {
     return (
       <>
@@ -841,7 +843,7 @@ function KnockoutBracket({ matches }) {
               label: <Text strong style={{ color: "#1677ff" }}>{rName} ({done}/{rMatches.length})</Text>,
               children: (
                 <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                  {rMatches.map(m => <BracketCard key={m.id} match={m} />)}
+                  {rMatches.map(m => <BracketCard key={m.id} match={m} onScoreClick={onScoreClick} />)}
                 </div>
               ),
             };
@@ -849,40 +851,201 @@ function KnockoutBracket({ matches }) {
         />
         {thirdPlace && (
           <Card size="small" style={{ marginTop: 12 }} title={<Text strong style={{ color: "#d48806" }}>Tranh giải 3</Text>}>
-            <BracketCard match={thirdPlace} />
+            <BracketCard match={thirdPlace} onScoreClick={onScoreClick} />
           </Card>
         )}
       </>
     );
   }
 
-  // Desktop: bố cục ngang như cũ
+  // Desktop: sơ đồ nhánh thật với đường nối giữa các vòng
+  return <BracketTreeDesktop matches={matches} onScoreClick={onScoreClick} />;
+}
+
+// ── Sơ đồ nhánh trên màn hình — cùng logic hình học với bảng in (bracketLayout.js),
+// khác style: full tên đội (bọc 2 dòng thay vì cắt "..."), bấm vào ô để nhập điểm luôn.
+const TREE_BOX_W = 232;
+const TREE_COL_GAP = 56;
+const TREE_BOX_H = 78;
+const TREE_HEADER_H = 34;
+
+function treeNodeLabels(node) {
+  const m = node.match;
+  const topLabel = m.p1_id ? teamLabel(m.p1) : (node.feeders[0] ? `Thắng #${node.feeders[0].match_number}` : null);
+  const bottomLabel = m.p2_id ? teamLabel(m.p2) : (node.feeders[1] ? `Thắng #${node.feeders[1].match_number}` : null);
+  // Bye cấu trúc (1 bên trống thật, không phải bỏ giải) chỉ xảy ra ở vòng đầu — phân biệt
+  // với is_walkover (2 bên đều là người thật, 1 bên bỏ giải) để không ẩn mất tên đối thủ.
+  const isStructuralBye = m.status === "completed" && (!m.p1_id || !m.p2_id);
+  return {
+    top: isStructuralBye ? teamLabel(m.p1 || m.p2) : topLabel,
+    bottom: bottomLabel,
+    isBye: isStructuralBye,
+    scored: m.status === "completed" && m.score1 != null,
+  };
+}
+
+function TreeSlot({ label, rank, score, scored, isWalkover, isWinner, isPending, last }) {
   return (
-    <div style={{ overflowX: "auto" }}>
-      <div style={{ display: "flex", gap: 24, minWidth: rounds.length * 220 }}>
-        {rounds.map((r, i) => {
-          const rMatches = mainMatches.filter(m => m.round_number === r);
-          const rName = rMatches[0]?.round_name || `Vòng ${r}`;
-          const isFinalRound = i === rounds.length - 1;
+    <div style={{
+      display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
+      padding: "6px 10px", minHeight: 36,
+      borderBottom: last ? "none" : "1px solid #eef0f2",
+      borderLeft: isWinner ? "3px solid #52c41a" : "3px solid transparent",
+      background: isWinner ? "#f6ffed" : "transparent",
+    }}>
+      <span style={{
+        fontSize: 13, lineHeight: 1.25, fontWeight: isWinner ? 700 : 400,
+        color: isPending ? "#aaa" : (isWinner ? "#237804" : "#141413"),
+        display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical",
+        overflow: "hidden", wordBreak: "break-word",
+      }}>
+        {label || "Chờ kết quả"}
+        {rank && <Tag color="purple" style={{ marginLeft: 4, fontSize: 10, lineHeight: "14px", padding: "0 4px" }}>{rank}</Tag>}
+      </span>
+      <span style={{
+        flex: "none", minWidth: 26, height: 22, borderRadius: 4, textAlign: "center", lineHeight: "22px",
+        fontSize: isWalkover ? 10 : 13, fontWeight: 700,
+        background: isWalkover ? "#fffbe6" : "#f5f5f5", color: isWalkover ? "#ad6800" : "#141413",
+        border: isWalkover ? "1px solid #ffe58f" : "1px solid #eee",
+      }}>
+        {isWalkover ? "XT" : (scored ? score : "–")}
+      </span>
+    </div>
+  );
+}
+
+function ThirdPlaceTreeBox({ info, onScoreClick }) {
+  const { match: m, feeders } = info;
+  const nameFor = (side) => {
+    const pid = side === 1 ? m.p1_id : m.p2_id;
+    if (pid) return teamLabel(side === 1 ? m.p1 : m.p2);
+    const feeder = feeders.find((f) => f.loser_next_match_slot === side);
+    return feeder ? `Thua #${feeder.match_number}` : null;
+  };
+  const scored = m.status === "completed" && m.score1 != null;
+  const clickable = !!onScoreClick && !!m.p1_id && !!m.p2_id;
+  return (
+    <div
+      onClick={clickable ? () => onScoreClick(m) : undefined}
+      style={{ border: "1.5px solid #ffe58f", borderRadius: 8, background: "#fff", cursor: clickable ? "pointer" : "default" }}
+    >
+      <TreeSlot label={nameFor(1)} rank={teamRank(m.p1)} score={m.score1} scored={scored}
+        isWalkover={m.is_walkover} isWinner={scored && m.winner_id === m.p1_id} isPending={!m.p1_id} />
+      <TreeSlot label={nameFor(2)} rank={teamRank(m.p2)} score={m.score2} scored={scored}
+        isWalkover={m.is_walkover} isWinner={scored && m.winner_id === m.p2_id} isPending={!m.p2_id} last />
+    </div>
+  );
+}
+
+function BracketTreeDesktop({ matches, onScoreClick }) {
+  const roundsNodes = buildRealBracketNodes(matches);
+  if (!roundsNodes.length) return null;
+  const thirdPlaceInfo = findThirdPlaceMatch(matches);
+  const { centers, totalHeight } = computeBracketGeometry(roundsNodes, { boxHeight: TREE_BOX_H, minGap: 30 });
+  const treeWidth = roundsNodes.length * (TREE_BOX_W + TREE_COL_GAP) + 190; // +190 cho ô "Vô địch"
+
+  const lines = [];
+  roundsNodes.forEach((round, r) => {
+    if (r === 0) return;
+    const xEnd = r * (TREE_BOX_W + TREE_COL_GAP);
+    const xStart = xEnd - TREE_COL_GAP;
+    const xMid = xStart + TREE_COL_GAP / 2;
+    round.forEach((node) => {
+      const [a, b] = node.feederIds || [];
+      if (a == null || b == null) return;
+      const ya = centers[a], yb = centers[b], yMid = centers[node.id];
+      lines.push(<path key={`${node.id}-l`} d={`M${xStart},${ya} H${xMid} V${yb} M${xStart},${yb} H${xMid} M${xMid},${yMid} H${xEnd}`} />);
+    });
+  });
+  const finalRound = roundsNodes[roundsNodes.length - 1];
+  const finalId = finalRound[0]?.id;
+  const finalY = finalId != null ? centers[finalId] : totalHeight / 2;
+  const champX = roundsNodes.length * (TREE_BOX_W + TREE_COL_GAP);
+  if (finalId != null) lines.push(<path key="champ" d={`M${champX - TREE_COL_GAP},${finalY} H${champX}`} />);
+
+  const finalMatch = finalRound?.[0]?.match;
+  const championName = finalMatch?.status === "completed" && finalMatch.winner_id
+    ? teamLabel(finalMatch.winner_id === finalMatch.p1_id ? finalMatch.p1 : finalMatch.p2)
+    : null;
+  const champBoxTop = finalY - 36 + TREE_HEADER_H;
+
+  return (
+    <div style={{ overflowX: "auto", paddingBottom: 8 }}>
+      <div style={{ position: "relative", width: treeWidth, height: totalHeight + TREE_HEADER_H + 16 }}>
+        {roundsNodes.map((round, i) => {
+          const done = round.filter(n => n.match.status === "completed").length;
           return (
-            <div key={r} style={{ flex: "0 0 200px" }}>
-              <Text strong style={{ display: "block", textAlign: "center", marginBottom: 8, color: "#1677ff" }}>
-                {rName}
+            <div key={i} style={{ position: "absolute", left: i * (TREE_BOX_W + TREE_COL_GAP), top: 0, width: TREE_BOX_W }}>
+              <Text strong style={{ display: "block", color: "#1677ff", fontSize: 12.5, letterSpacing: ".03em", textTransform: "uppercase" }}>
+                {round[0]?.match?.round_name || `Vòng ${i + 1}`}
               </Text>
-              <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-                {rMatches.map(m => <BracketCard key={m.id} match={m} />)}
-              </div>
-              {isFinalRound && thirdPlace && (
-                <div style={{ marginTop: 24 }}>
-                  <Text strong style={{ display: "block", textAlign: "center", marginBottom: 8, color: "#d48806" }}>
-                    Tranh giải 3
-                  </Text>
-                  <BracketCard match={thirdPlace} />
-                </div>
-              )}
+              <Text type="secondary" style={{ fontSize: 11 }}>{done}/{round.length} đã đấu</Text>
             </div>
           );
         })}
+        <div style={{ position: "absolute", left: champX, top: 0, width: 160 }}>
+          <Text strong style={{ display: "block", color: "#d48806", fontSize: 12.5, letterSpacing: ".03em", textTransform: "uppercase" }}>
+            <TrophyOutlined /> Vô địch
+          </Text>
+        </div>
+        <svg width={treeWidth} height={totalHeight} style={{ position: "absolute", left: 0, top: TREE_HEADER_H }} stroke="#c1c7cd" strokeWidth="2" fill="none">
+          {lines}
+        </svg>
+        {roundsNodes.map((round, r) =>
+          round.map((node) => {
+            const m = node.match;
+            const c = treeNodeLabels(node);
+            const y = centers[node.id] - TREE_BOX_H / 2 + TREE_HEADER_H;
+            const x = r * (TREE_BOX_W + TREE_COL_GAP);
+            if (c.isBye) {
+              return (
+                <div key={node.id} style={{
+                  position: "absolute", left: x, top: y, width: TREE_BOX_W, minHeight: TREE_BOX_H,
+                  border: "1.5px dashed #d9d9d9", borderRadius: 8, background: "#fafafa",
+                  display: "flex", alignItems: "center", padding: "0 10px", gap: 6,
+                }}>
+                  <Text style={{ fontSize: 12.5, color: "#888" }}>{c.top}</Text>
+                  <Text type="secondary" style={{ fontSize: 10.5 }}>(miễn — vào vòng sau)</Text>
+                </div>
+              );
+            }
+            const clickable = !!onScoreClick && !!m.p1_id && !!m.p2_id;
+            return (
+              <div
+                key={node.id}
+                onClick={clickable ? () => onScoreClick(m) : undefined}
+                style={{
+                  position: "absolute", left: x, top: y, width: TREE_BOX_W,
+                  border: `1.5px solid ${m.status === "completed" ? "#b7eb8f" : "#d9d9d9"}`,
+                  borderRadius: 8, background: "#fff", boxShadow: "0 1px 2px rgba(0,0,0,.04)",
+                  cursor: clickable ? "pointer" : "default",
+                }}
+              >
+                <Text style={{ position: "absolute", right: 8, top: -18, fontSize: 10.5, color: "#aaa" }}>#{m.match_number}</Text>
+                <TreeSlot label={c.top} rank={teamRank(m.p1)} score={m.score1} scored={c.scored}
+                  isWalkover={m.is_walkover} isWinner={c.scored && m.winner_id === m.p1_id} isPending={!m.p1_id} />
+                <TreeSlot label={c.bottom} rank={teamRank(m.p2)} score={m.score2} scored={c.scored}
+                  isWalkover={m.is_walkover} isWinner={c.scored && m.winner_id === m.p2_id} isPending={!m.p2_id} last />
+              </div>
+            );
+          })
+        )}
+        {thirdPlaceInfo && (
+          <div style={{ position: "absolute", left: champX, top: champBoxTop + 78, width: 200 }}>
+            <Text strong style={{ display: "block", color: "#d48806", fontSize: 11.5, letterSpacing: ".03em", textTransform: "uppercase", marginBottom: 4 }}>
+              Tranh giải 3
+            </Text>
+            <ThirdPlaceTreeBox info={thirdPlaceInfo} onScoreClick={onScoreClick} />
+          </div>
+        )}
+        <div style={{
+          position: "absolute", left: champX, top: champBoxTop, width: 160, minHeight: 66,
+          border: "2px solid #d4b106", borderRadius: 8, background: "#fffbe6",
+          display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 2, padding: "8px 10px",
+        }}>
+          <TrophyOutlined style={{ color: "#d4b106", fontSize: 18 }} />
+          <Text strong style={{ fontSize: 12.5, textAlign: "center", color: "#874d00" }}>{championName || "Chưa xác định"}</Text>
+        </div>
       </div>
     </div>
   );
@@ -927,11 +1090,12 @@ function RoundedSchedule({ matches, columns, mobileProps }) {
   );
 }
 
-function BracketCard({ match }) {
+function BracketCard({ match, onScoreClick }) {
   const p1 = teamLabel(match?.p1) || (match?.p1_id ? "?" : "BYE");
   const p2 = teamLabel(match?.p2) || (match?.p2_id ? "?" : "BYE");
   const done = match.status === "completed";
   const w = match.winner_id;
+  const clickable = !!onScoreClick && !!match?.p1_id && !!match?.p2_id;
   const cell = (score) => {
     if (!done) return "–";
     if (match.is_walkover) return <Text style={{ fontSize: 11, color: "#d48806" }}>XT</Text>;
@@ -939,21 +1103,26 @@ function BracketCard({ match }) {
   };
 
   return (
-    <Card size="small" style={{ borderRadius: 8, borderColor: done ? "#52c41a" : "#d9d9d9" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+    <Card
+      size="small"
+      hoverable={clickable}
+      onClick={clickable ? () => onScoreClick(match) : undefined}
+      style={{ borderRadius: 8, borderColor: done ? "#52c41a" : "#d9d9d9", cursor: clickable ? "pointer" : "default" }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4, gap: 8 }}>
         <Text style={{ fontWeight: w === match.p1_id ? 700 : 400, color: w === match.p1_id ? "#52c41a" : "inherit", fontSize: 13 }}>
           {p1}
         </Text>
-        <Text style={{ minWidth: 24, textAlign: "center", fontWeight: 700 }}>
+        <Text style={{ minWidth: 24, textAlign: "center", fontWeight: 700, flex: "none" }}>
           {cell(match.score1)}
         </Text>
       </div>
       <Divider style={{ margin: "4px 0" }} />
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
         <Text style={{ fontWeight: w === match.p2_id ? 700 : 400, color: w === match.p2_id ? "#52c41a" : "inherit", fontSize: 13 }}>
           {p2}
         </Text>
-        <Text style={{ minWidth: 24, textAlign: "center", fontWeight: 700 }}>
+        <Text style={{ minWidth: 24, textAlign: "center", fontWeight: 700, flex: "none" }}>
           {cell(match.score2)}
         </Text>
       </div>
@@ -1679,7 +1848,7 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated }) {
     tabItems.push({
       key: "bracket",
       label: "Sơ đồ đấu",
-      children: <KnockoutBracket matches={matches} />,
+      children: <KnockoutBracket matches={matches} onScoreClick={setScoreMatch} />,
     });
     tabItems.push({
       key: "schedule",
@@ -1736,7 +1905,7 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated }) {
         label: `Vòng loại (${koMatches.filter(m => m.status === "completed").length}/${koMatches.length})`,
         children: (
           <>
-            <KnockoutBracket matches={koMatches} />
+            <KnockoutBracket matches={koMatches} onScoreClick={setScoreMatch} />
             <Divider />
             <RoundedSchedule columns={matchTableCols} matches={koMatches} mobileProps={matchTableMobileProps} />
           </>

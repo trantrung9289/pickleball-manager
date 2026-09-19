@@ -97,11 +97,23 @@ body {
    .print-sheet-root được render qua React portal vào document.body, nằm ngoài
    #root nên ẩn/hiện độc lập với toàn bộ giao diện ứng dụng khi in. */
 .print-sheet-root { display: none; }
+/* Khổ giấy theo từng trang trong CÙNG 1 lần in: vòng bảng/vòng tròn in dọc (đọc như 1 tờ danh
+   sách), đấu loại trực tiếp in ngang (sơ đồ nhánh cần bề ngang). CSS Paged Media cho phép gán
+   khổ giấy khác nhau cho từng trang qua "named page" (@page tên + page: tên trên phần tử) —
+   Chrome/Edge áp dụng đúng theo từng trang mà không cần người dùng tự đổi khổ giấy giữa lúc in;
+   Firefox chưa hỗ trợ thuộc tính `page`, sẽ dùng khổ mặc định (dọc) cho mọi trang.
+   margin:0 ở đây để không cộng dồn với lề mặc định trình duyệt — .print-page tự lo lề bằng
+   padding 14mm bên dưới, tránh lề bị nhân đôi tuỳ theo cấu hình máy in của người dùng. */
+@page { margin: 0; }
+@page print-portrait-page { size: A4 portrait; margin: 0; }
+@page print-landscape-page { size: A4 landscape; margin: 0; }
 @media print {
   #root { display: none !important; }
   .print-sheet-root { display: block !important; }
   .print-page { break-after: page; }
   .print-page:last-child { break-after: auto; }
+  .print-portrait { page: print-portrait-page; }
+  .print-landscape { page: print-landscape-page; }
 }
 .print-page {
   background: #fff;

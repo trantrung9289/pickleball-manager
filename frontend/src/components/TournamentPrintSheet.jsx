@@ -17,9 +17,12 @@ const FORMAT_LABEL = {
   individual: "Thi đấu riêng lẻ",
 };
 
-const BOX_W = 200;
-const BOX_H = 60;
+const BOX_W = 220;
+const BOX_H = 76; // đủ chỗ cho tên đội bọc 2 dòng (xem Slot) thay vì cắt "..."
 const COL_GAP = 70;
+// Chiều rộng in được thực tế của trang ngang A4 (297mm) trừ padding .print-page (14mm x 2),
+// quy đổi ra px theo chuẩn 96px/inch mà trình duyệt dùng để bố cục các phần tử CSS px khi in.
+const LANDSCAPE_PRINTABLE_PX = ((297 - 28) / 25.4) * 96;
 
 // ── Khối tiêu đề dùng chung mọi trang in ─────────────────────────────────────
 function SheetHeader({ tournament, subtitle }) {
@@ -137,7 +140,14 @@ function StandingsShell({ rows }) {
         {rows.map((r, i) => (
           <tr key={r.participant_id}>
             <td style={cellStyle("center")}>{i + 1}</td>
-            <td style={{ ...cellStyle("left"), whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.team_name}</td>
+            <td style={cellStyle("left")}>
+              {/* div riêng bên trong <td> — line-clamp cần display:-webkit-box, đặt thẳng lên
+                  <td> sẽ phá layout table (không còn là table-cell) */}
+              <div style={{
+                lineHeight: 1.25, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical",
+                overflow: "hidden", wordBreak: "break-word",
+              }}>{r.team_name}</div>
+            </td>
             <td style={cellStyle("center")}>{r.played}</td>
             <td style={cellStyle("center")}>{r.won}</td>
             <td style={cellStyle("center")}>{r.goal_diff > 0 ? `+${r.goal_diff}` : r.goal_diff}</td>
@@ -156,6 +166,9 @@ function BracketDiagram({ roundsNodes, content, roundTitles }) {
   if (!roundsNodes.length) return null;
   const { centers, totalHeight } = computeBracketGeometry(roundsNodes, { boxHeight: BOX_H, minGap: 26 });
   const width = roundsNodes.length * (BOX_W + COL_GAP) + 160; // +160 cho hộp "Vô địch"
+  // Bracket nhiều vòng (>4 vòng, ~16+ đội) có thể rộng hơn khổ giấy ngang thật — thu nhỏ vừa
+  // trang thay vì để trình duyệt cắt mất các cột bên phải khi in.
+  const scale = width > LANDSCAPE_PRINTABLE_PX ? LANDSCAPE_PRINTABLE_PX / width : 1;
 
   const lines = [];
   roundsNodes.forEach((round, r) => {
@@ -181,51 +194,56 @@ function BracketDiagram({ roundsNodes, content, roundTitles }) {
   }
 
   return (
-    <div style={{ position: "relative", width, height: totalHeight + 30 }}>
-      {(roundTitles || roundsNodes.map((_, i) => `Vòng ${i + 1}`)).map((t, i) => (
-        <div key={t} style={{
-          position: "absolute", left: i * (BOX_W + COL_GAP), top: 0,
-          fontSize: 11, fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase", color: "#555",
-        }}>{t}</div>
-      ))}
-      <div style={{ position: "absolute", left: championX, top: 0, fontSize: 11, fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase", color: "#555" }}>
-        Vô địch
-      </div>
-      <svg width={width} height={totalHeight} style={{ position: "absolute", left: 0, top: 24 }} stroke="#9aa0a6" strokeWidth="1.6" fill="none">
-        {lines}
-      </svg>
-      {roundsNodes.map((round, r) =>
-        round.map((node) => {
-          const c = content(node, r);
-          const y = centers[node.id] - BOX_H / 2 + 24;
-          const x = r * (BOX_W + COL_GAP);
-          if (c.isBye) {
+    <div style={{ width: width * scale, height: (totalHeight + 30) * scale }}>
+      <div style={{
+        position: "relative", width, height: totalHeight + 30,
+        transform: scale !== 1 ? `scale(${scale})` : undefined, transformOrigin: "top left",
+      }}>
+        {(roundTitles || roundsNodes.map((_, i) => `Vòng ${i + 1}`)).map((t, i) => (
+          <div key={t} style={{
+            position: "absolute", left: i * (BOX_W + COL_GAP), top: 0,
+            fontSize: 11, fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase", color: "#555",
+          }}>{t}</div>
+        ))}
+        <div style={{ position: "absolute", left: championX, top: 0, fontSize: 11, fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase", color: "#555" }}>
+          Vô địch
+        </div>
+        <svg width={width} height={totalHeight} style={{ position: "absolute", left: 0, top: 24 }} stroke="#9aa0a6" strokeWidth="1.6" fill="none">
+          {lines}
+        </svg>
+        {roundsNodes.map((round, r) =>
+          round.map((node) => {
+            const c = content(node, r);
+            const y = centers[node.id] - BOX_H / 2 + 24;
+            const x = r * (BOX_W + COL_GAP);
+            if (c.isBye) {
+              return (
+                <div key={node.id} style={{
+                  position: "absolute", left: x, top: y, width: BOX_W, height: BOX_H,
+                  border: "1.5px solid #ddd", borderRadius: 4, background: "#fafafa",
+                  display: "flex", alignItems: "center", padding: "0 10px", fontSize: 12.5, color: "#888",
+                }}>
+                  {c.top || c.bottom} <span style={{ marginLeft: 6, fontSize: 10.5 }}>(miễn — vào thẳng vòng sau)</span>
+                </div>
+              );
+            }
             return (
-              <div key={node.id} style={{
-                position: "absolute", left: x, top: y, width: BOX_W, height: BOX_H,
-                border: "1.5px solid #ddd", borderRadius: 4, background: "#fafafa",
-                display: "flex", alignItems: "center", padding: "0 10px", fontSize: 12.5, color: "#888",
-              }}>
-                {c.top || c.bottom} <span style={{ marginLeft: 6, fontSize: 10.5 }}>(miễn — vào thẳng vòng sau)</span>
+              <div key={node.id} style={{ position: "absolute", left: x, top: y, width: BOX_W, border: "1.5px solid #333", borderRadius: 4, background: "#fff" }}>
+                {c.matchNumber != null && (
+                  <div style={{ position: "absolute", right: 6, top: -13, fontSize: 9.5, color: "#aaa" }}>#{c.matchNumber}</div>
+                )}
+                <Slot label={c.top} score={c.score1} scored={c.scored} isWalkover={c.isWalkover} isWinner={c.winnerIsP1} />
+                <Slot label={c.bottom} score={c.score2} scored={c.scored} isWalkover={c.isWalkover} isWinner={c.winnerIsP2} last />
               </div>
             );
-          }
-          return (
-            <div key={node.id} style={{ position: "absolute", left: x, top: y, width: BOX_W, border: "1.5px solid #333", borderRadius: 4, background: "#fff" }}>
-              {c.matchNumber != null && (
-                <div style={{ position: "absolute", right: 6, top: -13, fontSize: 9.5, color: "#aaa" }}>#{c.matchNumber}</div>
-              )}
-              <Slot label={c.top} score={c.score1} scored={c.scored} />
-              <Slot label={c.bottom} score={c.score2} scored={c.scored} last />
-            </div>
-          );
-        })
-      )}
-      <div style={{
-        position: "absolute", left: championX, top: finalY - 28 + 24, width: 150, height: 56,
-        border: "2px solid #b8860b", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", background: "#fffbea",
-      }}>
-        <span style={{ fontSize: 12.5, fontWeight: 700, color: "#8a6d00" }}>🏆 Vô địch</span>
+          })
+        )}
+        <div style={{
+          position: "absolute", left: championX, top: finalY - 28 + 24, width: 150, height: 56,
+          border: "2px solid #b8860b", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", background: "#fffbea",
+        }}>
+          <span style={{ fontSize: 12.5, fontWeight: 700, color: "#8a6d00" }}>🏆 Vô địch</span>
+        </div>
       </div>
     </div>
   );
@@ -248,24 +266,35 @@ function ThirdPlaceBox({ thirdPlaceInfo }) {
         Tranh giải 3
       </div>
       <div style={{ width: BOX_W, border: "1.5px solid #333", borderRadius: 4, background: "#fff" }}>
-        <Slot label={nameFor(1)} score={m.score1} scored={scored} />
-        <Slot label={nameFor(2)} score={m.score2} scored={scored} last />
+        <Slot label={nameFor(1)} score={m.score1} scored={scored} isWalkover={m.is_walkover} isWinner={scored && m.winner_id === m.p1_id} />
+        <Slot label={nameFor(2)} score={m.score2} scored={scored} isWalkover={m.is_walkover} isWinner={scored && m.winner_id === m.p2_id} last />
       </div>
     </div>
   );
 }
 
-function Slot({ label, score, scored, last }) {
+function Slot({ label, score, scored, last, isWalkover, isWinner }) {
   return (
     <div style={{
-      display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, padding: "0 8px", height: 30,
+      display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, padding: "4px 8px", minHeight: 34,
       borderBottom: last ? "none" : "1px solid #ccc",
+      background: isWinner ? "#f6ffed" : "transparent",
     }}>
-      <span style={{ fontSize: 12.5, color: label ? "#141413" : "#888", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+      <span style={{
+        fontSize: 12, lineHeight: 1.25, fontWeight: isWinner ? 700 : 400,
+        color: isWinner ? "#237804" : (label ? "#141413" : "#888"),
+        display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", wordBreak: "break-word",
+      }}>
         {label || " "}
       </span>
-      <div style={{ width: 26, height: 19, border: "1.2px solid #333", borderRadius: 2, flex: "none", textAlign: "center", fontSize: 11, lineHeight: "17px" }}>
-        {scored ? score : " "}
+      <div style={{
+        width: 28, height: 19, borderRadius: 2, flex: "none", textAlign: "center", lineHeight: "17px",
+        border: isWalkover ? "1.2px solid #d4b106" : "1.2px solid #333",
+        background: isWalkover ? "#fffbe6" : "transparent",
+        color: isWalkover ? "#8a6d00" : "inherit",
+        fontSize: isWalkover ? 8.5 : 11,
+      }}>
+        {isWalkover ? "XT" : (scored ? score : " ")}
       </div>
     </div>
   );
@@ -275,7 +304,10 @@ function realBracketContent(node) {
   const m = node.match;
   const topLabel = m.p1_id ? teamLabel(m.p1) : (node.feeders[0] ? `Thắng ${node.feeders[0].round_name} #${node.feeders[0].match_number}` : null);
   const bottomLabel = m.p2_id ? teamLabel(m.p2) : (node.feeders[1] ? `Thắng ${node.feeders[1].round_name} #${node.feeders[1].match_number}` : null);
-  const isBye = m.status === "completed" && m.score1 == null; // bye tự hoàn thành, không có tỉ số
+  // Bye cấu trúc thật (1 bên trống, không phải bỏ giải) khác với is_walkover (2 bên đều là
+  // người thật, 1 bên bỏ giải) — trước đây gộp chung theo "hoàn thành mà không có tỉ số" nên
+  // walkover bị hiển thị nhầm thành bye và ẩn mất tên đối thủ còn lại.
+  const isBye = m.status === "completed" && (!m.p1_id || !m.p2_id);
   return {
     top: isBye ? teamLabel(m.p1 || m.p2) : topLabel,
     bottom: bottomLabel,
@@ -283,6 +315,9 @@ function realBracketContent(node) {
     matchNumber: m.match_number,
     scored: m.status === "completed" && m.score1 != null,
     score1: m.score1, score2: m.score2,
+    isWalkover: m.is_walkover,
+    winnerIsP1: m.status === "completed" && m.winner_id === m.p1_id,
+    winnerIsP2: m.status === "completed" && m.winner_id === m.p2_id,
   };
 }
 
@@ -291,7 +326,7 @@ function projectedBracketContent(node, roundIndex) {
   // bracket — từ vòng 2 trở đi, "1 bên đã biết, 1 bên chưa" nghĩa là ĐANG CHỜ đối thủ thật,
   // không phải bye, nên không gắn nhãn "miễn".
   const isBye = roundIndex === 0 && !!((node.top && !node.bottom) || (node.bottom && !node.top));
-  return { top: node.top, bottom: node.bottom, isBye, matchNumber: null, scored: false };
+  return { top: node.top, bottom: node.bottom, isBye, matchNumber: null, scored: false, isWalkover: false, winnerIsP1: false, winnerIsP2: false };
 }
 
 // ── Trang: vòng tròn / vòng tròn hai lượt / thi đấu riêng lẻ ─────────────────
@@ -303,7 +338,7 @@ function RoundRobinSheet({ tournament, standings }) {
         <div style={{ flex: 1 }}>
           <MatchRows matches={tournament.matches} />
         </div>
-        <div style={{ width: 270 }}>
+        <div style={{ width: 310 }}>
           <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".06em", color: "#555", textTransform: "uppercase", margin: "0 0 4px", paddingBottom: 3, borderBottom: "2px solid #141413" }}>
             Bảng xếp hạng
           </div>
@@ -362,11 +397,13 @@ function CombinedSheet({ tournament, standingsByGroup }) {
     bracketEl = <BracketDiagram roundsNodes={roundsNodes} content={projectedBracketContent} roundTitles={roundTitles} />;
   }
 
+  // 2 trang khổ giấy khác nhau thay vì gộp 1 trang ngang: vòng bảng đọc như danh sách nên hợp
+  // giấy dọc, còn sơ đồ nhánh loại trực tiếp cần bề ngang mới đủ chỗ nối các vòng.
   return (
-    <div className="print-page print-landscape">
-      <SheetHeader tournament={tournament} subtitle="VÒNG BẢNG + LOẠI TRỰC TIẾP" />
-      <div style={{ display: "flex", gap: 24 }}>
-        <div style={{ width: 430, display: "flex", flexDirection: "column", gap: 16 }}>
+    <>
+      <div className="print-page print-portrait">
+        <SheetHeader tournament={tournament} subtitle="VÒNG BẢNG" />
+        <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
           {groups.map((g) => (
             <div key={g}>
               <div style={{ fontSize: 13, fontWeight: 800, background: "#141413", color: "#fff", padding: "4px 10px", borderRadius: 3, display: "inline-block", marginBottom: 6 }}>
@@ -379,18 +416,19 @@ function CombinedSheet({ tournament, standingsByGroup }) {
             </div>
           ))}
         </div>
-        <div style={{ flex: 1 }}>
-          {bracketEl}
-          {!hasRealKO && (
-            <div style={{ marginTop: 12, padding: "10px 12px", border: "1.3px dashed #bbb", borderRadius: 6, fontSize: 11, color: "#666", lineHeight: 1.6 }}>
-              <b style={{ color: "#141413" }}>Ghi chú</b><br />
-              Sơ đồ trên là DỰ KIẾN theo luật ghép cặp của hệ thống — tên thật chỉ chốt sau khi vòng bảng
-              đấu xong và bấm "Bắt đầu vòng loại trực tiếp". In lại trang này khi đó để có tên thật.
-            </div>
-          )}
-        </div>
       </div>
-    </div>
+      <div className="print-page print-landscape">
+        <SheetHeader tournament={tournament} subtitle="VÒNG LOẠI TRỰC TIẾP" />
+        {bracketEl}
+        {!hasRealKO && (
+          <div style={{ marginTop: 12, padding: "10px 12px", border: "1.3px dashed #bbb", borderRadius: 6, fontSize: 11, color: "#666", lineHeight: 1.6 }}>
+            <b style={{ color: "#141413" }}>Ghi chú</b><br />
+            Sơ đồ trên là DỰ KIẾN theo luật ghép cặp của hệ thống — tên thật chỉ chốt sau khi vòng bảng
+            đấu xong và bấm "Bắt đầu vòng loại trực tiếp". In lại trang này khi đó để có tên thật.
+          </div>
+        )}
+      </div>
+    </>
   );
 }
 
