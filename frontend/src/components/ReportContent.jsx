@@ -370,28 +370,6 @@ export function MonthlyStats({ year, api }) {
                       </span>
                     )}
                     mobileHideColumns={["Loại", "Khoản"]}
-                    summary={(rows) => {
-                      const tIn = rows.filter((r) => r.type === "income").reduce((s, r) => s + parseFloat(r.amount), 0);
-                      const tEx = rows.filter((r) => r.type === "expense").reduce((s, r) => s + parseFloat(r.amount), 0);
-                      return (
-                        <Table.Summary.Row style={{ background: antToken.colorFillAlter, fontWeight: 600 }}>
-                          <Table.Summary.Cell colSpan={4} align="right">Tổng:</Table.Summary.Cell>
-                          <Table.Summary.Cell align="right">
-                            <div style={{ color: antToken.colorSuccess }}>+{fmt(tIn)}</div>
-                            <div style={{ color: antToken.colorError }}>-{fmt(tEx)}</div>
-                          </Table.Summary.Cell>
-                          <Table.Summary.Cell colSpan={2} />
-                        </Table.Summary.Row>
-                      );
-                    }}
-                    mobileSummary={(rows) => {
-                      const tIn = rows.filter((r) => r.type === "income").reduce((s, r) => s + parseFloat(r.amount), 0);
-                      const tEx = rows.filter((r) => r.type === "expense").reduce((s, r) => s + parseFloat(r.amount), 0);
-                      return [
-                        { label: "Tổng thu", value: <span style={{ color: "#52c41a" }}>+{fmt(tIn)}</span> },
-                        { label: "Tổng chi", value: <span style={{ color: "#ff4d4f" }}>-{fmt(tEx)}</span> },
-                      ];
-                    }}
                   />
                 )
               }
