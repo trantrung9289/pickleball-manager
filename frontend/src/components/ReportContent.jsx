@@ -388,7 +388,6 @@ export function MemberContributions({ year, api }) {
   const [feeTypeFilter, setFeeTypeFilter] = useState(null);
   const [monthFilter, setMonthFilter] = useState(dayjs().month() + 1);
   const [search, setSearch] = useState("");
-  const { token: antToken } = theme.useToken();
 
   useEffect(() => {
     api.feeTypes.list({ type: "income" }).then((r) => setFeeTypes(r.data));
@@ -487,18 +486,6 @@ export function MemberContributions({ year, api }) {
         pagination={{ pageSize: 20 }}
         mobileTitle={(r) => <span>{r.member_code ? <b>{r.member_code}</b> : <Tag color="orange">Khách mời</Tag>} — {r.full_name}</span>}
         mobileHideColumns={["Mã TV", "Họ và tên"]}
-        summary={(rows) => {
-          const total = rows.reduce((s, r) => s + r.total_amount, 0);
-          return (
-            <Table.Summary.Row style={{ background: antToken.colorFillAlter, fontWeight: 600 }}>
-              <Table.Summary.Cell colSpan={4} align="right">Tổng cộng:</Table.Summary.Cell>
-              <Table.Summary.Cell align="right"><b style={{ color: antToken.colorSuccess }}>{fmt(total)}</b></Table.Summary.Cell>
-            </Table.Summary.Row>
-          );
-        }}
-        mobileSummary={(rows) => [
-          { label: "Tổng cộng", value: <b style={{ color: "#52c41a" }}>{fmt(rows.reduce((s, r) => s + r.total_amount, 0))}</b> },
-        ]}
       />
     </>
   );
