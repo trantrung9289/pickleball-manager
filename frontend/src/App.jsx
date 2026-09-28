@@ -194,10 +194,10 @@ function AppShell() {
     <>
       <div style={{ padding: "16px 24px", borderBottom: `1px solid ${themeConfig.sidebarBorder}`, background: themeConfig.sidebar }}>
         <Title level={5} style={{ color: themeConfig.sidebarText, margin: 0, fontSize: 14 }}>
-          🏸 {selectedClub?.name || "Quản lý CLB"}
+          🏆 {selectedClub?.name || "Quản lý CLB"}
         </Title>
         <div style={{ color: themeConfig.sidebarSubText, fontSize: 12 }}>
-          {selectedClub?.sport || "Thể thao Pickleball"}
+          {selectedClub?.sport || "Câu lạc bộ thể thao"}
         </div>
       </div>
       <Menu

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { tournamentsApi } from "../api";
+import { useAuth } from "../context/AuthContext";
 import {
   projectedQualifierLabels, buildProjectedBracketNodes, buildRealBracketNodes, computeBracketGeometry,
   findThirdPlaceMatch,
@@ -26,6 +27,8 @@ const LANDSCAPE_PRINTABLE_PX = ((297 - 28) / 25.4) * 96;
 
 // ── Khối tiêu đề dùng chung mọi trang in ─────────────────────────────────────
 function SheetHeader({ tournament, subtitle }) {
+  // Portal vào document.body vẫn giữ React context → đọc được CLB đang chọn.
+  const clubName = useAuth()?.selectedClub?.name;
   return (
     <div style={{
       display: "flex", justifyContent: "space-between", alignItems: "flex-start",
@@ -33,7 +36,7 @@ function SheetHeader({ tournament, subtitle }) {
     }}>
       <div>
         <div style={{ fontSize: 11, letterSpacing: ".08em", textTransform: "uppercase", color: "#888" }}>
-          CLB Pickleball ___________________
+          {clubName || "CLB: ___________________"}
         </div>
         <div style={{ fontSize: 20, fontWeight: 800, marginTop: 3 }}>{subtitle}</div>
         <div style={{ fontSize: 12.5, color: "#555", marginTop: 2 }}>Tên giải: {tournament.name}</div>

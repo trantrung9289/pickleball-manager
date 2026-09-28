@@ -31,7 +31,7 @@ export default function Setup() {
     try {
       await setup({
         club_name: clubData.club_name,
-        sport: clubData.sport || "Pickleball",
+        sport: clubData.sport,
         description: clean(clubData.description),
         founded_year: clean(clubData.founded_year),
         address: clean(clubData.address),
@@ -100,8 +100,8 @@ export default function Setup() {
 
               <Row gutter={12}>
                 <Col span={12}>
-                  <Form.Item name="sport" label="Môn thể thao">
-                    <Input placeholder="Pickleball" />
+                  <Form.Item name="sport" label="Môn thể thao" rules={[{ required: true, message: "Nhập môn thể thao" }]}>
+                    <Input placeholder="VD: Pickleball, Tennis, Cầu lông" />
                   </Form.Item>
                 </Col>
                 <Col span={12}>

@@ -19,7 +19,6 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(() => {
     try { return JSON.parse(localStorage.getItem("user")); } catch { return null; }
   });
-  const [club, setClub] = useState(null);             // thông tin CLB đang xét (từ /api/club/status)
   const [initialized, setInitialized] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -33,7 +32,6 @@ export function AuthProvider({ children }) {
     try {
       const { data } = await authApi.status();
       setInitialized(data.initialized);
-      if (data.club) setClub(data.club);
     } catch {
       setInitialized(false);
     } finally {
@@ -138,12 +136,6 @@ export function AuthProvider({ children }) {
     localStorage.setItem("token", data.access_token);
     localStorage.setItem("user", JSON.stringify(data.user));
     setUser(data.user);
-    try {
-      const { data: clubData } = await authApi.getClub();
-      setClub(clubData);
-    } catch {
-      // Không có CLB nào (tài khoản superuser) hoặc lỗi tạm thời — bỏ qua, không chặn đăng nhập
-    }
     if (!data.user.is_superuser) {
       // load memberships — sẽ tự chọn nếu chỉ có 1
       try {
@@ -192,7 +184,7 @@ export function AuthProvider({ children }) {
 
   return (
     <AuthContext.Provider value={{
-      user, club, initialized, loading,
+      user, initialized, loading,
       memberships, selectedMembership, selectedClub, perms,
       login, logout, setup, selectClub, checkStatus, refreshAll,
     }}>

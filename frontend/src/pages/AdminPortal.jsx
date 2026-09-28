@@ -641,10 +641,10 @@ export default function AdminPortal({ onBack }) {
       >
         <Form form={clubForm} layout="vertical" onFinish={handleSaveClub} style={{ marginTop: 16 }}>
           <Form.Item name="name" label="Tên CLB" rules={[{ required: true, message: "Nhập tên CLB" }]}>
-            <Input placeholder="CLB Pickleball Hà Nội" />
+            <Input placeholder="VD: CLB Pickleball Hà Nội, CLB Tennis Sài Gòn" />
           </Form.Item>
-          <Form.Item name="sport" label="Môn thể thao">
-            <Input placeholder="Pickleball" />
+          <Form.Item name="sport" label="Môn thể thao" rules={[{ required: true, message: "Nhập môn thể thao" }]}>
+            <Input placeholder="VD: Pickleball, Tennis, Cầu lông" />
           </Form.Item>
           <Row gutter={12}>
             <Col span={12}>

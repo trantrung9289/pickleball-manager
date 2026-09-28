@@ -9,7 +9,7 @@ from enum import Enum
 
 class ClubSetup(BaseModel):
     club_name: str
-    sport: str = "Pickleball"
+    sport: str
     description: Optional[str] = None
     founded_year: Optional[int] = None
     address: Optional[str] = None

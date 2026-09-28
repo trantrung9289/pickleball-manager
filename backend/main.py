@@ -183,9 +183,10 @@ def health(db: Session = Depends(get_db)):
 
 @app.get("/api/club/status")
 def club_status(db: Session = Depends(get_db)):
-    """Kiểm tra CLB đã được khởi tạo chưa."""
-    club = db.query(models.Club).first()
-    return {"initialized": club is not None, "club": schemas.ClubOut.from_orm(club) if club else None}
+    """Kiểm tra hệ thống đã khởi tạo (có ít nhất 1 CLB) chưa.
+    Không trả thông tin CLB: hệ thống đa CLB nên "CLB đầu tiên" không đại diện cho ai,
+    và endpoint này public (trang đăng nhập) — không lộ tên/địa chỉ/SĐT của bất kỳ CLB nào."""
+    return {"initialized": db.query(models.Club.id).first() is not None}
 
 
 @app.post("/api/club/setup", response_model=schemas.TokenOut)
@@ -326,6 +327,11 @@ def admin_list_clubs(db: Session = Depends(get_db), su = Depends(require_superus
 
 @app.post("/api/admin/clubs", response_model=schemas.ClubOut)
 def admin_create_club(payload: schemas.ClubUpdate, db: Session = Depends(get_db), su = Depends(require_superuser)):
+    # Hệ thống đa CLB, đa bộ môn: không để cột `sport` rơi vào default "Pickleball" của model
+    if not (payload.name or "").strip():
+        raise HTTPException(400, "Nhập tên CLB")
+    if not (payload.sport or "").strip():
+        raise HTTPException(400, "Nhập môn thể thao")
     club = models.Club(**{k: v for k, v in payload.dict().items() if v is not None})
     db.add(club); db.commit(); db.refresh(club)
     return club

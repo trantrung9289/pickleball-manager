@@ -16,7 +16,7 @@ const KEY_USER = "rememberedUsername";
 // adminMode=true  → trang này dùng cho Quản trị viên hệ thống
 // adminMode=false → trang này dùng cho Thành viên CLB
 export default function Login({ onBack, adminMode = false, onSwitchMode }) {
-  const { login, club } = useAuth();
+  const { login } = useAuth();
   const { themeConfig, themeName } = useAppTheme();
   const { token: antToken } = theme.useToken();
 
@@ -75,17 +75,18 @@ export default function Login({ onBack, adminMode = false, onSwitchMode }) {
     }}>
       <div style={{ width: "100%", maxWidth: 420 }}>
 
-        {/* Logo + tên CLB / hệ thống */}
+        {/* Logo + tiêu đề hệ thống. Không hiện tên/bộ môn CLB ở đây: hệ thống đa CLB,
+            đa bộ môn — trước khi đăng nhập chưa biết người dùng thuộc CLB nào. */}
         <div style={{ textAlign: "center", marginBottom: 32 }}>
           {adminMode
             ? <SettingOutlined style={{ fontSize: 52, color: accentColor }} />
             : <TrophyOutlined  style={{ fontSize: 52, color: accentColor }} />
           }
           <Title level={2} style={{ color: "#fff", margin: "12px 0 4px" }}>
-            {adminMode ? "Quản trị hệ thống" : (club?.name || "Quản lý CLB")}
+            {adminMode ? "Quản trị hệ thống" : "Quản lý CLB"}
           </Title>
           <Text style={{ color: "rgba(255,255,255,0.55)" }}>
-            {adminMode ? "System Admin Portal" : (club?.sport || "Thể thao Pickleball")}
+            {adminMode ? "System Admin Portal" : "Hệ thống quản lý câu lạc bộ thể thao"}
           </Text>
         </div>
 
