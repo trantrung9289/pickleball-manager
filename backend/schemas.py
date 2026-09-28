@@ -102,10 +102,26 @@ class MembershipOut(BaseModel):
     can_create: bool
     can_edit: bool
     can_delete: bool
+    bot_enabled: bool = True
     user: Optional[UserOut] = None
     club: Optional[ClubOut] = None
     class Config:
         from_attributes = True
+
+# Danh sách tài khoản của CLB nhìn từ phía club admin (cấp quyền dùng bot) —
+# không lộ telegram_chat_id thật, chỉ báo đã liên kết hay chưa.
+class ClubMemberAccountOut(BaseModel):
+    id: int
+    user_id: int
+    username: str
+    full_name: Optional[str] = None
+    role: str
+    bot_enabled: bool
+    telegram_linked: bool
+    is_self: bool
+
+class BotEnabledUpdate(BaseModel):
+    enabled: bool
 
 
 class MemberStatus(str, Enum):

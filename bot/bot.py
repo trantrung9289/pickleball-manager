@@ -149,10 +149,93 @@ DEFAULT_TOP_KEYS     = ["members", "thu", "chi", "report", "gdlist", "category",
 DEFAULT_MEMBER_KEYS  = ["members_list", "members_add", "members_upd_rank", "members_upd_status", "members_delete"]
 DEFAULT_REPORT_KEYS  = ["report_overview", "report_monthly", "report_fee_status"]
 DEFAULT_CATEGORY_KEYS = ["category_add", "category_delete"]
+# Sửa/Xóa giao dịch không phải nút menu (nằm inline trong màn hình giao dịch) nhưng vẫn
+# là chức năng cấu hình được — key mới thêm ở menu_config version 2.
+DEFAULT_GDLIST_KEYS  = ["gdlist_edit", "gdlist_delete"]
+MENU_CFG_V2_KEYS     = set(DEFAULT_GDLIST_KEYS)
+
+# Key con → key cha: tắt cha thì mọi chức năng con cũng bị chặn dù cấu hình cũ còn tick con
+KEY_PARENT: dict[str, str] = {
+    **{k: "members" for k in DEFAULT_MEMBER_KEYS},
+    **{k: "report" for k in DEFAULT_REPORT_KEYS},
+    **{k: "category" for k in DEFAULT_CATEGORY_KEYS},
+    **{k: "gdlist" for k in DEFAULT_GDLIST_KEYS},
+}
+
+# callback_data (theo prefix, khớp theo thứ tự — prefix dài đứng trước) → key chức năng.
+# Dùng để CHẶN thao tác đã bị tắt trong cấu hình, không chỉ ẩn nút: ai gửi thẳng callback
+# (menu cũ chưa refresh, hoặc cố ý) vẫn bị từ chối. Các bước giữa chừng của wizard/sửa GD
+# (wiz_date:, wiz_ft:, wiz:confirm_yes, edittx_set:...) không cần map vì bước khởi đầu đã bị chặn.
+CALLBACK_KEY_RULES: list[tuple[str, str]] = [
+    ("menu:members",          "members"),
+    ("member:list",           "members_list"),
+    ("wiz:add_member",        "members_add"),
+    ("wiz:upd_member_rank",   "members_upd_rank"),
+    ("wiz:upd_member_status", "members_upd_status"),
+    ("wiz:del_member",        "members_delete"),
+    ("menu:thu",              "thu"),
+    ("wiz:add_thu",           "thu"),
+    ("menu:chi",              "chi"),
+    ("wiz:add_chi",           "chi"),
+    ("menu:report",           "report"),
+    ("report:overview",       "report_overview"),
+    ("report:monthly",        "report_monthly"),
+    ("rpt_monthly:",          "report_monthly"),
+    ("report:fee_status",     "report_fee_status"),
+    ("rpt_fee_ft:",           "report_fee_status"),
+    ("rpt_fee:",              "report_fee_status"),
+    ("gdlist_edit:",          "gdlist_edit"),
+    ("edittx_",               "gdlist_edit"),
+    ("gdlist_del:",           "gdlist_delete"),
+    ("deltx",                 "gdlist_delete"),
+    ("menu:gdlist",           "gdlist"),
+    ("gdlist:",               "gdlist"),
+    ("menu:category",         "category"),
+    ("wiz:add_fee_type",      "category_add"),
+    ("category:",             "category_delete"),
+    ("menu:help",             "help"),
+]
+
+
+def _required_key(callback_data: str) -> str | None:
+    for prefix, key in CALLBACK_KEY_RULES:
+        if callback_data.startswith(prefix):
+            return key
+    return None
+
+
+# user_id → False nếu club admin đã tắt quyền dùng bot (đọc từ /api/my-memberships)
+_bot_allowed: dict[int, bool] = {}
+
+
+def _enabled_keys(user_id: int) -> set[str] | None:
+    """Tập key đang bật theo cấu hình CLB; None = chưa có cấu hình → mọi thứ bật.
+    Cấu hình lưu trước version 2 chưa biết key Sửa/Xóa GD → coi như bật để không
+    đột ngột khoá chức năng ở CLB đã cấu hình từ trước."""
+    wrapper = _menu_cfg.get(user_id)
+    menu_cfg = wrapper.get("menu") if isinstance(wrapper, dict) else None
+    if not isinstance(menu_cfg, dict):
+        return None
+    enabled = set(menu_cfg.get("checkedKeys", []))
+    if int(menu_cfg.get("version", 1)) < 2:
+        enabled |= MENU_CFG_V2_KEYS
+    return enabled
+
+
+def _key_enabled(user_id: int, key: str) -> bool:
+    enabled = _enabled_keys(user_id)
+    if enabled is None:
+        return True
+    parent = KEY_PARENT.get(key)
+    if parent and parent not in enabled:
+        return False
+    return key in enabled
 
 
 async def fetch_and_cache_menu_cfg(user_id: int, token: str, club_id: int):
-    """Tải toàn bộ bot-config từ API, cache cả menu_config lẫn welcome_message."""
+    """Tải toàn bộ bot-config từ API, cache cả menu_config lẫn welcome_message.
+    Đồng thời kiểm tra lại quyền dùng bot của tài khoản ở CLB này (club admin có thể
+    tắt giữa chừng — _guard sẽ chặn ở thao tác kế tiếp)."""
     try:
         cfg_data = await call_backend("get", "/api/bot-config", token=token, club_id=club_id)
         menu_cfg = json.loads(cfg_data["menu_config"]) if "menu_config" in cfg_data else None
@@ -163,6 +246,18 @@ async def fetch_and_cache_menu_cfg(user_id: int, token: str, club_id: int):
     except Exception as e:
         logger.warning(f"fetch_menu_cfg lỗi user {user_id}: {e}")
         _menu_cfg[user_id] = None
+    try:
+        memberships = await call_backend("get", "/api/my-memberships", token=token)
+        mine = next((m for m in memberships if m.get("club_id") == club_id), None)
+        _bot_allowed[user_id] = bool(mine.get("bot_enabled", True)) if mine else False
+    except Exception as e:
+        logger.warning(f"check bot_enabled lỗi user {user_id}: {e}")  # giữ giá trị cũ, không khoá oan
+
+
+BOT_DISABLED_TEXT = (
+    "🚫 Tài khoản của bạn chưa được cấp quyền dùng Bot ở CLB này.\n"
+    "Liên hệ quản trị CLB để được bật (Cài đặt Telegram Bot → Tài khoản được dùng Bot)."
+)
 
 
 def _menu_buttons(user_id: int, keys: list[str], cols: int = 2) -> list[list[tuple]]:
@@ -172,25 +267,12 @@ def _menu_buttons(user_id: int, keys: list[str], cols: int = 2) -> list[list[tup
     - cfg là None → chưa có config trong DB → dùng mặc định
     - cfg là dict với checkedKeys → lọc theo danh sách đó
     """
-    sentinel = object()
-    wrapper = _menu_cfg.get(user_id, sentinel)
-
-    if wrapper is sentinel or wrapper is None:
-        ordered_keys = keys
-        enabled = None
-    else:
-        menu_cfg = wrapper.get("menu") if isinstance(wrapper, dict) else None
-        if menu_cfg is None:
-            ordered_keys = keys
-            enabled = None
-        else:
-            enabled = set(menu_cfg.get("checkedKeys", keys))
-            ordered_keys = keys
-
+    # Cùng 1 hàm _key_enabled với chỗ chặn callback → nút hiện ra = thao tác được phép,
+    # không bao giờ lệch nhau.
     buttons = [
         KEY_TO_ACTION[k]
-        for k in ordered_keys
-        if k in KEY_TO_ACTION and (enabled is None or k in enabled)
+        for k in keys
+        if k in KEY_TO_ACTION and _key_enabled(user_id, k)
     ]
 
     rows = []
@@ -272,6 +354,12 @@ async def _after_login(update: Update, user_id: int, session: dict):
     if not memberships:
         await reply(update, "❌ Tài khoản chưa được thêm vào CLB nào.")
         return
+    # Chỉ giữ CLB mà club admin đã cấp quyền dùng bot (mặc định bật)
+    memberships = [m for m in memberships if m.get("bot_enabled", True)]
+    if not memberships:
+        await reply(update, BOT_DISABLED_TEXT)
+        return
+    _bot_allowed[user_id] = True
     if len(memberships) == 1:
         m = memberships[0]
         _user_club[user_id] = m["club_id"]
@@ -358,6 +446,12 @@ async def _guard(update: Update) -> tuple[dict, int] | None:
     club_id = _user_club.get(user_id)
     if not club_id:
         await reply(update, "🔐 Chưa chọn CLB. Gõ /start để bắt đầu lại.")
+        return None
+    if _bot_allowed.get(user_id) is False:
+        # Club admin vừa tắt quyền giữa phiên (phát hiện ở lần fetch_and_cache_menu_cfg gần nhất)
+        _user_club.pop(user_id, None)
+        _wizard.pop(user_id, None)
+        await reply(update, BOT_DISABLED_TEXT)
         return None
     return session, club_id
 
@@ -853,11 +947,19 @@ async def gdlist_show(update: Update, session: dict, club_id: int,
                      + (f" ({member_name})" if member_name else ""))
     if len(txs) > 20:
         lines.append(f"_...và {len(txs)-20} giao dịch khác_")
-    await reply(update, "\n".join(lines), kb(
+    user_id = update.effective_user.id
+    action_row = []
+    if _key_enabled(user_id, "gdlist_edit"):
+        action_row.append(("✏️ Sửa GD", f"gdlist_edit:{m}:{y}"))
+    if _key_enabled(user_id, "gdlist_delete"):
+        action_row.append(("🗑 Xóa GD", f"gdlist_del:{m}:{y}"))
+    rows = [
         [("💚 Chỉ thu", f"gdlist:{m}:{y}:income"), ("🔴 Chỉ chi", f"gdlist:{m}:{y}:expense"), ("Tất cả", f"gdlist:{m}:{y}:")],
-        [("✏️ Sửa GD", f"gdlist_edit:{m}:{y}"), ("🗑 Xóa GD", f"gdlist_del:{m}:{y}")],
-        [back_btn("menu:gdlist")[0], ("🏠 Menu", "menu:exit")],
-    ))
+    ]
+    if action_row:
+        rows.append(action_row)
+    rows.append([back_btn("menu:gdlist")[0], ("🏠 Menu", "menu:exit")])
+    await reply(update, "\n".join(lines), kb(*rows))
 
 
 # ── SỬA GIAO DỊCH ────────────────────────────────────────────────────────────
@@ -983,9 +1085,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         club_id_str = data[5:]
         new_club_id = int(club_id_str)
-        _user_club[user_id] = new_club_id
         cache = getattr(_after_login, "_club_cache", {})
-        club_name = cache.get(user_id, {}).get(club_id_str, f"CLB #{club_id_str}")
+        if club_id_str not in cache.get(user_id, {}):
+            # Cache chỉ chứa CLB đã được cấp quyền bot — callback cũ/tự chế cho CLB khác bị từ chối
+            await safe_edit(query, BOT_DISABLED_TEXT)
+            return
+        _user_club[user_id] = new_club_id
+        club_name = cache[user_id][club_id_str]
         _user_club_name[user_id] = club_name
         _welcomed.discard(user_id)  # Reset để hiện welcome message CLB mới
         await _save_telegram_chat_id(session["token"], new_club_id, user_id)
@@ -997,6 +1103,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not guard:
         return
     session, club_id = guard
+
+    # ── Chặn chức năng đã bị tắt trong cấu hình CLB (không chỉ ẩn nút) ──
+    required = _required_key(data)
+    if required and not _key_enabled(user_id, required):
+        await reply(update, "🚫 Chức năng này đã bị quản trị CLB tắt.", kb([("🏠 Menu", "menu:main")]))
+        return
 
     # ── Menu navigation ──
     if data == "menu:main":

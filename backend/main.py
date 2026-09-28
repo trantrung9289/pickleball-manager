@@ -104,6 +104,9 @@ def _run_migration():
         ("tournament_matches", "is_walkover", "BOOLEAN DEFAULT 0 NOT NULL", None),
         ("tournament_matches", "loser_next_match_id", "INTEGER REFERENCES tournament_matches(id)", None),
         ("tournament_matches", "loser_next_match_slot", "INTEGER", None),
+        # Bảng club_memberships — club admin bật/tắt quyền dùng bot Telegram cho từng tài khoản
+        # (mặc định bật để không ảnh hưởng người đang dùng)
+        ("club_memberships", "bot_enabled", "BOOLEAN DEFAULT 1 NOT NULL", None),
     ]
 
     with engine.connect() as conn:
@@ -421,6 +424,60 @@ def my_memberships(
     return db.query(models.ClubMembership).filter(
         models.ClubMembership.user_id == current_user.id,
     ).all()
+
+
+# ── Club admin: cấp quyền dùng bot Telegram cho từng tài khoản trong CLB ──
+# Tài khoản/membership vẫn do superuser tạo (AdminPortal); club admin chỉ bật/tắt
+# quyền dùng bot — không đổi role, không xoá membership.
+def _club_account_out(m: models.ClubMembership, self_membership_id: int) -> dict:
+    return {
+        "id": m.id,
+        "user_id": m.user_id,
+        "username": m.user.username if m.user else "",
+        "full_name": m.user.full_name if m.user else None,
+        "role": m.role.value if hasattr(m.role, "value") else str(m.role),
+        "bot_enabled": bool(m.bot_enabled),
+        "telegram_linked": m.telegram_chat_id is not None,
+        "is_self": m.id == self_membership_id,
+    }
+
+
+@app.get("/api/club/memberships", response_model=List[schemas.ClubMemberAccountOut])
+def list_club_memberships(
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    perms.require_view()
+    rows = (
+        db.query(models.ClubMembership)
+        .filter(models.ClubMembership.club_id == perms.club_id)
+        .join(models.User, models.User.id == models.ClubMembership.user_id)
+        .order_by(models.User.username)
+        .all()
+    )
+    return [_club_account_out(m, perms.membership.id) for m in rows]
+
+
+@app.patch("/api/club/memberships/{mid}/bot-enabled", response_model=schemas.ClubMemberAccountOut)
+def set_club_membership_bot_enabled(
+    mid: int,
+    data: schemas.BotEnabledUpdate,
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    perms.require_edit()
+    m = db.query(models.ClubMembership).filter(
+        models.ClubMembership.id == mid,
+        models.ClubMembership.club_id == perms.club_id,
+    ).first()
+    if not m:
+        raise HTTPException(404, "Không tìm thấy tài khoản trong CLB này")
+    if m.id == perms.membership.id and not data.enabled:
+        raise HTTPException(400, "Không thể tự tắt quyền dùng bot của chính mình")
+    m.bot_enabled = data.enabled
+    db.commit()
+    db.refresh(m)
+    return _club_account_out(m, perms.membership.id)
 
 
 def auto_member_code(db: Session, club_id: int) -> str:
@@ -3025,6 +3082,10 @@ def save_telegram_chat_id(
     ).first()
     if not membership:
         raise HTTPException(404, "Không tìm thấy membership")
+    if not membership.bot_enabled:
+        # Chỉ bot gọi endpoint này — chặn ở đây để tài khoản bị tắt bot không liên kết được
+        # Telegram (và do đó không lọt vào danh sách nhận nhắc phí)
+        raise HTTPException(403, "Tài khoản chưa được cấp quyền dùng bot Telegram ở CLB này")
     membership.telegram_chat_id = int(chat_id)
     db.commit()
     return {"ok": True}
@@ -3069,6 +3130,7 @@ def _build_reminder_data(month: int, year: int, db: Session):
             models.ClubMembership.club_id == club_id,
             models.ClubMembership.role == models.UserRole.admin,
             models.ClubMembership.telegram_chat_id.isnot(None),
+            models.ClubMembership.bot_enabled.is_(True),  # tắt bot = không nhận nhắc phí
         ).all()
         chat_ids = [m.telegram_chat_id for m in admin_memberships]
 

@@ -153,6 +153,7 @@ class ClubMembership(Base):
     can_edit = Column(Boolean, default=False)
     can_delete = Column(Boolean, default=False)
     telegram_chat_id = Column(Integer, nullable=True)   # Telegram user_id của admin khi login bot
+    bot_enabled = Column(Boolean, default=True)         # club admin bật/tắt quyền dùng bot Telegram
     created_at = Column(DateTime, server_default=func.now())
 
     user = relationship("User", back_populates="club_memberships")

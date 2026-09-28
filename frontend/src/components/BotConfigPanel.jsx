@@ -1,9 +1,9 @@
 import { useEffect, useState, useCallback } from "react";
 import {
   Card, Input, Button, message, Space, Typography, Tree,
-  Switch, Table, Modal, DatePicker, Spin, Tag, Divider,
+  Switch, Table, Modal, DatePicker, Spin, Tag, Divider, Tooltip,
 } from "antd";
-import { SaveOutlined, ReloadOutlined, BellOutlined, EyeOutlined, SendOutlined } from "@ant-design/icons";
+import { SaveOutlined, ReloadOutlined, BellOutlined, EyeOutlined, SendOutlined, TeamOutlined } from "@ant-design/icons";
 import dayjs from "dayjs";
 
 const { Text } = Typography;
@@ -34,7 +34,14 @@ const MENU_TREE = [
       { key: "report_fee_status", title: "💳 Trạng thái phí" },
     ],
   },
-  { key: "gdlist", title: "📋 Giao dịch" },
+  {
+    key: "gdlist",
+    title: "📋 Giao dịch",
+    children: [
+      { key: "gdlist_edit",   title: "✏️ Sửa giao dịch" },
+      { key: "gdlist_delete", title: "🗑 Xóa giao dịch" },
+    ],
+  },
   {
     key: "category",
     title: "🗂 Danh mục khoản",
@@ -50,6 +57,8 @@ function getAllKeys(nodes) {
   return nodes.flatMap((n) => [n.key, ...(n.children ? getAllKeys(n.children) : [])]);
 }
 const ALL_KEYS = getAllKeys(MENU_TREE);
+// Key thêm ở version 2 của menu_config (Sửa/Xóa giao dịch) — phải khớp MENU_CFG_V2_KEYS trong bot/bot.py
+const MENU_CFG_V2_KEYS = ["gdlist_edit", "gdlist_delete"];
 
 function authHeaders() {
   return {
@@ -85,7 +94,11 @@ export default function BotConfigPanel() {
       if (data.welcome_message !== undefined) setWelcomeMsg(data.welcome_message);
       if (data.menu_config) {
         const cfg = JSON.parse(data.menu_config);
-        setCheckedKeys(cfg.checkedKeys ?? ALL_KEYS);
+        let keys = cfg.checkedKeys ?? ALL_KEYS;
+        // Cấu hình lưu trước version 2 chưa có key Sửa/Xóa giao dịch → coi như đang bật
+        // (khớp cách bot xử lý), để không tự khoá chức năng ở CLB đã cấu hình từ trước.
+        if ((cfg.version ?? 1) < 2) keys = [...new Set([...keys, ...MENU_CFG_V2_KEYS])];
+        setCheckedKeys(keys);
       } else {
         setCheckedKeys(ALL_KEYS);
       }
@@ -104,6 +117,46 @@ export default function BotConfigPanel() {
     } catch { /* silent */ }
   }, []);
 
+  // Tài khoản trong CLB + quyền dùng bot (tài khoản do quản trị hệ thống cấp; ở đây chỉ bật/tắt bot)
+  const [accounts, setAccounts]               = useState([]);
+  const [accountsLoading, setAccountsLoading] = useState(false);
+  const [togglingAccount, setTogglingAccount] = useState(null);
+
+  const loadAccounts = useCallback(async () => {
+    setAccountsLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/club/memberships`, { headers: authHeaders() });
+      if (!res.ok) throw new Error(res.status);
+      setAccounts(await res.json());
+    } catch {
+      message.error("Không tải được danh sách tài khoản");
+    } finally {
+      setAccountsLoading(false);
+    }
+  }, []);
+
+  const toggleBotEnabled = async (acc, checked) => {
+    setTogglingAccount(acc.id);
+    try {
+      const res = await fetch(`${API_BASE}/api/club/memberships/${acc.id}/bot-enabled`, {
+        method: "PATCH",
+        headers: authHeaders(),
+        body: JSON.stringify({ enabled: checked }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || res.status);
+      }
+      const updated = await res.json();
+      setAccounts((prev) => prev.map((a) => (a.id === updated.id ? updated : a)));
+      message.success(checked ? `Đã bật bot cho ${acc.username}` : `Đã tắt bot cho ${acc.username}`);
+    } catch (e) {
+      message.error(`Lỗi cập nhật: ${e.message}`);
+    } finally {
+      setTogglingAccount(null);
+    }
+  };
+
   useEffect(() => {
     // loadConfig/loadFeeTypes setState sau await bên trong nhưng được gọi trực tiếp
     // (không phải trong .then) nên lint coi là "đồng bộ"; cần giữ tách riêng để tái sử
@@ -111,7 +164,8 @@ export default function BotConfigPanel() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     loadConfig();
     loadFeeTypes();
-  }, [loadConfig, loadFeeTypes]);
+    loadAccounts();
+  }, [loadConfig, loadFeeTypes, loadAccounts]);
 
   const handleCheck = useCallback((checked) => {
     setCheckedKeys(Array.isArray(checked) ? checked : checked.checked);
@@ -125,7 +179,7 @@ export default function BotConfigPanel() {
         headers: authHeaders(),
         body: JSON.stringify({
           welcome_message: welcomeMsg,
-          menu_config: JSON.stringify({ checkedKeys }),
+          menu_config: JSON.stringify({ checkedKeys, version: 2 }),
         }),
       });
       if (!res.ok) throw new Error();
@@ -225,6 +279,62 @@ export default function BotConfigPanel() {
           treeData={MENU_TREE}
           onCheck={handleCheck}
           style={{ padding: "4px 0" }}
+        />
+      </Card>
+
+      <Card
+        title={<><TeamOutlined style={{ marginRight: 6 }} />Tài khoản được dùng Bot</>}
+        size="small"
+        style={{ marginBottom: 16 }}
+        extra={<Button size="small" icon={<ReloadOutlined />} loading={accountsLoading} onClick={loadAccounts}>Tải lại</Button>}
+      >
+        <Text type="secondary" style={{ display: "block", marginBottom: 12, fontSize: 12 }}>
+          Tài khoản do quản trị hệ thống cấp cho CLB. Tắt để tài khoản đó không đăng nhập được Bot
+          (và không nhận nhắc phí). Thay đổi có hiệu lực ngay ở thao tác kế tiếp trên Bot.
+        </Text>
+        <Table
+          size="small"
+          pagination={false}
+          loading={accountsLoading}
+          dataSource={accounts}
+          rowKey="id"
+          locale={{ emptyText: "CLB chưa có tài khoản nào" }}
+          columns={[
+            {
+              title: "Tài khoản",
+              key: "account",
+              render: (_, a) => (
+                <span>
+                  <b>{a.username}</b>
+                  {a.full_name && a.full_name !== a.username && <Text type="secondary"> — {a.full_name}</Text>}
+                  {a.is_self && <Tag style={{ marginLeft: 6 }}>Bạn</Tag>}
+                </span>
+              ),
+            },
+            {
+              title: "Telegram",
+              dataIndex: "telegram_linked",
+              width: 120,
+              render: (v) => (v ? <Tag color="success">Đã liên kết</Tag> : <Tag>Chưa đăng nhập</Tag>),
+            },
+            {
+              title: "Dùng Bot",
+              key: "bot",
+              width: 90,
+              align: "center",
+              render: (_, a) => (
+                <Tooltip title={a.is_self ? "Không thể tự tắt quyền của chính mình" : undefined}>
+                  <Switch
+                    size="small"
+                    checked={!!a.bot_enabled}
+                    disabled={a.is_self}
+                    loading={togglingAccount === a.id}
+                    onChange={(checked) => toggleBotEnabled(a, checked)}
+                  />
+                </Tooltip>
+              ),
+            },
+          ]}
         />
       </Card>
 
