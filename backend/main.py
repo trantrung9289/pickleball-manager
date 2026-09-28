@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import func, extract, text, or_
+from sqlalchemy import func, extract, text, or_, case
 from typing import Optional, List
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
@@ -435,6 +435,18 @@ def auto_member_code(db: Session, club_id: int) -> str:
     return f"TV{str(n).zfill(4)}"
 
 
+def _member_list_order():
+    """Thứ tự hiển thị danh sách thành viên (dùng chung cho API list + xuất Excel):
+    Hoạt động → Tạm nghỉ → Đình chỉ, trong cùng trạng thái theo mã TV tăng dần
+    (mã tự sinh dạng TV#### zero-padded nên so sánh chuỗi vẫn đúng thứ tự số)."""
+    status_rank = case(
+        (models.Member.status == models.MemberStatus.active, 0),
+        (models.Member.status == models.MemberStatus.inactive, 1),
+        else_=2,
+    )
+    return [status_rank, models.Member.member_code.asc().nulls_last(), models.Member.id.asc()]
+
+
 # ── MEMBERS ──────────────────────────────────────────────
 @app.get("/api/members", response_model=List[schemas.MemberOut])
 def list_members(
@@ -453,7 +465,7 @@ def list_members(
         )
     if status:
         q = q.filter(models.Member.status == status)
-    return q.order_by(models.Member.id.desc()).all()
+    return q.order_by(*_member_list_order()).all()
 
 
 @app.post("/api/members", response_model=schemas.MemberOut, status_code=201)
@@ -568,7 +580,7 @@ def export_members_excel(
     perms.require_view()
     members = db.query(models.Member).filter(
         models.Member.club_id == perms.club_id
-    ).order_by(models.Member.id).all()
+    ).order_by(*_member_list_order()).all()
 
     wb = openpyxl.Workbook()
     ws = wb.active
