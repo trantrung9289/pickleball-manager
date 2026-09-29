@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
 import {
   Button, Space, Tag, Modal, Form, Input, Select,
@@ -10,13 +10,16 @@ import {
   PlusOutlined, ThunderboltOutlined, TrophyOutlined,
   EditOutlined, DeleteOutlined, ReloadOutlined,
   CheckCircleOutlined, SaveOutlined, ArrowRightOutlined,
-  UserOutlined, TeamOutlined, UserAddOutlined, PrinterOutlined,
+  UserOutlined, TeamOutlined, UserAddOutlined, PrinterOutlined, GiftOutlined,
 } from "@ant-design/icons";
 import { tournamentsApi, membersApi, playersApi } from "../api";
 import ResponsiveTable from "../components/ResponsiveTable";
 import TournamentPrintSheet from "../components/TournamentPrintSheet";
+import DrawCeremony from "../components/draw/DrawCeremony";
 import { useViewMode } from "../contexts/ViewModeContext";
 import { buildRealBracketNodes, computeBracketGeometry, findThirdPlaceMatch } from "../utils/bracketLayout";
+import { teamLabel, teamRank } from "../utils/tournamentLabels";
+import { DRAW_FORMATS, serverOffset } from "../utils/drawMath";
 
 const { Title, Text } = Typography;
 
@@ -39,13 +42,11 @@ const confirm = (opts) =>
     Modal.confirm({ okText: "Xác nhận", cancelText: "Hủy", ...opts, onOk: () => res(true), onCancel: () => res(false) })
   );
 
-const teamLabel = (p) => p?.team_name || p?.member?.full_name || p?.player?.name || "—";
-
-// Đấu đôi: ghép hạng của cả 2 người (VD "B / B", "A / C"); đấu đơn: 1 hạng
-const teamRank = (p) => {
-  const r1 = p?.member?.rank || p?.player?.rank;
-  const r2 = p?.partner?.rank || p?.partner_player?.rank;
-  return r1 && r2 ? `${r1} / ${r2}` : (r1 || r2 || null);
+// Luật bốc thăm theo thể thức — hiển thị trong hộp xác nhận mở phiên
+const DRAW_RULE_TEXT = {
+  combined:   "Lượt 1 vào bảng A, lượt 2 vào bảng B..., lần lượt xoay vòng cho đến hết.",
+  knockout:   "Bốc theo vị trí sơ đồ từ trên xuống; các vị trí có ghi 'miễn vòng 1' vào thẳng vòng 2.",
+  individual: "Hai lượt bốc liên tiếp tạo thành một trận.",
 };
 
 // ── Wizard tạo giải ──────────────────────────────────────
@@ -1581,6 +1582,7 @@ function ScorePinModal({ tournament, onSaved, onClose }) {
 
 // ── Chi tiết giải đấu ─────────────────────────────────────
 function TournamentDetail({ tournament: initData, onBack, onUpdated }) {
+  const { isMobileView } = useViewMode();
   const [tournament, setTournament] = useState(initData);
   const [scoreMatch, setScoreMatch] = useState(null);
   const [generating, setGenerating] = useState(false);
@@ -1591,6 +1593,18 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated }) {
   const [editSetupModal, setEditSetupModal] = useState(false);
   const [scorePinModal, setScorePinModal] = useState(false);
   const [printing, setPrinting] = useState(false);
+
+  // Bốc thăm bằng vòng quay: phiên hiện tại (DrawOut), overlay đang mở, đang gọi API, lệch giờ server
+  const [draw, setDraw] = useState(null);
+  const [drawOpen, setDrawOpen] = useState(false);
+  const [drawBusy, setDrawBusy] = useState(false);
+  const [drawOffset, setDrawOffset] = useState(0);
+
+  // Nhận DrawOut từ API và đồng bộ lệch giờ server (mốc dừng kim tính theo giờ server)
+  const applyDraw = useCallback((d) => {
+    setDraw(d);
+    if (d?.server_now_ms) setDrawOffset(serverOffset(d.server_now_ms));
+  }, []);
 
   useEffect(() => {
     if (!printing) return;
@@ -1608,6 +1622,39 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated }) {
     setTournament(r.data);
     onUpdated && onUpdated(r.data);
   }, [tournament.id, onUpdated]);
+
+  // Khôi phục phiên bốc thăm đang dở sau F5: TournamentOut chỉ có tóm tắt, cần nạp DrawOut đầy đủ
+  const openDrawSummary = tournament.draw?.status === "open" ? tournament.draw : null;
+  const openDrawId = openDrawSummary?.id ?? null;
+  const drawRef = useRef(null);
+  // Đồng bộ ref trong effect (không gán trong render — rule react-hooks/refs); effect này chạy trước effect nạp bên dưới
+  useEffect(() => { drawRef.current = draw; }, [draw]);
+  useEffect(() => {
+    // Đã có bản local cùng id (vừa mở phiên trong tab này) → không nạp lại để khỏi ghi đè lúc đang quay
+    if (!openDrawId || drawRef.current?.id === openDrawId) return undefined;
+    let cancelled = false;
+    tournamentsApi.draw.get(tournament.id)
+      .then((r) => { if (!cancelled && r.data?.status === "open") applyDraw(r.data); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [openDrawId, tournament.id, applyDraw]);
+
+  // Phiên bị kết thúc ngoài luồng của tab này (tab khác chốt/huỷ, hoặc "Random & Sinh lịch" làm backend
+  // tự huỷ phiên open) → sau reload() tóm tắt từ TournamentOut đổi trạng thái/id, bỏ bản local để banner
+  // và overlay không còn trỏ vào phiên đã chết.
+  const summaryDrawId = tournament.draw?.id ?? null;
+  const summaryDrawStatus = tournament.draw?.status ?? null;
+  useEffect(() => {
+    const local = drawRef.current;
+    if (!local) return;
+    const ended = !summaryDrawId
+      || (summaryDrawId === local.id && summaryDrawStatus !== "open")
+      || summaryDrawId > local.id;
+    if (ended) {
+      setDraw(null);
+      setDrawOpen(false);
+    }
+  }, [summaryDrawId, summaryDrawStatus]);
 
   const handleStatusChange = async (newStatus) => {
     const labels = { active: "Đang diễn ra", completed: "Kết thúc", draft: "Nháp" };
@@ -1640,9 +1687,145 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated }) {
     setGenerating(true);
     try {
       await tournamentsApi.generate(tournament.id, shuffle, scored > 0);
+      // Backend tự huỷ phiên bốc thăm đang mở khi sinh lịch thủ công → bỏ bản local
+      setDraw(null); setDrawOpen(false);
       await reload();
       message.success("Đã tạo lịch thi đấu!");
     } finally { setGenerating(false); }
+  };
+
+  // ── Bốc thăm bằng vòng quay ──────────────────────────────
+  const scoredCount = () => (tournament.matches || []).filter((m) => m.score1 != null).length;
+
+  const handleOpenDraw = async () => {
+    const scored = scoredCount();
+    const ok = await confirm({
+      title: "Mở phiên bốc thăm bằng vòng quay?",
+      content: (
+        <div>
+          <p style={{ marginBottom: 6 }}>{DRAW_RULE_TEXT[tournament.format]}</p>
+          <p style={{ marginBottom: 6 }}>
+            Đội đã bỏ giải vẫn nằm trong vòng quay (đánh dấu "bỏ giải"). Kết quả từng lượt được công bố
+            công khai kèm mã seed để khán giả kiểm chứng.
+          </p>
+          {scored > 0 && (
+            <Alert type="warning" showIcon style={{ marginTop: 8 }}
+              message={`Đã có ${scored} trận có kết quả. Khi chốt bốc thăm, toàn bộ kết quả sẽ bị xoá. Không thể hoàn tác.`} />
+          )}
+        </div>
+      ),
+      okButtonProps: scored > 0 ? { danger: true } : undefined,
+    });
+    if (!ok) return;
+    setDrawBusy(true);
+    try {
+      const res = await tournamentsApi.draw.open(tournament.id, { force: scored > 0, reveal_ms: 5000 });
+      applyDraw(res.data);
+      setDrawOpen(true);
+    } catch (e) {
+      if (e?.response?.status === 409) {
+        // Đã có phiên đang mở (tab khác / F5) → nạp phiên đó và tiếp tục
+        try {
+          const r = await tournamentsApi.draw.get(tournament.id);
+          applyDraw(r.data);
+          setDrawOpen(true);
+          message.info("Đang có phiên bốc thăm chưa kết thúc — tiếp tục phiên đó.");
+        } catch (e2) {
+          message.error(e2?.response?.data?.detail || "Không thể tải phiên bốc thăm");
+        }
+      } else {
+        message.error(e?.response?.data?.detail || "Không thể mở phiên bốc thăm");
+      }
+    } finally { setDrawBusy(false); }
+  };
+
+  const handleResumeDraw = async () => {
+    // Banner "Tiếp tục": bản local có thể chưa nạp xong → lấy lại từ server rồi mở overlay
+    setDrawBusy(true);
+    try {
+      const r = await tournamentsApi.draw.get(tournament.id);
+      if (r.data?.status !== "open") {
+        // Phiên đã được chốt/huỷ ở tab khác → đồng bộ lại trang thay vì mở overlay của phiên đã kết thúc
+        setDraw(null); setDrawOpen(false);
+        message.info("Phiên bốc thăm đã kết thúc ở nơi khác — đã tải lại giải đấu");
+        await reload();
+        return;
+      }
+      applyDraw(r.data);
+      setDrawOpen(true);
+    } catch (e) {
+      message.error(e?.response?.data?.detail || "Không thể tải phiên bốc thăm");
+    } finally { setDrawBusy(false); }
+  };
+
+  const handleDrawSpin = async () => {
+    if (!draw) return;
+    setDrawBusy(true);
+    try {
+      const res = await tournamentsApi.draw.spin(tournament.id, draw.done_steps);
+      applyDraw(res.data);
+    } catch (e) {
+      if (e?.response?.status === 409) {
+        // Lệch lượt (bấm trùng / tab khác đã quay) → đồng bộ lại theo server
+        message.warning(e?.response?.data?.detail || "Lượt bốc không khớp — đã đồng bộ lại");
+        try {
+          const r = await tournamentsApi.draw.get(tournament.id);
+          applyDraw(r.data);
+        } catch { /* giữ bản local */ }
+      } else {
+        message.error(e?.response?.data?.detail || "Không thể quay lượt này");
+      }
+    } finally { setDrawBusy(false); }
+  };
+
+  const handleDrawCommit = async () => {
+    const doCommit = async (force) => {
+      const res = await tournamentsApi.draw.commit(tournament.id, force);
+      setTournament(res.data);
+      setDraw(null);
+      setDrawOpen(false);
+      message.success("Đã chốt bốc thăm và sinh lịch thi đấu!");
+      onUpdated && onUpdated(res.data);
+    };
+    setDrawBusy(true);
+    try {
+      await doCommit(scoredCount() > 0);
+    } catch (e) {
+      const detail = e?.response?.data?.detail;
+      if (e?.response?.status === 400 && typeof detail === "string" && detail.includes("force")) {
+        // Có điểm mới nhập sau khi mở phiên → hỏi lại rồi gửi force=true
+        const ok = await confirm({
+          title: "Chốt bốc thăm và XOÁ kết quả đã nhập?",
+          content: detail,
+          okButtonProps: { danger: true }, okText: "Xoá kết quả & chốt",
+        });
+        if (ok) {
+          try { await doCommit(true); }
+          catch (e2) { message.error(e2?.response?.data?.detail || "Không thể chốt bốc thăm"); }
+        }
+      } else {
+        message.error(detail || "Không thể chốt bốc thăm");
+      }
+    } finally { setDrawBusy(false); }
+  };
+
+  const handleDrawCancel = async () => {
+    const ok = await confirm({
+      title: "Huỷ phiên bốc thăm?",
+      content: "Kết quả các lượt đã quay sẽ không được dùng. Phiên vẫn hiện trong lịch sử.",
+      okButtonProps: { danger: true }, okText: "Huỷ phiên",
+    });
+    if (!ok) return;
+    setDrawBusy(true);
+    try {
+      await tournamentsApi.draw.cancel(tournament.id);
+      setDraw(null);
+      setDrawOpen(false);
+      await reload();
+      message.success("Đã huỷ phiên bốc thăm");
+    } catch (e) {
+      message.error(e?.response?.data?.detail || "Không thể huỷ phiên bốc thăm");
+    } finally { setDrawBusy(false); }
   };
 
   const handleStartKO = async () => {
@@ -1693,6 +1876,11 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated }) {
 
   const fmt = tournament.format;
   const matches = tournament.matches || [];
+  // Bốc thăm chỉ cho thể thức combined/knockout/individual khi giải đã bắt đầu (vòng tròn: server 400, UI ẩn nút)
+  const canDraw = tournament.status === "active" && DRAW_FORMATS.includes(fmt)
+    && !(tournament.pairing_mode === "cross_rank" && (tournament.rank_rules || []).length > 0);
+  // Phiên đang mở: ưu tiên bản DrawOut local (đầy đủ), fallback tóm tắt từ TournamentOut (trước khi nạp xong)
+  const pendingDraw = draw?.status === "open" ? draw : openDrawSummary;
   const groupMatches = matches.filter(m => m.phase === "group");
   const koMatches = matches.filter(m => m.phase === "knockout");
   const groups = [...new Set(tournament.participants.map(p => p.group_name).filter(Boolean))].sort();
@@ -1958,18 +2146,40 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated }) {
           )}
           {tournament.status === "active" && (
             <>
+              {canDraw && (
+                <Button type="primary" icon={<GiftOutlined />} loading={drawBusy} onClick={handleOpenDraw}>
+                  🎡 Bốc thăm
+                </Button>
+              )}
+              {/* Khi có nút Bốc thăm, nút sinh lịch ngẫu nhiên lùi xuống type mặc định */}
+              <Button type={canDraw ? "default" : "primary"} icon={<ThunderboltOutlined />} loading={generating}
+                onClick={() => handleGenerate(true)}>
+                {fmt === "combined" ? "Sinh lịch vòng bảng" : "Random & Sinh lịch"}
+              </Button>
               {fmt !== "combined" && (
                 <Button icon={<ThunderboltOutlined />} loading={generating} onClick={() => handleGenerate(false)}>
                   Sinh lịch (giữ thứ tự)
                 </Button>
               )}
-              <Button type="primary" icon={<ThunderboltOutlined />} loading={generating} onClick={() => handleGenerate(true)}>
-                {fmt === "combined" ? "Sinh lịch vòng bảng" : "Random & Sinh lịch"}
-              </Button>
             </>
           )}
         </Space>
       </Row>
+
+      {/* Phiên bốc thăm đang dở (sau F5 hoặc đã bấm Đóng overlay) — cho phép mở lại hoặc huỷ */}
+      {pendingDraw && !drawOpen && (
+        <Alert type="warning" showIcon style={{ marginBottom: 16 }}
+          message={`Phiên bốc thăm #${pendingDraw.seq} đang dở (${pendingDraw.done_steps}/${pendingDraw.total_steps})`}
+          description="Kết quả chưa được áp dụng vào lịch thi đấu. Tiếp tục quay để chốt, hoặc huỷ phiên để bốc lại."
+          action={
+            <Space direction={isMobileView ? "vertical" : "horizontal"}>
+              <Button type="primary" size="small" icon={<GiftOutlined />} loading={drawBusy} onClick={handleResumeDraw}>
+                Tiếp tục
+              </Button>
+              <Button danger size="small" loading={drawBusy} onClick={handleDrawCancel}>Huỷ phiên</Button>
+            </Space>
+          } />
+      )}
 
       <Row gutter={16} style={{ marginBottom: 16 }}>
         <Col xs={6}>
@@ -2001,13 +2211,23 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated }) {
             description={
               tournament.status === "draft"
                 ? "Giải đấu chưa bắt đầu. Chỉnh sửa cài đặt rồi bấm 'Bắt đầu giải'."
-                : (fmt === "combined" ? "Nhấn 'Sinh lịch vòng bảng' để bắt đầu." : "Nhấn 'Random & Sinh lịch' để bắt đầu.")
+                : canDraw
+                  ? "Nhấn 'Bốc thăm' để quay vòng quay trực tiếp, hoặc sinh lịch ngẫu nhiên."
+                  : (fmt === "combined" ? "Nhấn 'Sinh lịch vòng bảng' để bắt đầu." : "Nhấn 'Random & Sinh lịch' để bắt đầu.")
             }
             image={Empty.PRESENTED_IMAGE_SIMPLE}>
             {tournament.status === "active" && (
-              <Button type="primary" icon={<ThunderboltOutlined />} loading={generating} onClick={() => handleGenerate(true)}>
-                {fmt === "combined" ? "Sinh lịch vòng bảng" : "Random & Sinh lịch"}
-              </Button>
+              <Space wrap style={{ justifyContent: "center" }}>
+                {canDraw && (
+                  <Button type="primary" icon={<GiftOutlined />} loading={drawBusy} onClick={handleOpenDraw}>
+                    🎡 Bốc thăm
+                  </Button>
+                )}
+                <Button type={canDraw ? "default" : "primary"} icon={<ThunderboltOutlined />} loading={generating}
+                  onClick={() => handleGenerate(true)}>
+                  {fmt === "combined" ? "Sinh lịch vòng bảng" : "Random & Sinh lịch"}
+                </Button>
+              </Space>
             )}
           </Empty>
         </Card>
@@ -2052,6 +2272,22 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated }) {
       {printing && createPortal(
         <TournamentPrintSheet tournament={tournament} onReady={handlePrintReady} />,
         document.body
+      )}
+
+      {/* Overlay bốc thăm toàn màn hình (tự portal vào body, z-index 900 < antd popup để Modal.confirm nổi lên trên) */}
+      {drawOpen && draw && (
+        <DrawCeremony
+          mode="admin"
+          tournament={tournament}
+          draw={draw}
+          serverOffsetMs={drawOffset}
+          busy={drawBusy}
+          onSpin={handleDrawSpin}
+          onCommit={handleDrawCommit}
+          onCancel={handleDrawCancel}
+          onClose={() => setDrawOpen(false)}
+          fullscreen
+        />
       )}
 
       <Modal title="Sửa thông tin giải đấu" open={editNameModal}

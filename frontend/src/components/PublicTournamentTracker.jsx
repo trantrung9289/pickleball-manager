@@ -3,21 +3,33 @@ import {
   Select, Tabs, Empty, Spin, Card, Tag, Typography,
   Collapse, Divider, Space, Button, Badge, Modal, Form, Input, AutoComplete, message,
 } from "antd";
-import { ReloadOutlined, SyncOutlined, TrophyOutlined, EditOutlined } from "@ant-design/icons";
+import {
+  ReloadOutlined, SyncOutlined, TrophyOutlined, EditOutlined, SafetyCertificateOutlined,
+} from "@ant-design/icons";
 import ResponsiveTable from "./ResponsiveTable";
+import DrawCeremony from "./draw/DrawCeremony";
 import { useViewMode } from "../contexts/ViewModeContext";
+import { teamLabel, teamRank } from "../utils/tournamentLabels";
+import { serverOffset, verifyDraw } from "../utils/drawMath";
 
 const { Text } = Typography;
 
-const POLL_MS = 12000;
+const POLL_MS = 12000;        // poll chi tiết giải + danh sách giải
+const DRAW_POLL_MS = 2000;    // poll nhanh phiên bốc thăm đang mở (endpoint riêng, bucket rate-limit riêng)
+const DRAW_POLL_SLOW_MS = 5000; // giãn ra khi server trả 429, tới lần thành công kế tiếp
 
-const teamLabel = (p) => p?.team_name || p?.member?.full_name || p?.player?.name || "—";
+const DRAW_STATUS_TAG = {
+  committed:  { label: "Đã áp dụng", color: "success" },
+  superseded: { label: "Đã thay bằng phiên mới", color: "default" },
+  cancelled:  { label: "Đã huỷ", color: "error" },
+  open:       { label: "Đang bốc thăm", color: "processing" },
+};
 
-// Đấu đôi: ghép hạng của cả 2 người (VD "B / B", "A / C"); đấu đơn: 1 hạng
-const teamRank = (p) => {
-  const r1 = p?.member?.rank || p?.player?.rank;
-  const r2 = p?.partner?.rank || p?.partner_player?.rank;
-  return r1 && r2 ? `${r1} / ${r2}` : (r1 || r2 || null);
+// Backend trả datetime naive giờ VN (không có Z) → trình duyệt parse theo giờ máy, hợp với người xem trong nước
+const fmtTime = (s) => {
+  if (!s) return "—";
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? String(s) : d.toLocaleString("vi-VN");
 };
 
 const SCORE_OPTIONS = Array.from({ length: 100 }, (_, i) => ({ value: String(i).padStart(2, "0") }));
@@ -415,23 +427,160 @@ function TournamentContent({ tournament, api, onScored }) {
   );
 }
 
+// ── Một phiên bốc thăm trong lịch sử: seed + bảng lượt + nút Kiểm chứng ───────
+function DrawHistoryItem({ draw, participantsById }) {
+  const [verify, setVerify] = useState({ loading: false, result: undefined }); // undefined = chưa bấm
+
+  const handleVerify = async () => {
+    setVerify({ loading: true, result: undefined });
+    const result = await verifyDraw(draw);   // null = thiếu seed_hex hoặc trình duyệt không có crypto.subtle
+    setVerify({ loading: false, result });
+  };
+
+  const steps = [...(draw.steps || [])].sort((a, b) => a.step_index - b.step_index);
+  const stepResult = (k) => verify.result?.steps?.find(s => s.step_index === k);
+  const cols = [
+    { title: "Lượt", dataIndex: "step_index", width: 60, align: "center", render: v => v + 1 },
+    {
+      title: "Đội", dataIndex: "participant_id",
+      render: (pid) => {
+        const p = participantsById[pid];
+        return (
+          <span>
+            {p ? teamLabel(p) : `#${pid}`}
+            {p?.status === "withdrawn" && <Tag style={{ marginLeft: 4 }}>bỏ giải</Tag>}
+          </span>
+        );
+      },
+    },
+    { title: "Ô", dataIndex: "slot_label" },
+    {
+      title: "Kiểm chứng", width: 100, align: "center",
+      render: (_, s) => {
+        const r = stepResult(s.step_index);
+        if (!r) return null;
+        return r.ok ? <Tag color="success">✅ khớp</Tag> : <Tag color="error">❌ lệch</Tag>;
+      },
+    },
+  ];
+  const tag = DRAW_STATUS_TAG[draw.status] || { label: draw.status, color: "default" };
+  const endedAt = draw.committed_at || draw.cancelled_at;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      <Space wrap>
+        <Tag color={tag.color}>{tag.label}</Tag>
+        <Text type="secondary">Mở: {fmtTime(draw.created_at)}</Text>
+        {endedAt && <Text type="secondary">Kết thúc: {fmtTime(endedAt)}</Text>}
+        {draw.cancel_reason && <Text type="secondary">Lý do: {draw.cancel_reason}</Text>}
+      </Space>
+      <div style={{ fontSize: 12, wordBreak: "break-all" }}>
+        <div><Text type="secondary">Cam kết seed (SHA-256):</Text> <Text code>{draw.seed_commit}</Text></div>
+        <div>
+          <Text type="secondary">Seed công khai:</Text>{" "}
+          {draw.seed_hex ? <Text code>{draw.seed_hex}</Text> : <Text type="secondary">chưa công bố</Text>}
+        </div>
+        <Text type="secondary">
+          Công thức: lượt k chọn đội thứ idx = SHA256("{"{seed}:{k}"}") mod (số đội còn lại), danh sách còn lại theo id tăng dần.
+        </Text>
+      </div>
+      <ResponsiveTable
+        columns={cols} dataSource={steps} rowKey="step_index" size="small" pagination={false}
+        mobileTitle={(s) => {
+          const p = participantsById[s.participant_id];
+          return <span>Lượt {s.step_index + 1}: <b>{p ? teamLabel(p) : `#${s.participant_id}`}</b> → {s.slot_label}</span>;
+        }}
+        mobileHideColumns={["Lượt", "Đội", "Ô"]}
+      />
+      <Space wrap>
+        <Button
+          icon={<SafetyCertificateOutlined />}
+          loading={verify.loading}
+          disabled={!draw.seed_hex}
+          onClick={handleVerify}
+        >
+          Kiểm chứng
+        </Button>
+        {verify.result === null && (
+          <Text type="secondary">Trình duyệt không hỗ trợ tính SHA-256 (cần HTTPS).</Text>
+        )}
+        {verify.result && (
+          verify.result.ok
+            ? <Tag color="success">✅ Khớp toàn bộ ({verify.result.steps.length} lượt, seed đúng cam kết)</Tag>
+            : <Tag color="error">
+                ❌ Không khớp{!verify.result.commitOk ? " — seed không khớp cam kết" : ""}
+              </Tag>
+        )}
+      </Space>
+    </div>
+  );
+}
+
+// ── Lịch sử bốc thăm của giải (chỉ tải lại khi phiên mới nhất đổi id/trạng thái) ─────
+function DrawHistory({ api, tid, historyKey, participantsById }) {
+  const [draws, setDraws] = useState([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.tournaments.drawHistory(tid)
+      .then(r => { if (!cancelled) setDraws(Array.isArray(r.data) ? r.data : []); })
+      .catch(() => {});   // 429/mạng lỗi: giữ danh sách cũ
+    return () => { cancelled = true; };
+  }, [api, tid, historyKey]);
+
+  if (draws.length === 0) return null;
+
+  return (
+    <Collapse
+      style={{ marginTop: 16 }}
+      items={[{
+        key: "draws",
+        label: <Text strong>🎲 Kết quả bốc thăm (có thể kiểm chứng)</Text>,
+        children: (
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            {draws.map(d => (
+              <Card key={d.id} size="small" title={`Phiên #${d.seq}`}>
+                <DrawHistoryItem draw={d} participantsById={participantsById} />
+              </Card>
+            ))}
+          </div>
+        ),
+      }]}
+    />
+  );
+}
+
 export default function PublicTournamentTracker({ api }) {
   const [list, setList] = useState(null);
   const [selectedId, setSelectedId] = useState(null);
   const [tournament, setTournament] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  // Phiên bốc thăm gắn với giải đang xem: lưu kèm tid để tự "reset" khi đổi giải mà không cần setState trong effect
+  const [drawState, setDrawState] = useState(null);   // { tid, draw: DrawOut|null, offset: number }
   const pollRef = useRef(null);
+  const lastDrawKeyRef = useRef(null);                // "id:status" lần poll trước — phát hiện open → committed/cancelled
+
+  // Danh sách giải: tải lúc mount và mỗi tick 12s (bucket rate-limit riêng theo path) để giải vừa
+  // "Bắt đầu" xuất hiện mà không cần F5; tự chọn giải đang diễn ra khi chưa chọn gì / giải cũ biến mất.
+  const loadList = useCallback(() => (
+    api.tournaments.list()
+      .then(r => {
+        const data = Array.isArray(r.data) ? r.data : [];
+        setList(data);
+        if (data.length > 0) {
+          const active = data.find(t => t.status === "active") || data[0];
+          setSelectedId(prev => (prev && data.some(t => t.id === prev)) ? prev : active.id);
+        }
+      })
+      .catch(() => {})   // lỗi mạng/429: giữ danh sách cũ
+  ), [api]);
 
   useEffect(() => {
-    api.tournaments.list().then(r => {
-      setList(r.data);
-      if (r.data.length > 0) {
-        const active = r.data.find(t => t.status === "active") || r.data[0];
-        setSelectedId(active.id);
-      }
-    }).finally(() => setLoading(false));
-  }, [api]);
+    loadList().finally(() => setLoading(false));
+    const id = setInterval(loadList, POLL_MS);
+    return () => clearInterval(id);
+  }, [loadList]);
 
   const loadDetail = useCallback((silent) => {
     if (!selectedId) return;
@@ -439,6 +588,7 @@ export default function PublicTournamentTracker({ api }) {
     else setRefreshing(true);
     api.tournaments.detail(selectedId)
       .then(r => setTournament(r.data))
+      .catch(() => {})   // 429/404 thoáng qua: giữ dữ liệu cũ, không làm trắng trang
       .finally(() => { setLoading(false); setRefreshing(false); });
   }, [selectedId, api]);
 
@@ -452,6 +602,77 @@ export default function PublicTournamentTracker({ api }) {
     return () => clearInterval(pollRef.current);
   }, [selectedId, loadDetail]);
 
+  // Phiên bốc thăm chi tiết (chỉ hợp lệ với giải đang xem)
+  const draw = drawState?.tid === selectedId ? drawState.draw : null;
+  const drawOffset = drawState?.tid === selectedId ? drawState.offset : 0;
+
+  // Tải phiên mới nhất từ endpoint public riêng. Trả { ok, status } để vòng poll quyết định giãn nhịp.
+  const loadDraw = useCallback(async () => {
+    if (!selectedId) return { ok: false };
+    try {
+      const r = await api.tournaments.draw(selectedId);
+      const d = r.data?.draw || null;
+      setDrawState({ tid: selectedId, draw: d, offset: serverOffset(r.data?.server_now_ms) });
+      const key = d ? `${selectedId}:${d.id}:${d.status}` : null;
+      const prev = lastDrawKeyRef.current;
+      lastDrawKeyRef.current = key;
+      // Vừa rời trạng thái open (chốt/huỷ, hoặc đã sang phiên khác) → nạp lại chi tiết ngay để lịch xuất hiện
+      if (prev && prev.startsWith(`${selectedId}:`) && prev.endsWith(":open") && key !== prev) loadDetail(true);
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, status: err?.response?.status };
+    }
+  }, [selectedId, api, loadDetail]);
+
+  // Nguồn quyết định "đang live": phiên local (poll 2s) tươi hơn tóm tắt trong detail (12s) nếu cùng id;
+  // khác id thì lấy phiên có seq lớn hơn (detail có thể thấy phiên mới mở trước khi local kịp poll).
+  const summary = tournament?.draw || null;
+  const latestDraw = (() => {
+    if (draw && summary) {
+      if (draw.id === summary.id) return draw;
+      return (draw.seq ?? 0) >= (summary.seq ?? 0) ? draw : summary;
+    }
+    return draw || summary;
+  })();
+  const isLive = latestDraw?.status === "open";
+  const showCeremony = draw?.status === "open";
+
+  // Poll nhanh 2s khi phiên đang mở: tạm dừng khi tab ẩn (poll lại ngay khi hiện), giãn 5s khi 429.
+  // Dùng setTimeout nối tiếp thay vì setInterval để đổi nhịp được và không chồng request.
+  useEffect(() => {
+    if (!isLive || !selectedId) return undefined;
+    let stopped = false;
+    let inflight = false;
+    let timer = null;
+    const tick = async () => {
+      if (stopped || inflight) return;
+      if (document.hidden) return;            // visibilitychange sẽ khởi động lại
+      inflight = true;
+      const res = await loadDraw();
+      inflight = false;
+      if (stopped) return;
+      timer = setTimeout(tick, res.status === 429 ? DRAW_POLL_SLOW_MS : DRAW_POLL_MS);
+    };
+    const onVisible = () => {
+      if (document.hidden) return;
+      clearTimeout(timer);
+      tick();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    tick();   // phát hiện open lần đầu (từ detail 12s) → nạp phiên ngay, không chờ nhịp poll
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [isLive, selectedId, loadDraw]);
+
+  const participantsById = (() => {
+    const m = {};
+    (tournament?.participants || []).forEach(p => { m[p.id] = p; });
+    return m;
+  })();
+
   if (loading && !tournament) {
     return <div style={{ textAlign: "center", padding: 48 }}><Spin size="large" /></div>;
   }
@@ -459,6 +680,11 @@ export default function PublicTournamentTracker({ api }) {
   if (!list || list.length === 0) {
     return <Empty description="CLB chưa có giải đấu nào để theo dõi" />;
   }
+
+  const matches = tournament?.matches || [];
+  // Giải đã "Bắt đầu" nhưng chưa có lịch và không đang bốc thăm → màn chờ thay vì Tabs rỗng
+  const waiting = tournament && tournament.status === "active" && matches.length === 0 && !showCeremony;
+  const showHistory = tournament && latestDraw && latestDraw.status !== "open";
 
   return (
     <div>
@@ -481,7 +707,7 @@ export default function PublicTournamentTracker({ api }) {
         />
         <Button
           icon={refreshing ? <SyncOutlined spin /> : <ReloadOutlined />}
-          onClick={() => loadDetail(true)}
+          onClick={() => { loadDetail(true); if (isLive) loadDraw(); }}
           loading={false}
         >
           Làm mới
@@ -491,12 +717,38 @@ export default function PublicTournamentTracker({ api }) {
       {tournament && (
         <>
           <Space style={{ marginBottom: 12 }}>
-            <Badge status={tournament.status === "active" ? "processing" : "default"} />
+            <Badge status={isLive || tournament.status === "active" ? "processing" : "default"} />
             <Text type="secondary">
-              Tự động cập nhật mỗi {POLL_MS / 1000}s
+              {isLive
+                ? `Đang theo dõi bốc thăm trực tiếp (cập nhật ${DRAW_POLL_MS / 1000}s)`
+                : `Tự động cập nhật mỗi ${POLL_MS / 1000}s`}
             </Text>
           </Space>
-          <TournamentContent tournament={tournament} api={api} onScored={() => loadDetail(true)} />
+
+          {showCeremony && (
+            <Card size="small" title="🎡 Lễ bốc thăm trực tiếp" style={{ marginBottom: 16 }}>
+              <DrawCeremony
+                mode="public"
+                tournament={tournament}
+                draw={draw}
+                serverOffsetMs={drawOffset}
+                fullscreen={false}
+              />
+            </Card>
+          )}
+
+          {waiting
+            ? <Empty description="Chưa có lịch thi đấu — ban tổ chức sẽ bốc thăm/sinh lịch trước giờ đấu" />
+            : <TournamentContent tournament={tournament} api={api} onScored={() => loadDetail(true)} />}
+
+          {showHistory && (
+            <DrawHistory
+              api={api}
+              tid={tournament.id}
+              historyKey={`${latestDraw.id}:${latestDraw.status}`}
+              participantsById={participantsById}
+            />
+          )}
         </>
       )}
     </div>

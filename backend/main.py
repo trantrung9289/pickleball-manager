@@ -4,6 +4,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func, extract, text, or_, case
+from sqlalchemy.exc import IntegrityError
 from typing import Optional, List
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
@@ -14,10 +15,12 @@ def _now_vn() -> datetime:
     return datetime.now(_VN_TZ).replace(tzinfo=None)
 from decimal import Decimal
 from pathlib import Path
+import hashlib
 import io
 import os
 import re
 import secrets
+import time
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 import models, schemas
@@ -25,6 +28,7 @@ from database import engine, get_db, Base
 from tournament_engine import (
     generate_schedule, generate_group_schedule,
     generate_knockout_from_groups, compute_standings,
+    DRAW_SUPPORTED_FORMATS, draw_slot_label, draw_picks_to_pid_list, draw_pick_index,
 )
 from auth import (
     hash_password, verify_password, create_access_token,
@@ -2032,6 +2036,46 @@ def public_update_score(
     return match
 
 
+def _public_draw_out(draw: "models.TournamentDraw", t: "models.Tournament") -> dict:
+    """Bản public của DrawOut: bỏ created_by (tên đăng nhập của admin không đưa ra trang không cần đăng nhập)."""
+    out = _draw_out(draw, t)
+    out.pop("created_by", None)
+    return out
+
+
+def _public_tournament_or_404(db: Session, slug: str, tid: int) -> "models.Tournament":
+    rec = _validate_token(slug, db)
+    t = db.query(models.Tournament).filter(
+        models.Tournament.id == tid,
+        models.Tournament.club_id == rec.club_id,
+        models.Tournament.status != models.TournamentStatus.draft,
+    ).first()
+    if not t:
+        raise HTTPException(404, "Không tìm thấy giải đấu")
+    return t
+
+
+@app.get("/api/public/report/{slug}/tournaments/{tid}/draw")
+@limiter.limit("600/minute")
+def public_tournament_draw(request: Request, slug: str, tid: int, db: Session = Depends(get_db)):
+    """Khán giả theo dõi bốc thăm trực tiếp bằng polling 2s. Bucket rate-limit riêng theo path và
+    nới rộng vì nhiều khán giả cùng Wi-Fi sân chung 1 IP. Không PII: DrawOut chỉ có participant_id."""
+    t = _public_tournament_or_404(db, slug, tid)
+    draw = t.draw
+    return {
+        "draw": _public_draw_out(draw, t) if draw is not None else None,
+        "server_now_ms": int(time.time() * 1000),   # để client đồng bộ mốc dừng kim theo giờ server
+    }
+
+
+@app.get("/api/public/report/{slug}/tournaments/{tid}/draws")  # không response_model: dict đã bỏ created_by, tránh pydantic điền lại null
+@limiter.limit("60/minute")
+def public_tournament_draws(request: Request, slug: str, tid: int, db: Session = Depends(get_db)):
+    """Lịch sử mọi phiên bốc thăm (seq giảm dần) kèm seed để khán giả kiểm chứng."""
+    t = _public_tournament_or_404(db, slug, tid)
+    return [_public_draw_out(d, t) for d in sorted(t.draws, key=lambda d: d.seq, reverse=True)]
+
+
 # ── TOURNAMENTS ───────────────────────────────────────────
 
 # ── PLAYERS ───────────────────────────────────────────────
@@ -2344,6 +2388,9 @@ def update_tournament(
     if new_status is not None and new_status != t.status:
         if new_status not in ALLOWED_STATUS_TRANSITIONS.get(t.status, set()):
             raise HTTPException(400, f"Không thể chuyển trạng thái từ '{t.status.value}' sang '{new_status.value}'")
+        # Không kết thúc giải khi còn phiên bốc thăm dở — tránh phiên "mồ côi" không chốt được
+        if new_status == models.TournamentStatus.completed and any(d.status == "open" for d in t.draws):
+            raise HTTPException(400, "Đang có phiên bốc thăm chưa kết thúc — huỷ hoặc chốt phiên trước khi kết thúc giải")
 
     for k, v in updates.items():
         setattr(t, k, v)
@@ -2597,24 +2644,11 @@ def _maybe_add_third_place(db: Session, tid: int, t: "models.Tournament") -> Non
     semis[1].loser_next_match_id = third.id; semis[1].loser_next_match_slot = 2
 
 
-@app.post("/api/tournaments/{tid}/generate", response_model=schemas.TournamentOut)
-def generate_tournament(
-    tid: int,
-    shuffle: bool = True,
-    force: bool = False,
-    db: Session = Depends(get_db),
-    perms: ClubPermissions = Depends(get_club_permission),
-):
-    """Sinh lịch đấu bảng (xóa lịch cũ nếu có). Với combined: chỉ sinh vòng bảng.
-    force=true mới được sinh lại khi đã có trận có kết quả (xoá toàn bộ kết quả)."""
-    perms.require_edit()
-    t = db.query(models.Tournament).filter(models.Tournament.id == tid, models.Tournament.club_id == perms.club_id).first()
-    if not t: raise HTTPException(404, "Không tìm thấy giải đấu")
-    if t.status == models.TournamentStatus.completed:
-        raise HTTPException(400, "Giải đấu đã kết thúc, không thể sinh lại lịch")
-
+def _check_generate_preconditions(db: Session, t: "models.Tournament", force: bool) -> list:
+    """Các kiểm tra chung trước khi sinh lịch (dùng cho generate lẫn mở/chốt phiên bốc thăm).
+    Trả về list participants. Thứ tự và câu báo lỗi giữ nguyên như generate cũ."""
     scored = db.query(models.TournamentMatch).filter(
-        models.TournamentMatch.tournament_id == tid,
+        models.TournamentMatch.tournament_id == t.id,
         models.TournamentMatch.score1.isnot(None),
     ).count()
     if scored and not force:
@@ -2628,17 +2662,23 @@ def generate_tournament(
             raise HTTPException(400, "Số bảng phải ≥ 1")
         if len(participants) < 2 * t.num_groups:
             raise HTTPException(400, f"{t.num_groups} bảng cần ít nhất {2 * t.num_groups} đội (hiện có {len(participants)})")
+    return participants
+
+
+def _generate_from_order(db: Session, t: "models.Tournament", pid_list: list, force: bool) -> None:
+    """Sinh lịch từ thứ tự participant đã chốt (pid_list KHÔNG shuffle nữa — đây là thứ tự cuối cùng,
+    quyết định duy nhất cặp đấu). Dùng chung cho generate thủ công và chốt phiên bốc thăm.
+    KHÔNG commit bên trong — caller commit."""
+    tid = t.id
+    if t.status == models.TournamentStatus.completed:
+        raise HTTPException(400, "Giải đấu đã kết thúc, không thể sinh lại lịch")
+    participants = _check_generate_preconditions(db, t, force)
 
     # Xóa matches cũ
     db.query(models.TournamentMatch).filter(models.TournamentMatch.tournament_id == tid).delete()
 
-    pid_list = [p.id for p in participants]
-    if shuffle:
-        import random
-        random.shuffle(pid_list)
-
     if t.format.value == "combined":
-        # Phân bảng theo ĐÚNG thứ tự pid_list (đã shuffle) — engine cũng chia i % num_groups
+        # Phân bảng theo ĐÚNG thứ tự pid_list — engine cũng chia i % num_groups
         letters = "ABCDEFGHIJKLMNOP"
         by_id = {p.id: p for p in participants}
         for i, pid in enumerate(pid_list):
@@ -2656,7 +2696,7 @@ def generate_tournament(
             rank_rules=t.rank_rules,
             member_ranks=member_ranks,
             num_groups=t.num_groups,
-            shuffle=False,   # đã shuffle ở trên
+            shuffle=False,   # pid_list đã là thứ tự cuối
         )
 
     _save_matches(db, tid, raw)
@@ -2664,8 +2704,263 @@ def generate_tournament(
     _maybe_add_third_place(db, tid, t)
     _advance_byes_and_walkovers(db, tid)
     t.status = models.TournamentStatus.active
+
+
+@app.post("/api/tournaments/{tid}/generate", response_model=schemas.TournamentOut)
+def generate_tournament(
+    tid: int,
+    shuffle: bool = True,
+    force: bool = False,
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    """Sinh lịch đấu bảng (xóa lịch cũ nếu có). Với combined: chỉ sinh vòng bảng.
+    force=true mới được sinh lại khi đã có trận có kết quả (xoá toàn bộ kết quả)."""
+    perms.require_edit()
+    t = db.query(models.Tournament).filter(models.Tournament.id == tid, models.Tournament.club_id == perms.club_id).first()
+    if not t: raise HTTPException(404, "Không tìm thấy giải đấu")
+
+    pid_list = [p.id for p in t.participants]
+    if shuffle:
+        import random
+        random.shuffle(pid_list)
+
+    _generate_from_order(db, t, pid_list, force)
+
+    # Sinh lịch thủ công thì phiên bốc thăm đang dở không còn ý nghĩa → tự huỷ để không "mồ côi"
+    now = _now_vn()
+    for d in t.draws:
+        if d.status == "open":
+            d.status = "cancelled"
+            d.cancel_reason = "Sinh lịch thủ công"
+            d.cancelled_at = now
     db.commit(); db.refresh(t)
     return t
+
+
+# ── BỐC THĂM BẰNG VÒNG QUAY (phương án C: phiên lưu DB, server random có seed, commit–reveal) ──
+
+def _draw_out(draw: "models.TournamentDraw", t: "models.Tournament") -> dict:
+    """Dựng DrawOut dùng chung cho admin & public — chỉ chứa participant_id, không PII.
+    seed_hex chỉ lộ khi phiên đã kết thúc (commit–reveal): khi đang mở chỉ có seed_commit."""
+    return {
+        "id": draw.id,
+        "tournament_id": draw.tournament_id,
+        "seq": draw.seq,
+        "status": draw.status,
+        "format": t.format.value,
+        "num_groups": t.num_groups,
+        "total_steps": draw.total_steps,
+        "done_steps": len(draw.steps),
+        "reveal_ms": draw.reveal_ms,
+        "force": bool(draw.force),
+        "pool": list(draw.pool_json or []),
+        "seed_commit": draw.seed_commit,
+        "seed_hex": draw.seed_hex if draw.status != "open" else None,
+        "steps": [
+            {
+                "step_index": st.step_index, "participant_id": st.participant_id,
+                "slot_label": st.slot_label, "pick_index": st.pick_index,
+                "spun_at": st.spun_at, "spun_at_ms": st.spun_at_ms,
+            }
+            for st in draw.steps
+        ],
+        "created_by": draw.created_by,
+        "created_at": draw.created_at,
+        "committed_at": draw.committed_at,
+        "cancelled_at": draw.cancelled_at,
+        "cancel_reason": draw.cancel_reason,
+        "server_now_ms": int(time.time() * 1000),
+    }
+
+
+def _latest_draw(t: "models.Tournament"):
+    return t.draw
+
+
+def _get_club_tournament(db: Session, tid: int, perms: ClubPermissions) -> "models.Tournament":
+    t = db.query(models.Tournament).filter(models.Tournament.id == tid, models.Tournament.club_id == perms.club_id).first()
+    if not t: raise HTTPException(404, "Không tìm thấy giải đấu")
+    return t
+
+
+@app.get("/api/tournaments/{tid}/draw", response_model=schemas.DrawOut)
+def get_draw(
+    tid: int,
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    """Phiên bốc thăm mới nhất (mọi trạng thái) — 404 nếu giải chưa bốc lần nào."""
+    perms.require_view()
+    t = _get_club_tournament(db, tid, perms)
+    draw = _latest_draw(t)
+    if draw is None:
+        raise HTTPException(404, "Giải đấu chưa có phiên bốc thăm nào")
+    return _draw_out(draw, t)
+
+
+@app.get("/api/tournaments/{tid}/draws", response_model=List[schemas.DrawOut])
+def list_draws(
+    tid: int,
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    """Lịch sử mọi phiên bốc thăm, seq giảm dần (mới nhất trước)."""
+    perms.require_view()
+    t = _get_club_tournament(db, tid, perms)
+    return [_draw_out(d, t) for d in sorted(t.draws, key=lambda d: d.seq, reverse=True)]
+
+
+@app.post("/api/tournaments/{tid}/draw", response_model=schemas.DrawOut, status_code=201)
+def open_draw(
+    tid: int,
+    data: schemas.DrawOpenIn,
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    """Mở phiên bốc thăm mới: sinh seed bí mật, công bố seed_commit = sha256(seed) ngay để khán giả
+    kiểm chứng sau khi kết thúc. Pool gồm MỌI participant (kể cả đã bỏ giải — giống generate)."""
+    perms.require_edit()
+    t = _get_club_tournament(db, tid, perms)
+    if t.status == models.TournamentStatus.draft:
+        raise HTTPException(400, "Bấm 'Bắt đầu giải' để khoá danh sách trước khi bốc thăm")
+    if t.status == models.TournamentStatus.completed:
+        raise HTTPException(400, "Giải đấu đã kết thúc")
+    if t.format.value not in DRAW_SUPPORTED_FORMATS:
+        raise HTTPException(400, "Thể thức này không hỗ trợ bốc thăm bằng vòng quay")
+    if t.pairing_mode == "cross_rank" and t.rank_rules:
+        raise HTTPException(400, "Ghép chéo hạng chưa hỗ trợ bốc thăm")
+    if any(d.status == "open" for d in t.draws):
+        raise HTTPException(409, "Đang có phiên bốc thăm chưa kết thúc")
+    participants = _check_generate_preconditions(db, t, data.force)
+
+    seed_hex = secrets.token_hex(16)
+    pool = sorted(p.id for p in participants)
+    membership = perms.membership
+    user = getattr(membership, "user", None)
+    if user is None:
+        user = db.query(models.User).filter(models.User.id == membership.user_id).first()
+    draw = models.TournamentDraw(
+        tournament_id=t.id,
+        seq=(max((d.seq for d in t.draws), default=0) + 1),
+        status="open",
+        seed_hex=seed_hex,
+        seed_commit=hashlib.sha256(seed_hex.encode()).hexdigest(),
+        pool_json=pool,
+        total_steps=len(pool),
+        reveal_ms=data.reveal_ms,
+        force=bool(data.force),
+        created_by=user.username if user is not None else None,
+        created_at=_now_vn(),
+    )
+    db.add(draw)
+    try:
+        db.commit()
+    except IntegrityError:
+        # 2 request mở phiên gần như đồng thời (bấm đúp / 2 tab) cùng qua check "đang open" ở trên
+        # → UNIQUE(tournament_id, seq) chặn bản thứ hai; trả 409 để UI nạp phiên đã có thay vì 500.
+        db.rollback()
+        raise HTTPException(409, "Đang có phiên bốc thăm chưa kết thúc")
+    db.refresh(draw); db.refresh(t)
+    return _draw_out(draw, t)
+
+
+@app.post("/api/tournaments/{tid}/draw/spin", response_model=schemas.DrawOut)
+def spin_draw(
+    tid: int,
+    data: schemas.DrawSpinIn,
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    """Quay một lượt: kết quả tất định từ seed (SHA256("{seed}:{k}") mod số đội còn lại) nên
+    server không thể "chọn" kết quả sau khi đã công bố seed_commit. expected_step chống bấm trùng."""
+    perms.require_edit()
+    t = _get_club_tournament(db, tid, perms)
+    draw = _latest_draw(t)
+    if draw is None or draw.status != "open":
+        raise HTTPException(409, "Không có phiên bốc thăm đang mở")
+    done = len(draw.steps)
+    if data.expected_step != done:
+        raise HTTPException(409, "Lượt bốc không khớp — tải lại phiên")
+    if done >= draw.total_steps:
+        raise HTTPException(409, "Đã bốc đủ lượt — bấm 'Chốt & sinh lịch'")
+
+    picked = {st.participant_id for st in draw.steps}
+    remaining = [pid for pid in draw.pool_json if pid not in picked]
+    idx = draw_pick_index(draw.seed_hex, done, len(remaining))
+    step = models.TournamentDrawStep(
+        draw_id=draw.id,
+        step_index=done,
+        participant_id=remaining[idx],
+        slot_label=draw_slot_label(t.format.value, done, draw.total_steps, t.num_groups),
+        pick_index=idx,
+        spun_at=_now_vn(),
+        spun_at_ms=int(time.time() * 1000),
+    )
+    db.add(step)
+    try:
+        db.commit()
+    except IntegrityError:
+        # 2 request cùng lượt chen nhau → unique (draw_id, step_index) chặn lượt thứ hai
+        db.rollback()
+        raise HTTPException(409, "Lượt này đã được quay (bấm trùng)")
+    db.refresh(draw); db.refresh(t)
+    return _draw_out(draw, t)
+
+
+@app.post("/api/tournaments/{tid}/draw/commit", response_model=schemas.TournamentOut)
+def commit_draw(
+    tid: int,
+    data: schemas.DrawCommitIn,
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    """Chốt phiên: đổ thứ tự bốc vào hàm sinh lịch hiện có. Sau chốt seed_hex được công khai."""
+    perms.require_edit()
+    t = _get_club_tournament(db, tid, perms)
+    draw = _latest_draw(t)
+    if draw is None or draw.status != "open":
+        raise HTTPException(409, "Không có phiên bốc thăm đang mở")
+    steps = sorted(draw.steps, key=lambda st: st.step_index)
+    if len(steps) != draw.total_steps:
+        raise HTTPException(409, f"Chưa bốc đủ ({len(steps)}/{draw.total_steps} lượt)")
+    if {st.participant_id for st in steps} != {p.id for p in t.participants}:
+        raise HTTPException(409, "Danh sách đội đã thay đổi trong lúc bốc — huỷ phiên và bốc lại")
+
+    picks = [st.participant_id for st in steps]
+    pid_list = draw_picks_to_pid_list(t.format.value, picks, t.num_groups)
+    # 400 "đã có điểm" (kết quả mới nhập sau khi mở phiên) → propagate nguyên vẹn để UI hỏi lại với force
+    _generate_from_order(db, t, pid_list, force=bool(data.force or draw.force))
+
+    now = _now_vn()
+    for d in t.draws:
+        if d.status == "committed" and d.id != draw.id:
+            d.status = "superseded"
+    draw.status = "committed"
+    draw.committed_at = now
+    db.commit(); db.refresh(t)
+    return t
+
+
+@app.post("/api/tournaments/{tid}/draw/cancel", response_model=schemas.DrawOut)
+def cancel_draw(
+    tid: int,
+    data: schemas.DrawCancelIn,
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    """Huỷ phiên đang mở (không có undo từng lượt — chỉ huỷ cả phiên rồi mở phiên mới).
+    Phiên huỷ vẫn giữ trong lịch sử kèm seed để minh bạch."""
+    perms.require_edit()
+    t = _get_club_tournament(db, tid, perms)
+    draw = _latest_draw(t)
+    if draw is None or draw.status != "open":
+        raise HTTPException(409, "Không có phiên bốc thăm đang mở")
+    draw.status = "cancelled"
+    draw.cancelled_at = _now_vn()
+    draw.cancel_reason = data.reason
+    db.commit(); db.refresh(draw); db.refresh(t)
+    return _draw_out(draw, t)
 
 
 @app.post("/api/tournaments/{tid}/start-knockout", response_model=schemas.TournamentOut)

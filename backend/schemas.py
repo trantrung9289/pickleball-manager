@@ -357,6 +357,74 @@ class MatchOut(BaseModel):
         from_attributes = True
 
 
+# ── Bốc thăm bằng vòng quay ────────────────────────────────
+class DrawStepOut(BaseModel):
+    step_index: int
+    participant_id: int
+    slot_label: str
+    pick_index: int
+    spun_at: Optional[datetime] = None
+    spun_at_ms: int
+
+    class Config:
+        from_attributes = True
+
+
+class DrawSummaryOut(BaseModel):
+    """Tóm tắt phiên bốc thăm mới nhất — nhúng vào TournamentOut / PublicTournamentOut."""
+    id: int
+    seq: int
+    status: str
+    total_steps: int
+    done_steps: int
+    reveal_ms: int
+
+    class Config:
+        from_attributes = True
+
+
+class DrawOut(BaseModel):
+    """Trả bởi các endpoint draw (build bằng hàm _draw_out trong main.py, không from_orm trực tiếp).
+    Chỉ chứa participant_id — không có PII, dùng chung cho admin lẫn public."""
+    id: int
+    tournament_id: int
+    seq: int
+    status: str
+    format: str
+    num_groups: int
+    total_steps: int
+    done_steps: int
+    reveal_ms: int
+    force: bool = False
+    pool: List[int]
+    seed_commit: str
+    seed_hex: Optional[str] = None      # chỉ lộ khi status != open (commit–reveal)
+    steps: List[DrawStepOut] = []
+    created_by: Optional[str] = None
+    created_at: Optional[datetime] = None
+    committed_at: Optional[datetime] = None
+    cancelled_at: Optional[datetime] = None
+    cancel_reason: Optional[str] = None
+    server_now_ms: int
+
+
+class DrawOpenIn(BaseModel):
+    force: bool = False
+    reveal_ms: int = Field(5000, ge=1500, le=15000)
+
+
+class DrawSpinIn(BaseModel):
+    expected_step: int = Field(ge=0)
+
+
+class DrawCommitIn(BaseModel):
+    force: bool = False
+
+
+class DrawCancelIn(BaseModel):
+    reason: Optional[str] = Field(None, max_length=200)
+
+
 class TournamentOut(BaseModel):
     id: int
     name: str
@@ -373,6 +441,7 @@ class TournamentOut(BaseModel):
     has_score_pin: bool = False
     participants: List[ParticipantOut] = []
     matches: List[MatchOut] = []
+    draw: Optional[DrawSummaryOut] = None   # phiên bốc thăm mới nhất (property Tournament.draw)
 
     class Config:
         from_attributes = True
@@ -454,6 +523,7 @@ class PublicTournamentOut(BaseModel):
     has_score_pin: bool = False
     participants: List[PublicParticipantOut] = []
     matches: List[PublicMatchOut] = []
+    draw: Optional[DrawSummaryOut] = None   # phiên bốc thăm mới nhất (property Tournament.draw)
 
     class Config:
         from_attributes = True

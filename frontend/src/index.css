@@ -137,3 +137,10 @@ body {
   .print-sheet-root.debug-visible { display: block; background: #525659; padding: 24px; }
   .print-sheet-root.debug-visible .print-page { margin: 0 auto 24px; box-shadow: 0 4px 18px rgba(0,0,0,.4); }
 }
+
+/* ── Vòng quay bốc thăm (components/draw) ─────────────────────── */
+.draw-stage-root { position: fixed; inset: 0; z-index: 900; overflow: auto; }   /* < 1000 để Modal/message antd nổi lên trên */
+.draw-wheel-rotor { will-change: transform; transform-origin: 50% 50%; }
+@keyframes draw-slot-flash { 0%,100% { box-shadow: 0 0 0 0 rgba(250,173,20,.0);} 50% { box-shadow: 0 0 0 6px rgba(250,173,20,.55);} }
+.draw-slot-flash { animation: draw-slot-flash 1.2s ease-in-out 2; }
+@media (prefers-reduced-motion: reduce) { .draw-wheel-rotor { transition: none !important; } .draw-slot-flash { animation: none; } }

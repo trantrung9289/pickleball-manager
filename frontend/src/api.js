@@ -132,6 +132,15 @@ export const tournamentsApi = {
   addParticipant: (tid, data) => api.post(`/api/tournaments/${tid}/participants`, data),
   removeParticipant: (tid, pid) => api.delete(`/api/tournaments/${tid}/participants/${pid}`),
   withdraw: (tid, pid) => api.post(`/api/tournaments/${tid}/participants/${pid}/withdraw`),
+  // Phiên bốc thăm bằng vòng quay (server random có seed, admin quay từng lượt rồi chốt)
+  draw: {
+    get: (tid) => api.get(`/api/tournaments/${tid}/draw`),
+    history: (tid) => api.get(`/api/tournaments/${tid}/draws`),
+    open: (tid, data) => api.post(`/api/tournaments/${tid}/draw`, data),            // {force, reveal_ms}
+    spin: (tid, expectedStep) => api.post(`/api/tournaments/${tid}/draw/spin`, { expected_step: expectedStep }),
+    commit: (tid, force = false) => api.post(`/api/tournaments/${tid}/draw/commit`, { force }),
+    cancel: (tid, reason) => api.post(`/api/tournaments/${tid}/draw/cancel`, { reason }),
+  },
 };
 
 export const reportLinksApi = {
@@ -164,6 +173,9 @@ export const createPublicReportApi = (slug) => {
       detail: (tid) => pub.get(`${base}/tournaments/${tid}`),
       standings: (tid, group) => pub.get(`${base}/tournaments/${tid}/standings`, { params: { group } }),
       score: (tid, mid, data) => pub.post(`${base}/tournaments/${tid}/matches/${mid}/score`, data),
+      // Bốc thăm: public poll nhanh (2s) trên endpoint riêng — bucket rate-limit riêng theo path
+      draw: (tid) => pub.get(`${base}/tournaments/${tid}/draw`),
+      drawHistory: (tid) => pub.get(`${base}/tournaments/${tid}/draws`),
     },
   };
 };

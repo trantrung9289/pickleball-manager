@@ -209,10 +209,17 @@ class Tournament(Base):
 
     participants = relationship("TournamentParticipant", back_populates="tournament", cascade="all, delete-orphan")
     matches = relationship("TournamentMatch", back_populates="tournament", cascade="all, delete-orphan")
+    draws = relationship("TournamentDraw", back_populates="tournament", cascade="all, delete-orphan",
+                         order_by="TournamentDraw.seq", lazy="selectin")
 
     @property
     def has_score_pin(self) -> bool:
         return bool(self.score_pin_hash)
+
+    @property
+    def draw(self):
+        """Phiên bốc thăm mới nhất (mọi trạng thái) — để TournamentOut/PublicTournamentOut expose tóm tắt."""
+        return self.draws[-1] if self.draws else None
 
 
 class TournamentParticipant(Base):
@@ -287,6 +294,60 @@ class TournamentMatch(Base):
     p1 = relationship("TournamentParticipant", foreign_keys=[p1_id])
     p2 = relationship("TournamentParticipant", foreign_keys=[p2_id])
     winner = relationship("TournamentParticipant", foreign_keys=[winner_id])
+
+
+class TournamentDraw(Base):
+    """Một phiên bốc thăm bằng vòng quay của 1 giải. Nguồn sự thật nằm trong DB (sống qua deploy)."""
+    __tablename__ = "tournament_draws"
+
+    id = Column(Integer, primary_key=True, index=True)
+    tournament_id = Column(Integer, ForeignKey("tournaments.id"), nullable=False, index=True)
+    seq = Column(Integer, nullable=False)                          # lần bốc thứ mấy của giải, từ 1
+    status = Column(String(20), default="open", nullable=False)   # open | committed | cancelled | superseded
+    seed_hex = Column(String(64), nullable=False)                  # secrets.token_hex(16); chỉ trả ra API khi status != open
+    seed_commit = Column(String(64), nullable=False)               # sha256(seed_hex).hexdigest() — công bố ngay khi mở
+    pool_json = Column(JSON, nullable=False)                       # [participant_id...] sắp theo id tăng dần lúc mở phiên
+    total_steps = Column(Integer, nullable=False)
+    reveal_ms = Column(Integer, default=5000, nullable=False)
+    force = Column(Boolean, default=False)                         # mở phiên với xác nhận xoá kết quả cũ
+    created_by = Column(String(50), nullable=True)
+    created_at = Column(DateTime, nullable=True)                   # set bằng _now_vn() trong main.py (không server_default để cùng gốc giờ VN)
+    committed_at = Column(DateTime, nullable=True)
+    cancelled_at = Column(DateTime, nullable=True)
+    cancel_reason = Column(String(200), nullable=True)
+
+    __table_args__ = (UniqueConstraint("tournament_id", "seq", name="uq_draw_tournament_seq"),)
+
+    tournament = relationship("Tournament", back_populates="draws")
+    steps = relationship("TournamentDrawStep", back_populates="draw", cascade="all, delete-orphan",
+                         order_by="TournamentDrawStep.step_index", lazy="selectin")
+
+    @property
+    def done_steps(self) -> int:
+        return len(self.steps)
+
+
+class TournamentDrawStep(Base):
+    """Một lượt quay đã chốt của phiên bốc thăm. Không có undo từng lượt — chỉ huỷ cả phiên."""
+    __tablename__ = "tournament_draw_steps"
+
+    id = Column(Integer, primary_key=True, index=True)
+    draw_id = Column(Integer, ForeignKey("tournament_draws.id"), nullable=False, index=True)
+    step_index = Column(Integer, nullable=False)                   # 0-based
+    participant_id = Column(Integer, ForeignKey("tournament_participants.id"), nullable=False)
+    slot_label = Column(String(60), nullable=False)                # nhãn ô do server sinh
+    pick_index = Column(Integer, nullable=False)                   # chỉ số trong danh sách còn lại lúc quay
+    spun_at = Column(DateTime, nullable=True)                      # _now_vn() để hiển thị
+    spun_at_ms = Column(Integer, nullable=False)                   # epoch ms UTC (int(time.time()*1000)) — mốc đồng bộ animation
+
+    __table_args__ = (
+        UniqueConstraint("draw_id", "step_index", name="uq_draw_step_index"),
+        UniqueConstraint("draw_id", "participant_id", name="uq_draw_step_participant"),
+    )
+
+    draw = relationship("TournamentDraw", back_populates="steps")
+    # Khai báo quan hệ để SQLAlchemy biết xoá step TRƯỚC participant khi xoá giải (SQLite bật FK)
+    participant = relationship("TournamentParticipant")
 
 
 class BotConfig(Base):

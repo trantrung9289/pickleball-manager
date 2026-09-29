@@ -1,4 +1,5 @@
 """Thuật toán sinh lịch thi đấu."""
+import hashlib
 import random
 import math
 from typing import List, Optional, Dict, Any
@@ -104,6 +105,87 @@ def _knockout_bracket(players: List, seeded: bool = True) -> List[Dict]:
         prev_round = cur_round
 
     return all_matches
+
+
+# ── Bốc thăm bằng vòng quay (hàm thuần, không DB) ──────────────────────────
+# Thể thức hỗ trợ: combined (bốc vào bảng), knockout (bốc vị trí nhánh), individual (bốc đối thủ).
+# round_robin / round_robin_double không bốc vì thứ tự không ảnh hưởng cặp đấu.
+DRAW_SUPPORTED_FORMATS = ("combined", "knockout", "individual")
+_GROUP_LETTERS = "ABCDEFGHIJKLMNOP"
+
+
+def _knockout_slot_seq(n: int):
+    """(order, slot_seq): order = thứ tự hiển thị sơ đồ (trên→dưới, theo seed) với size = luỹ thừa 2 ≥ n;
+    slot_seq = các seed ≤ n theo đúng thứ tự hiển thị đó — lượt bốc k nhận seed slot_seq[k]."""
+    size = 1
+    while size < n:
+        size *= 2
+    order = _seed_order(size)
+    return order, [s for s in order if s <= n]
+
+
+def draw_display_slots(format: str, n: int, num_groups: int = 2) -> List[Dict]:
+    """Danh sách ô đích theo THỨ TỰ BỐC (lượt k điền ô k). Mỗi ô: {"index": k, "label": str, ...}.
+
+    - combined: k → bảng letters[k % g], vị trí k // g + 1 (giống cách generate gán i % num_groups).
+    - individual: k → trận k//2 + 1, đội k%2 + 1; n lẻ thì lượt cuối không có trận (giống _make_pairs).
+    - knockout: lượt k nhận seed slot_seq[k] (thứ tự hiển thị trên sơ đồ, trên→dưới);
+      bye khi ô kề bên (display_pos ^ 1) là seed > n → đội đó vào thẳng vòng 2.
+    """
+    slots: List[Dict] = []
+    if format == "combined":
+        g = max(1, int(num_groups))
+        for k in range(n):
+            letter = _GROUP_LETTERS[k % g]
+            pos = k // g + 1
+            slots.append({"index": k, "group": letter, "pos": pos, "label": f"Bảng {letter} – vị trí {pos}"})
+        return slots
+    if format == "individual":
+        for k in range(n):
+            if n % 2 == 1 and k == n - 1:
+                slots.append({"index": k, "match": None, "side": None, "label": "Không có trận (số lẻ)"})
+                continue
+            m, side = k // 2 + 1, k % 2 + 1
+            slots.append({"index": k, "match": m, "side": side, "label": f"Trận {m} – Đội {side}"})
+        return slots
+    if format == "knockout":
+        order, slot_seq = _knockout_slot_seq(n)
+        for k, seed in enumerate(slot_seq):
+            display_pos = order.index(seed)
+            bye = order[display_pos ^ 1] > n
+            label = f"Vị trí {k + 1}" + (" (miễn vòng 1)" if bye else "")
+            slots.append({"index": k, "seed": seed, "display_pos": display_pos, "bye": bye, "label": label})
+        return slots
+    raise ValueError(f"Thể thức '{format}' không hỗ trợ bốc thăm bằng vòng quay")
+
+
+def draw_slot_label(format: str, step_index: int, n: int, num_groups: int = 2) -> str:
+    return draw_display_slots(format, n, num_groups)[step_index]["label"]
+
+
+def draw_picks_to_pid_list(format: str, picks: List[int], num_groups: int = 2) -> List[int]:
+    """picks = participant_id theo thứ tự lượt bốc (đủ n phần tử). Trả pid_list để đưa vào _generate_from_order.
+
+    - combined, individual: giữ nguyên thứ tự (generate gán bảng i % g và ghép (2k, 2k+1) theo đúng thứ tự).
+    - knockout: pid_list[slot_seq[k] - 1] = picks[k] — vì _knockout_bracket đặt players[seed-1] vào vị trí
+      hiển thị theo _seed_order, nên hai đội bốc liên tiếp (không bye) sẽ là đối thủ vòng 1.
+    """
+    if format in ("combined", "individual"):
+        return list(picks)
+    if format == "knockout":
+        n = len(picks)
+        _, slot_seq = _knockout_slot_seq(n)
+        pid_list: List[Optional[int]] = [None] * n
+        for k, pid in enumerate(picks):
+            pid_list[slot_seq[k] - 1] = pid
+        return pid_list
+    raise ValueError(f"Thể thức '{format}' không hỗ trợ bốc thăm bằng vòng quay")
+
+
+def draw_pick_index(seed_hex: str, step_index: int, remaining_count: int) -> int:
+    """Công thức công khai để khán giả kiểm chứng: SHA256("{seed}:{k}") mod (số đội còn lại)."""
+    digest = hashlib.sha256(f"{seed_hex}:{step_index}".encode()).hexdigest()
+    return int(digest, 16) % remaining_count
 
 
 def generate_group_schedule(
