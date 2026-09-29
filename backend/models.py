@@ -200,6 +200,9 @@ class Tournament(Base):
     team_type = Column(String(10), default="singles")     # singles | doubles
     pairing_mode = Column(String(30), default="random")   # random | same_rank | cross_rank
     rank_rules = Column(JSON, nullable=True)              # [{"rank1":"A","rank2":"C"}]
+    # Quy tắc ghép ĐỒNG ĐỘI (giải đôi) [{"rank1","rank2"}] — TÁCH BIỆT với pairing_mode/rank_rules
+    # (quy tắc ghép ĐỐI THỦ của format individual, đang dùng để chặn vòng quay cặp đấu)
+    partner_rules = Column(JSON, nullable=True)
     num_groups = Column(Integer, default=2)               # for group stage
     description = Column(Text, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
@@ -211,6 +214,8 @@ class Tournament(Base):
     matches = relationship("TournamentMatch", back_populates="tournament", cascade="all, delete-orphan")
     draws = relationship("TournamentDraw", back_populates="tournament", cascade="all, delete-orphan",
                          order_by="TournamentDraw.seq", lazy="selectin")
+    partner_draws = relationship("TournamentPartnerDraw", back_populates="tournament", cascade="all, delete-orphan",
+                                 order_by="TournamentPartnerDraw.seq", lazy="selectin")
 
     @property
     def has_score_pin(self) -> bool:
@@ -220,6 +225,19 @@ class Tournament(Base):
     def draw(self):
         """Phiên bốc thăm mới nhất (mọi trạng thái) — để TournamentOut/PublicTournamentOut expose tóm tắt."""
         return self.draws[-1] if self.draws else None
+
+    @property
+    def partner_draw(self):
+        """Phiên ghép đội (partner draw) mới nhất, mọi trạng thái — KHÔNG lẫn với phiên bốc cặp đấu (draw)."""
+        return self.partner_draws[-1] if self.partner_draws else None
+
+    @property
+    def unpaired_count(self) -> int:
+        """Số người chưa có đội trong giải đôi (participant đơn lẻ: không có partner). Giải đơn → 0."""
+        if self.team_type != "doubles":
+            return 0
+        return sum(1 for p in self.participants
+                   if p.partner_member_id is None and p.partner_player_id is None)
 
 
 class TournamentParticipant(Base):
@@ -348,6 +366,68 @@ class TournamentDrawStep(Base):
     draw = relationship("TournamentDraw", back_populates="steps")
     # Khai báo quan hệ để SQLAlchemy biết xoá step TRƯỚC participant khi xoá giải (SQLite bật FK)
     participant = relationship("TournamentParticipant")
+
+
+class TournamentPartnerDraw(Base):
+    """Một phiên GHÉP ĐỘI ĐÔI bằng vòng quay (partner draw). Dùng BẢNG RIÊNG thay vì tái dùng
+    tournament_draws vì bảng cũ đã có trên production với steps.participant_id NOT NULL FK, còn ở đây
+    participant đơn lẻ bị xoá khi gộp thành đội nên không thể giữ FK."""
+    __tablename__ = "tournament_partner_draws"
+
+    id = Column(Integer, primary_key=True, index=True)
+    tournament_id = Column(Integer, ForeignKey("tournaments.id"), nullable=False, index=True)
+    seq = Column(Integer, nullable=False)                          # lần ghép thứ mấy của giải, từ 1
+    status = Column(String(20), default="open", nullable=False)   # open | committed | cancelled | superseded
+    seed_hex = Column(String(64), nullable=False)                  # chỉ trả ra API khi status != open
+    seed_commit = Column(String(64), nullable=False)               # sha256(seed_hex) — công bố ngay khi mở
+    pool_json = Column(JSON, nullable=False)                       # [{"pid","member_id","player_id","name","rank"}] sắp theo pid
+    rules_json = Column(JSON, nullable=False, default=list)        # [{"rank1","rank2"}] — có thể []
+    plan_json = Column(JSON, nullable=False)                       # {"phases":[...], "unpaired_pids":[...]}
+    total_steps = Column(Integer, nullable=False)
+    reveal_ms = Column(Integer, default=5000, nullable=False)
+    created_by = Column(String(50), nullable=True)
+    created_at = Column(DateTime, nullable=True)                   # _now_vn() trong main.py
+    committed_at = Column(DateTime, nullable=True)
+    cancelled_at = Column(DateTime, nullable=True)
+    cancel_reason = Column(String(200), nullable=True)
+
+    __table_args__ = (UniqueConstraint("tournament_id", "seq", name="uq_partner_draw_tournament_seq"),)
+
+    tournament = relationship("Tournament", back_populates="partner_draws")
+    steps = relationship("TournamentPartnerDrawStep", back_populates="draw", cascade="all, delete-orphan",
+                         order_by="TournamentPartnerDrawStep.step_index", lazy="selectin")
+
+    @property
+    def done_steps(self) -> int:
+        return len(self.steps)
+
+
+class TournamentPartnerDrawStep(Base):
+    """Một lượt quay đã chốt của phiên ghép đội: chọn 1 NGƯỜI vào ô (đội team_index, vị trí side)."""
+    __tablename__ = "tournament_partner_draw_steps"
+
+    id = Column(Integer, primary_key=True, index=True)
+    draw_id = Column(Integer, ForeignKey("tournament_partner_draws.id"), nullable=False, index=True)
+    step_index = Column(Integer, nullable=False)                   # 0-based
+    team_index = Column(Integer, nullable=False)                   # 0-based toàn phiên
+    side = Column(Integer, nullable=False)                         # 1 | 2
+    phase_index = Column(Integer, nullable=False)
+    # pid KHÔNG FK: participant đơn lẻ (người 2) bị xoá khi gộp đội lúc commit — giữ snapshot để kiểm chứng
+    pid = Column(Integer, nullable=False)
+    member_id = Column(Integer, nullable=True)                     # snapshot
+    player_id = Column(Integer, nullable=True)                     # snapshot
+    pick_index = Column(Integer, nullable=False)                   # chỉ số trong eligible lúc quay
+    auto = Column(Boolean, default=False, nullable=False)          # eligible chỉ 1 người → điền tự động
+    eligible_pids_json = Column(JSON, nullable=False)              # [pid...] đủ điều kiện tại lượt đó
+    spun_at = Column(DateTime, nullable=True)
+    spun_at_ms = Column(Integer, nullable=False)                   # epoch ms UTC — mốc đồng bộ animation
+
+    __table_args__ = (
+        UniqueConstraint("draw_id", "step_index", name="uq_partner_draw_step_index"),
+        UniqueConstraint("draw_id", "pid", name="uq_partner_draw_step_pid"),
+    )
+
+    draw = relationship("TournamentPartnerDraw", back_populates="steps")
 
 
 class BotConfig(Base):

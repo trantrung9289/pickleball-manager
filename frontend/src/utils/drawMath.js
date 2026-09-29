@@ -171,3 +171,176 @@ export async function verifyDraw(draw) {
   }
   return { ok: allOk, commitOk, steps: results };
 }
+
+// ── Ghép ĐỘI ĐÔI bằng vòng quay (partner draw) — mirror tournament_engine.py:
+//    normalize_rank / partner_draw_plan / partner_step_context / draw_pick_index ─────────────
+export const UNRANKED = "Chưa xếp hạng";
+export const PARTNER_RANK_OPTIONS = ["A", "B", "C", "D", "Hạt giống 1", "Hạt giống 2", "Hạt giống 3", UNRANKED];
+
+/** Hạng đã chuẩn hoá: null/""/khoảng trắng → "Chưa xếp hạng", còn lại trim. */
+/**
+ * Nhãn hạng để ghép câu: "hạng A" / "Chưa xếp hạng" (không thành "hạng Chưa xếp hạng").
+ * cap=true → viết hoa chữ đầu ("Hạng A") cho tiêu đề.
+ */
+export function rankLabel(r, cap = false) {
+  const v = normalizeRank(r);
+  if (v === UNRANKED) return UNRANKED;
+  return `${cap ? "Hạng" : "hạng"} ${v}`;
+}
+
+export function normalizeRank(r) {
+  const s = r == null ? "" : String(r).trim();
+  return s === "" ? UNRANKED : s;
+}
+
+const sortPeople = (people) =>
+  [...(people || [])]
+    .map((p) => ({ pid: Number(p.pid), rank: normalizeRank(p.rank) }))
+    .sort((a, b) => a.pid - b.pid);
+
+/**
+ * Kế hoạch ghép đội — công bố TRƯỚC lượt đầu để kiểm chứng được.
+ *   people: [{pid, rank}] ; rules: [{rank1, rank2}] hoặc [] (rỗng = ngẫu nhiên toàn bộ).
+ * Mô phỏng các quy tắc THEO THỨ TỰ với bộ đếm còn lại theo hạng (quy tắc trước tiêu thụ người trước):
+ *   cùng hạng → team_count = còn // 2 ; khác hạng → min(còn1, còn2).
+ * Trả {phases: [{index (vị trí quy tắc gốc), rank1|null, rank2|null, team_count}] (chỉ phase có đội),
+ *      total_steps: 2 × Σ team_count,
+ *      unpaired_pids: người KHÔNG THỂ vào đội nào theo kế hoạch (hạng không được quy tắc nào dùng tới,
+ *                     kể cả "Chưa xếp hạng"). Người dư của một hạng CÓ được dùng (VD 3 A ghép A+B với 2 B)
+ *                     chỉ biết sau khi quay xong, không nằm trong danh sách này.}
+ */
+export function partnerPlan(people, rules) {
+  const ppl = sortPeople(people);
+  const n = ppl.length;
+  const list = Array.isArray(rules) ? rules : [];
+  if (list.length === 0) {
+    const tc = Math.floor(n / 2);
+    return {
+      phases: tc > 0 ? [{ index: 0, rank1: null, rank2: null, team_count: tc }] : [],
+      total_steps: 2 * tc,
+      unpaired_pids: [],
+    };
+  }
+  const remain = {};
+  ppl.forEach((p) => { remain[p.rank] = (remain[p.rank] || 0) + 1; });
+  const usedRanks = new Set();
+  const phases = [];
+  list.forEach((rule, i) => {
+    const r1 = normalizeRank(rule?.rank1);
+    const r2 = normalizeRank(rule?.rank2);
+    let tc;
+    if (r1 === r2) {
+      tc = Math.floor((remain[r1] || 0) / 2);
+      remain[r1] = (remain[r1] || 0) - 2 * tc;
+    } else {
+      tc = Math.min(remain[r1] || 0, remain[r2] || 0);
+      remain[r1] = (remain[r1] || 0) - tc;
+      remain[r2] = (remain[r2] || 0) - tc;
+    }
+    if (tc > 0) {
+      phases.push({ index: i, rank1: r1, rank2: r2, team_count: tc });
+      usedRanks.add(r1); usedRanks.add(r2);
+    }
+  });
+  const totalTeams = phases.reduce((s, ph) => s + ph.team_count, 0);
+  return {
+    phases,
+    total_steps: 2 * totalTeams,
+    unpaired_pids: ppl.filter((p) => !usedRanks.has(p.rank)).map((p) => p.pid),
+  };
+}
+
+/** Phase + số thứ tự đội (0-based toàn phiên) + bên (1|2) của lượt k, chạy tuần tự qua các phase. */
+function locateStep(plan, k) {
+  let offset = 0;
+  let teamBase = 0;
+  const phases = plan?.phases || [];
+  for (let pi = 0; pi < phases.length; pi++) {
+    const ph = phases[pi];
+    const tc = Number(ph.team_count) || 0;
+    const span = 2 * tc;
+    if (k < offset + span) {
+      const local = k - offset;
+      // phase_index = "index" của phase (thứ tự quy tắc gốc) — giống engine; vị trí mảng chỉ để dự phòng
+      const phaseIndex = Number.isFinite(Number(ph.index)) ? Number(ph.index) : pi;
+      return { phase: ph, phase_index: phaseIndex, team_index: teamBase + Math.floor(local / 2), side: (local % 2) + 1 };
+    }
+    offset += span;
+    teamBase += tc;
+  }
+  return null;
+}
+
+/**
+ * Ngữ cảnh lượt k: phase / đội / bên và danh sách người đủ điều kiện (chưa được chọn, đúng hạng theo
+ * quy tắc — null = mọi người), sắp theo pid tăng dần. `rules` nhận [{rank1,rank2}] hoặc sẵn một plan
+ * ({phases}) để khỏi tính lại. k vượt quá kế hoạch → eligible_pids rỗng, phase/team/side null (như engine).
+ */
+export function partnerStepContext(people, rules, stepsSoFar, k) {
+  const ppl = sortPeople(people);
+  const plan = rules && !Array.isArray(rules) && Array.isArray(rules.phases) ? rules : partnerPlan(ppl, rules);
+  const loc = locateStep(plan, Number(k) || 0);
+  if (!loc) return { step_index: Number(k) || 0, phase_index: null, team_index: null, side: null, eligible_pids: [] };
+  const picked = new Set((stepsSoFar || []).map((s) => Number(s.pid)));
+  const want = loc.side === 1 ? loc.phase.rank1 : loc.phase.rank2;
+  const eligible = ppl
+    .filter((p) => !picked.has(p.pid) && (want == null || p.rank === want))
+    .map((p) => p.pid);
+  return {
+    step_index: Number(k) || 0,
+    phase_index: loc.phase_index,
+    team_index: loc.team_index,
+    side: loc.side,
+    eligible_pids: eligible,
+  };
+}
+
+/** Hạng yêu cầu ở ô (team_index, side) theo kế hoạch — null nếu không lọc hạng / không tìm thấy. */
+export function partnerSlotRank(plan, teamIndex, side) {
+  let base = 0;
+  for (const ph of plan?.phases || []) {
+    const tc = Number(ph.team_count) || 0;
+    if (teamIndex < base + tc) return (side === 1 ? ph.rank1 : ph.rank2) ?? null;
+    base += tc;
+  }
+  return null;
+}
+
+/** Nhãn ô đích của một lượt: "Đội 3 – Người 1" + " (hạng A)" khi quy tắc có lọc hạng. */
+export function partnerLabelForStep(ctx, plan) {
+  if (!ctx) return "";
+  const base = `Đội ${(Number(ctx.team_index) || 0) + 1} – Người ${ctx.side}`;
+  const rank = partnerSlotRank(plan, Number(ctx.team_index) || 0, ctx.side);
+  return rank ? `${base} (${rankLabel(rank)})` : base;
+}
+
+/**
+ * Kiểm chứng phiên ghép đội đã lộ seed:
+ *   - SHA256(seed_hex) == seed_commit
+ *   - lượt k: eligible_k tái lập từ pool + rules + các lượt trước; eligible_k[SHA256(`${seed}:${k}`) mod len] == pid
+ * Trả null nếu không tính được (thiếu seed_hex hoặc không có crypto.subtle).
+ */
+export async function verifyPartnerDraw(draw) {
+  if (!draw?.seed_hex) return null;
+  const commit = await sha256Hex(draw.seed_hex);
+  if (commit === null) return null;
+  const commitOk = commit === draw.seed_commit;
+  const people = sortPeople(draw.pool || []);
+  const plan = partnerPlan(people, draw.rules || []);
+  const steps = [...(draw.steps || [])].sort((a, b) => a.step_index - b.step_index);
+  const results = [];
+  let allOk = commitOk;
+  for (let k = 0; k < steps.length; k++) {
+    const ctx = partnerStepContext(people, plan, steps.slice(0, k), steps[k].step_index);
+    const eligible = ctx?.eligible_pids || [];
+    const h = await sha256Hex(`${draw.seed_hex}:${steps[k].step_index}`);
+    const idx = pickIndexFromHash(h, eligible.length);
+    const expected = eligible.length ? eligible[idx] : null;
+    const ok = expected != null && expected === Number(steps[k].pid);
+    if (!ok) allOk = false;
+    results.push({
+      step_index: steps[k].step_index, expected_pid: expected, actual_pid: steps[k].pid, pick_index: idx, ok,
+    });
+  }
+  return { ok: allOk, commitOk, steps: results };
+}

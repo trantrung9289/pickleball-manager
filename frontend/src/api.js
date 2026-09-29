@@ -141,6 +141,17 @@ export const tournamentsApi = {
     commit: (tid, force = false) => api.post(`/api/tournaments/${tid}/draw/commit`, { force }),
     cancel: (tid, reason) => api.post(`/api/tournaments/${tid}/draw/cancel`, { reason }),
   },
+  // Phiên GHÉP ĐỘI ĐÔI bằng vòng quay (giải đôi ở trạng thái Nháp, ghép người đơn lẻ thành đội)
+  partnerDraw: {
+    get: (tid) => api.get(`/api/tournaments/${tid}/partner-draw`),
+    history: (tid) => api.get(`/api/tournaments/${tid}/partner-draws`),
+    open: (tid, data) => api.post(`/api/tournaments/${tid}/partner-draw`, data),        // {rules?, reveal_ms}
+    spin: (tid, expectedStep) => api.post(`/api/tournaments/${tid}/partner-draw/spin`, { expected_step: expectedStep }),
+    commit: (tid) => api.post(`/api/tournaments/${tid}/partner-draw/commit`),
+    cancel: (tid, reason) => api.post(`/api/tournaments/${tid}/partner-draw/cancel`, { reason }),
+  },
+  // Ghép tay 2 người đơn lẻ thành 1 đội (giải đôi, Nháp, không có phiên ghép đội đang mở)
+  pairParticipants: (tid, p1Id, p2Id) => api.post(`/api/tournaments/${tid}/participants/pair`, { p1_id: p1Id, p2_id: p2Id }),
 };
 
 export const reportLinksApi = {
@@ -176,6 +187,9 @@ export const createPublicReportApi = (slug) => {
       // Bốc thăm: public poll nhanh (2s) trên endpoint riêng — bucket rate-limit riêng theo path
       draw: (tid) => pub.get(`${base}/tournaments/${tid}/draw`),
       drawHistory: (tid) => pub.get(`${base}/tournaments/${tid}/draws`),
+      // Ghép đội đôi: public theo dõi trực tiếp (poll 2s) + biên bản các phiên đã kết thúc
+      partnerDraw: (tid) => pub.get(`${base}/tournaments/${tid}/partner-draw`),
+      partnerDrawHistory: (tid) => pub.get(`${base}/tournaments/${tid}/partner-draws`),
     },
   };
 };

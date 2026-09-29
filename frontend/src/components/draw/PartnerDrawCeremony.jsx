@@ -1,33 +1,32 @@
 /**
- * DrawCeremony — "lễ bốc thăm" CẶP ĐẤU dùng chung admin (overlay toàn màn hình) và public (inline).
- * Nhận dữ liệu thuần (tournament, draw) + callback; không tự gọi API. Không có undo từng lượt:
- * admin chỉ có thể "Huỷ phiên" rồi mở phiên mới (quyết định sản phẩm).
- * Khung hiển thị (overlay/portal, header, lưới, khoá scroll, khối Minh bạch) do DrawStage đảm nhiệm.
+ * PartnerDrawCeremony — "lễ GHÉP ĐỘI ĐÔI" bằng vòng quay, dùng chung admin (overlay) và public (inline).
+ * Nhận dữ liệu thuần (tournament, draw = PartnerDrawOut) + callback; không tự gọi API.
+ * Khác DrawCeremony (bốc cặp đấu): pool là NGƯỜI đơn lẻ (pid), mỗi lượt có danh sách đủ điều kiện
+ * riêng (eligible_pids — theo hạng của quy tắc), 2 lượt liên tiếp tạo thành 1 đội; lượt chỉ còn 1 người
+ * đủ điều kiện được điền tự động (không quay). Khung hiển thị do DrawStage đảm nhiệm.
+ *
+ * Props: { mode: 'admin'|'public', tournament, draw, serverOffsetMs, busy,
+ *          onSpin, onCommit, onCancel, onClose, fullscreen }
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, Badge, Button, Space, Tag, theme } from "antd";
 import {
-  CheckCircleOutlined, CloseOutlined, StopOutlined, SyncOutlined,
+  CheckCircleOutlined, CloseOutlined, StopOutlined, SyncOutlined, ThunderboltOutlined,
 } from "@ant-design/icons";
 import DrawWheel from "./DrawWheel";
-import DrawBoard from "./DrawBoard";
+import PairBoard from "./PairBoard";
 import DrawStage, { useStageColors, useStageViewport } from "./DrawStage";
-import { teamLabel } from "../../utils/tournamentLabels";
 import {
-  remainingPool, revealAtClientMs, extraTurnsFor, verifyDraw,
+  UNRANKED, rankLabel, revealAtClientMs, extraTurnsFor, partnerLabelForStep, verifyPartnerDraw,
 } from "../../utils/drawMath";
 
 const STATUS_TAG = {
-  open:       { label: "Đang bốc thăm", color: "processing" },
+  open:       { label: "Đang ghép đội", color: "processing" },
   committed:  { label: "Đã chốt", color: "success" },
   cancelled:  { label: "Đã huỷ", color: "error" },
   superseded: { label: "Đã thay bằng phiên mới", color: "default" },
 };
-const RULE_TEXT = {
-  combined:   "Lượt 1 vào bảng A, lượt 2 vào bảng B..., lần lượt xoay vòng.",
-  knockout:   "Bốc theo vị trí sơ đồ từ trên xuống; các vị trí có ghi 'miễn vòng 1' vào thẳng vòng 2.",
-  individual: "Hai lượt liên tiếp tạo thành một trận.",
-};
+const AUTO_FILL_MS = 600;   // ≤ 600ms → DrawWheel không quay, điền ngay
 
 const sortSteps = (steps) => [...(steps || [])].sort((a, b) => a.step_index - b.step_index);
 
@@ -37,12 +36,21 @@ const countRevealedNow = (steps, revealMs, offsetMs) => {
   return steps.filter((s) => revealAtClientMs(s, revealMs, offsetMs) <= now).length;
 };
 
+const isAutoStep = (s) => !!s && (s.auto === true || (Array.isArray(s.eligible_pids) && s.eligible_pids.length === 1));
+
+/** Dòng mô tả quy tắc theo thứ tự (hiện ở header). */
+const rulesText = (rules) => {
+  const list = Array.isArray(rules) ? rules.filter((r) => r && r.rank1 && r.rank2) : [];
+  if (!list.length) return "Ngẫu nhiên toàn bộ (không lọc hạng).";
+  return list.map((r, i) => `Quy tắc ${i + 1}: ${rankLabel(r.rank1, true)} + ${rankLabel(r.rank2, true)}`).join("; ") + ".";
+};
+
 // Bọc ngoài với key=draw.id để mọi state cục bộ (revealedCount, highlight...) reset khi sang phiên khác
-export default function DrawCeremony(props) {
-  return <DrawCeremonyInner key={props.draw?.id ?? "none"} {...props} />;
+export default function PartnerDrawCeremony(props) {
+  return <PartnerDrawCeremonyInner key={props.draw?.id ?? "none"} {...props} />;
 }
 
-function DrawCeremonyInner({
+function PartnerDrawCeremonyInner({
   mode = "public", tournament, draw, serverOffsetMs = 0, busy = false,
   onSpin, onCommit, onCancel, onClose, fullscreen = true,
 }) {
@@ -51,16 +59,16 @@ function DrawCeremonyInner({
 
   const steps = useMemo(() => sortSteps(draw?.steps), [draw?.steps]);
   const pool = useMemo(() => draw?.pool || [], [draw?.pool]);
-  const total = draw?.total_steps ?? pool.length;
+  const plan = draw?.plan;
+  const total = draw?.total_steps ?? plan?.total_steps ?? 0;
   const revealMs = draw?.reveal_ms ?? 5000;
-  const format = draw?.format || tournament?.format;
-  const numGroups = draw?.num_groups ?? tournament?.num_groups ?? 2;
 
-  const participantsById = useMemo(() => {
+  const poolById = useMemo(() => {
     const m = {};
-    (tournament?.participants || []).forEach((p) => { m[p.id] = p; });
+    pool.forEach((p) => { m[p.pid] = p; });
     return m;
-  }, [tournament?.participants]);
+  }, [pool]);
+  const nameOf = (pid) => poolById[pid]?.name || `#${pid}`;
 
   const [revealedCount, setRevealedCount] = useState(() => countRevealedNow(steps, revealMs, serverOffsetMs));
   const [lastPicked, setLastPicked] = useState(null);      // step vừa quay xong (hiện thẻ "Vừa bốc")
@@ -68,22 +76,30 @@ function DrawCeremonyInner({
   const [verifyState, setVerifyState] = useState({ loading: false, result: undefined }); // undefined = chưa bấm
 
   const revealed = Math.min(revealedCount, steps.length);
-  // Lượt kế tiếp cần quay (suy ra từ props, không cần effect): có step server đã trả nhưng client chưa reveal
+  // Lượt kế tiếp cần quay (suy ra từ props): có step server đã trả nhưng client chưa reveal
   const nextStep = steps.length > revealed ? steps[revealed] : null;
   const spinning = !!nextStep;
+  const nextAuto = isAutoStep(nextStep);
 
-  // Quạt trên vòng: đang quay → pool trước lượt đó (có đội thắng); rảnh → giữ nguyên lượt vừa rồi
-  // để kim vẫn chỉ vào đội vừa bốc cho tới khi bấm quay tiếp
+  // Quạt trên vòng: đang quay → eligible của lượt đó (có người trúng); rảnh → GIỮ eligible của lượt vừa
+  // quay (lastPicked) để kim vẫn chỉ đúng người vừa bốc cho tới khi bấm quay tiếp (như DrawCeremony) —
+  // không được đổi sang pool lượt kế vì góc rotor giữ nguyên, kim sẽ chỉ nhầm người khác. Chỉ khi chưa
+  // có lastPicked (người vào muộn / mount mới) mới dùng next_step server đã tính, rồi tới lượt cuối
+  // (xem lại phiên đã chốt thấy vòng của lượt cuối thay vì vòng trống).
   const wheelItems = useMemo(() => {
-    const upto = nextStep ? nextStep.step_index : (lastPicked ? lastPicked.step_index : revealed);
-    return remainingPool(pool, steps.slice(0, upto)).map((id) => {
-      const p = participantsById[id];
-      return { id, label: p ? teamLabel(p) : `#${id}`, withdrawn: p?.status === "withdrawn" };
+    const src = nextStep
+      ? nextStep.eligible_pids
+      : (lastPicked?.eligible_pids ?? draw?.next_step?.eligible_pids ?? steps[steps.length - 1]?.eligible_pids ?? []);
+    // Nhãn quạt: tên + " · hạng" khi đã có hạng
+    return (src || []).map((pid) => {
+      const p = poolById[pid];
+      const label = !p ? `#${pid}` : (p.rank && p.rank !== UNRANKED ? `${p.name} · ${p.rank}` : p.name);
+      return { id: pid, label };
     });
-  }, [pool, steps, nextStep, lastPicked, revealed, participantsById]);
+  }, [nextStep, draw?.next_step, lastPicked, steps, poolById]);
 
-  // Mốc client (ms) kim phải dừng — DrawWheel tự tính thời lượng còn lại lúc bắt đầu quay
-  const revealAtMs = nextStep ? revealAtClientMs(nextStep, revealMs, serverOffsetMs) : null;
+  // Mốc client (ms) kim phải dừng; lượt tự động → không đồng bộ mốc, điền ngay
+  const revealAtMs = nextStep && !nextAuto ? revealAtClientMs(nextStep, revealMs, serverOffsetMs) : null;
 
   const handleSettled = useCallback(() => {
     if (!nextStep) return;
@@ -98,6 +114,7 @@ function DrawCeremonyInner({
   const remainingCount = total - steps.length;
   const canSpin = isAdmin && isOpen && !busy && !spinning && allRevealed && remainingCount > 0;
   const canCommit = isAdmin && isOpen && !busy && !spinning && allRevealed && steps.length === total && total > 0;
+  const serverNextAuto = (draw?.next_step?.eligible_pids?.length ?? 0) === 1;
 
   // Phím Space = QUAY (bỏ qua khi focus đang ở button/input để không kích hoạt 2 lần)
   useEffect(() => {
@@ -113,22 +130,16 @@ function DrawCeremonyInner({
     return () => window.removeEventListener("keydown", onKey);
   }, [isAdmin, canSpin, onSpin]);
 
-  // Kích thước vòng + bố cục hẹp theo viewport (dùng chung với DrawStage)
   const { narrow, wheelSize } = useStageViewport(fullscreen);
+  const c = useStageColors(fullscreen);
 
   const runVerify = async () => {
     setVerifyState({ loading: true, result: undefined });
-    const r = await verifyDraw(draw);
+    const r = await verifyPartnerDraw(draw);
     setVerifyState({ loading: false, result: r });
   };
 
-  // ── Màu theo ngữ cảnh: overlay tối cố định; inline theo token antd ──
-  const c = useStageColors(fullscreen);
-
   const st = STATUS_TAG[draw?.status] || { label: draw?.status || "—", color: "default" };
-  const lastName = lastPicked ? teamLabel(participantsById[lastPicked.participant_id]) : null;
-  const lastWithdrawn = lastPicked && participantsById[lastPicked.participant_id]?.status === "withdrawn";
-
   const panelStyle = { background: c.panel, border: `1px solid ${c.border}`, borderRadius: 12, padding: 12 };
 
   const tags = [
@@ -136,16 +147,19 @@ function DrawCeremonyInner({
     <Tag key="status" color={st.color} style={{ marginInlineEnd: 0 }}>{st.label}</Tag>,
     draw?.seq != null && <span key="seq" style={{ color: c.muted, fontSize: 12 }}>Phiên #{draw.seq}</span>,
   ];
+  const ruleText = `${rulesText(draw?.rules)} Người không khớp quy tắc sẽ được ghép tay sau.`;
 
   const lastCard = lastPicked && (
     <div style={{
       ...panelStyle, borderColor: "#fbbf24", background: fullscreen ? "rgba(251,191,36,.12)" : token.colorWarningBg,
       color: c.text, fontSize: 15,
     }}>
-      <span style={{ color: c.muted, fontSize: 12 }}>Vừa bốc (lượt {lastPicked.step_index + 1}): </span>
-      <b>{lastName}{lastWithdrawn ? " (bỏ giải)" : ""}</b>
+      <span style={{ color: c.muted, fontSize: 12 }}>
+        Vừa bốc (lượt {lastPicked.step_index + 1}{isAutoStep(lastPicked) ? ", tự động" : ""}):{" "}
+      </span>
+      <b>{nameOf(lastPicked.pid)}</b>
       <span style={{ color: c.muted }}> → </span>
-      <b style={{ color: "#f59e0b" }}>{lastPicked.slot_label}</b>
+      <b style={{ color: "#f59e0b" }}>{partnerLabelForStep(lastPicked, plan)}</b>
     </div>
   );
 
@@ -153,11 +167,12 @@ function DrawCeremonyInner({
     <Space wrap size={8} style={{ justifyContent: "center", width: "100%" }}>
       {isOpen && remainingCount > 0 && (
         <Button
-          type="primary" size="large" icon={<SyncOutlined spin={spinning} />}
+          type="primary" size="large"
+          icon={serverNextAuto ? <ThunderboltOutlined /> : <SyncOutlined spin={spinning} />}
           onClick={() => onSpin?.()} disabled={!canSpin} loading={busy}
           style={{ minWidth: 180, height: 52, fontSize: 18, fontWeight: 700 }}
         >
-          {remainingCount === 1 ? "Xếp đội cuối" : "QUAY"}
+          {serverNextAuto ? "Điền tự động" : "QUAY"}
         </Button>
       )}
       {isOpen && steps.length === total && total > 0 && (
@@ -166,7 +181,7 @@ function DrawCeremonyInner({
           onClick={() => onCommit?.()} disabled={!canCommit} loading={busy}
           style={{ height: 52, fontSize: 16, fontWeight: 700, background: canCommit ? "#16a34a" : undefined }}
         >
-          Chốt & sinh lịch
+          Chốt & tạo đội
         </Button>
       )}
       {isOpen && (
@@ -179,7 +194,7 @@ function DrawCeremonyInner({
       {isOpen ? (
         <Badge status="processing" text={<span style={{ color: c.text }}>Đang theo dõi trực tiếp</span>} />
       ) : draw?.status === "committed" ? (
-        <Alert type="success" showIcon message="Đã chốt kết quả — lịch thi đấu bên dưới" />
+        <Alert type="success" showIcon message="Đã chốt đội — danh sách đội bên dưới" />
       ) : null}
       {isOpen && !spinning && remainingCount > 0 && (
         <div style={{ color: c.muted, fontSize: 13, marginTop: 4 }}>Chờ ban tổ chức quay lượt tiếp theo…</div>
@@ -187,20 +202,23 @@ function DrawCeremonyInner({
     </div>
   );
 
+  // Ô đang chờ trên bảng: lượt đang quay, hoặc (rảnh & còn mở) lượt kế tiếp server đã tính
+  const pendingSlot = nextStep || (isOpen ? draw?.next_step : null);
+
   const board = (
-    <DrawBoard
-      format={format} numGroups={numGroups} n={total}
+    <PairBoard
+      plan={plan} pool={pool}
       steps={steps.slice(0, revealed)}       /* chỉ điền ô đã reveal để khớp với vòng quay */
-      participantsById={participantsById} highlightStep={highlightStep} dark={fullscreen}
+      nextStep={pendingSlot} spinning={spinning} highlightStep={highlightStep} dark={fullscreen}
     />
   );
 
   const wheel = (
     <DrawWheel
       items={wheelItems}
-      winnerId={nextStep ? nextStep.participant_id : null}
+      winnerId={nextStep ? nextStep.pid : null}
       spinKey={nextStep ? nextStep.step_index : null}
-      durationMs={revealMs}
+      durationMs={nextAuto ? AUTO_FILL_MS : revealMs}
       revealAtMs={revealAtMs}
       extraTurns={nextStep ? extraTurnsFor(nextStep.step_index) : 4}
       size={wheelSize}
@@ -210,16 +228,16 @@ function DrawCeremonyInner({
 
   return (
     <DrawStage
-      title={<>🎡 {tournament?.name || "Bốc thăm"}</>}
+      title={<>🎡 Ghép đội — {tournament?.name || "Giải đấu"}</>}
       tags={tags}
-      ruleText={RULE_TEXT[format]}
+      ruleText={ruleText}
       wheel={wheel}
       underWheel={<>{lastCard}{controls}</>}
       board={board}
       transparency={{
         seedCommit: draw?.seed_commit,
         seedHex: draw?.seed_hex,
-        formulaText: 'idx = SHA256("{seed}:{k}") mod (số đội còn lại)',
+        formulaText: 'idx = SHA256("{seed}:{k}") mod (số người đủ điều kiện ở lượt k; đủ điều kiện = chưa được chọn và đúng hạng theo quy tắc)',
         onVerify: runVerify,
         verifyState,
       }}

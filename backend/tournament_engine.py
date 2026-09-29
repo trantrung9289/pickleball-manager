@@ -188,6 +188,102 @@ def draw_pick_index(seed_hex: str, step_index: int, remaining_count: int) -> int
     return int(digest, 16) % remaining_count
 
 
+# ── GHÉP ĐỘI ĐÔI BẰNG VÒNG QUAY (partner draw) — hàm thuần, không I/O ──────
+
+UNRANKED = "Chưa xếp hạng"
+
+
+def normalize_rank(r) -> str:
+    """None/""/khoảng trắng → UNRANKED (khách mời mặc định, member.rank NULL); còn lại strip()."""
+    if r is None:
+        return UNRANKED
+    s = str(r).strip()
+    return s if s else UNRANKED
+
+
+def partner_draw_plan(people: List[Dict], rules: Optional[List[Dict]]) -> Dict:
+    """Kế hoạch ghép đội từ danh sách người (đã normalize rank, sắp theo pid) và quy tắc hạng.
+    - rules rỗng → 1 phase ngẫu nhiên toàn pool, team_count = n // 2.
+    - có rules: mô phỏng THEO THỨ TỰ với bộ đếm còn lại theo hạng (quy tắc trước tiêu thụ người trước):
+        cùng hạng  → team_count = còn // 2
+        khác hạng  → team_count = min(còn1, còn2)
+    - Người dư / không khớp quy tắc nào / chưa có hạng → unpaired_pids (ĐỂ LẠI ghép tay, không tự vét).
+    Chỉ trả các phase có team_count > 0 (index vẫn là thứ tự quy tắc gốc để đối chiếu)."""
+    people = sorted(people, key=lambda x: x["pid"])
+    n = len(people)
+    if not rules:
+        team_count = n // 2
+        phases = [{"index": 0, "rank1": None, "rank2": None, "team_count": team_count}] if team_count > 0 else []
+        # Không quy tắc: n lẻ → người cuối cùng theo kế hoạch không xác định trước lúc quay,
+        # nên unpaired_pids để trống; người dư sẽ là người không được chọn sau khi quay hết.
+        return {"phases": phases, "total_steps": 2 * team_count, "unpaired_pids": []}
+
+    remaining: Dict[str, int] = {}
+    for p in people:
+        remaining[p["rank"]] = remaining.get(p["rank"], 0) + 1
+    consumed: Dict[str, int] = {}
+    phases = []
+    for i, rule in enumerate(rules):
+        r1 = normalize_rank(rule.get("rank1"))
+        r2 = normalize_rank(rule.get("rank2"))
+        if r1 == r2:
+            team_count = remaining.get(r1, 0) // 2
+            if team_count > 0:
+                remaining[r1] -= 2 * team_count
+                consumed[r1] = consumed.get(r1, 0) + 2 * team_count
+        else:
+            team_count = min(remaining.get(r1, 0), remaining.get(r2, 0))
+            if team_count > 0:
+                remaining[r1] -= team_count
+                remaining[r2] -= team_count
+                consumed[r1] = consumed.get(r1, 0) + team_count
+                consumed[r2] = consumed.get(r2, 0) + team_count
+        if team_count > 0:
+            phases.append({"index": i, "rank1": r1, "rank2": r2, "team_count": team_count})
+
+    # Người không vào đội nào theo kế hoạch: với mỗi hạng, số người dư = remaining[rank].
+    # Vì chưa quay nên chưa biết AI trong hạng đó sẽ dư — quy ước: nếu cả hạng không bị tiêu thụ
+    # thì tất cả đều unpaired; nếu tiêu thụ một phần thì danh sách chỉ xác định sau khi quay (để trống
+    # ở đây, xác định ở commit: người không có step). Để UI báo trước, ta liệt kê hạng bị dư toàn bộ.
+    unpaired = [p["pid"] for p in people if consumed.get(p["rank"], 0) == 0]
+    # Số người dư của hạng bị tiêu thụ MỘT PHẦN (ai dư chỉ biết sau khi quay) — thông tin thêm cho UI
+    leftover_by_rank = {r: c for r, c in remaining.items() if c > 0 and consumed.get(r, 0) > 0}
+    total_steps = 2 * sum(ph["team_count"] for ph in phases)
+    return {"phases": phases, "total_steps": total_steps, "unpaired_pids": unpaired,
+            "leftover_by_rank": leftover_by_rank}
+
+
+def partner_step_context(people: List[Dict], rules_plan: Dict, steps: List[Dict], k: int) -> Dict:
+    """Ngữ cảnh lượt k: phase/team_index/side theo kế hoạch (mỗi phase có team_count đội × 2 lượt,
+    lượt chẵn = người 1, lượt lẻ = người 2) và danh sách eligible (chưa bị chọn, đúng hạng theo side;
+    rank None → toàn pool), sắp theo pid. Trả eligible rỗng nếu k vượt kế hoạch."""
+    picked = {st["pid"] for st in steps}
+    offset = 0
+    team_base = 0
+    phase_index = None
+    rank_needed = None
+    for ph in rules_plan.get("phases", []):
+        span = 2 * ph["team_count"]
+        if k < offset + span:
+            local = k - offset
+            phase_index = ph["index"]
+            team_index = team_base + local // 2
+            side = 1 if local % 2 == 0 else 2
+            rank_needed = ph["rank1"] if side == 1 else ph["rank2"]
+            break
+        offset += span
+        team_base += ph["team_count"]
+    else:
+        return {"step_index": k, "phase_index": None, "team_index": None, "side": None, "eligible_pids": []}
+
+    eligible = [
+        p["pid"] for p in sorted(people, key=lambda x: x["pid"])
+        if p["pid"] not in picked and (rank_needed is None or p["rank"] == rank_needed)
+    ]
+    return {"step_index": k, "phase_index": phase_index, "team_index": team_index,
+            "side": side, "eligible_pids": eligible}
+
+
 def generate_group_schedule(
     participant_ids: List[int],
     num_groups: int,

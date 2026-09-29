@@ -270,6 +270,12 @@ class TransactionOut(TransactionBase):
 
 
 # ── Tournament ────────────────────────────────────────────
+class PartnerRule(BaseModel):
+    """Một quy tắc ghép ĐỒNG ĐỘI theo hạng (giải đôi): người 1 hạng rank1 + người 2 hạng rank2."""
+    rank1: str
+    rank2: str
+
+
 class TournamentCreate(BaseModel):
     name: str
     format: TournamentFormat
@@ -281,6 +287,7 @@ class TournamentCreate(BaseModel):
     member_ids: Optional[List[int]] = None   # singles: thành viên CLB
     player_ids: Optional[List[int]] = None   # singles: khách mời (Player.id)
     teams: Optional[List[Dict]] = None       # doubles: [{member_id?, player_id?, partner_member_id?, partner_player_id?, team_name?}]
+    partner_rules: Optional[List[PartnerRule]] = None   # doubles không teams: quy tắc ghép đội cho vòng quay sau này
     score_pin: Optional[str] = None          # PIN 4 số — cho phép nhập điểm qua public
     public_scoring_enabled: bool = False
     third_place_enabled: bool = False        # có trận tranh giải 3 không (knockout/combined, cần ≥4 đội)
@@ -425,6 +432,96 @@ class DrawCancelIn(BaseModel):
     reason: Optional[str] = Field(None, max_length=200)
 
 
+# ── Ghép đội đôi bằng vòng quay (partner draw) ─────────────
+# (PartnerRule khai báo phía trên TournamentCreate vì được dùng ở đó)
+class PartnerDrawOpenIn(BaseModel):
+    rules: Optional[List[PartnerRule]] = None   # None → dùng tournament.partner_rules; [] → ngẫu nhiên toàn bộ
+    reveal_ms: int = Field(5000, ge=1500, le=15000)
+
+
+class PartnerDrawSpinIn(BaseModel):
+    expected_step: int = Field(ge=0)
+
+
+class PartnerDrawCancelIn(BaseModel):
+    reason: Optional[str] = Field(None, max_length=200)
+
+
+class PairParticipantsIn(BaseModel):
+    """Ghép tay 2 người đơn lẻ thành 1 đội."""
+    p1_id: int
+    p2_id: int
+
+
+class PartnerPoolPersonOut(BaseModel):
+    pid: int
+    member_id: Optional[int] = None
+    player_id: Optional[int] = None
+    name: str
+    rank: str
+
+
+class PartnerDrawStepOut(BaseModel):
+    step_index: int
+    team_index: int
+    side: int
+    phase_index: int
+    pid: int
+    member_id: Optional[int] = None
+    player_id: Optional[int] = None
+    pick_index: int
+    auto: bool = False
+    eligible_pids: List[int] = []
+    spun_at: Optional[datetime] = None
+    spun_at_ms: int
+
+
+class PartnerDrawNextOut(BaseModel):
+    step_index: int
+    team_index: int
+    side: int
+    phase_index: int
+    eligible_pids: List[int] = []
+
+
+class PartnerDrawOut(BaseModel):
+    """Build bằng hàm _partner_draw_out(draw, t) trong main.py, không from_orm.
+    Pool chỉ có pid/member_id/player_id/name/rank — không PII, dùng chung admin & public."""
+    id: int
+    tournament_id: int
+    seq: int
+    status: str
+    total_steps: int
+    done_steps: int
+    reveal_ms: int
+    pool: List[PartnerPoolPersonOut] = []
+    rules: List[PartnerRule] = []
+    plan: Dict[str, Any] = {}
+    next_step: Optional[PartnerDrawNextOut] = None   # None khi đã bốc đủ hoặc phiên không còn open
+    steps: List[PartnerDrawStepOut] = []
+    seed_commit: str
+    seed_hex: Optional[str] = None      # chỉ lộ khi status != open (commit–reveal)
+    created_by: Optional[str] = None
+    created_at: Optional[datetime] = None
+    committed_at: Optional[datetime] = None
+    cancelled_at: Optional[datetime] = None
+    cancel_reason: Optional[str] = None
+    server_now_ms: int
+
+
+class PartnerDrawSummaryOut(BaseModel):
+    """Tóm tắt phiên ghép đội mới nhất — nhúng vào TournamentOut / PublicTournamentOut."""
+    id: int
+    seq: int
+    status: str
+    total_steps: int
+    done_steps: int
+    reveal_ms: int
+
+    class Config:
+        from_attributes = True
+
+
 class TournamentOut(BaseModel):
     id: int
     name: str
@@ -433,6 +530,7 @@ class TournamentOut(BaseModel):
     team_type: str = "singles"
     pairing_mode: str
     rank_rules: Optional[Any] = None
+    partner_rules: Optional[Any] = None     # quy tắc ghép đồng đội (giải đôi) — độc lập với rank_rules
     num_groups: int
     description: Optional[str] = None
     created_at: Optional[datetime] = None
@@ -442,6 +540,8 @@ class TournamentOut(BaseModel):
     participants: List[ParticipantOut] = []
     matches: List[MatchOut] = []
     draw: Optional[DrawSummaryOut] = None   # phiên bốc thăm mới nhất (property Tournament.draw)
+    partner_draw: Optional[PartnerDrawSummaryOut] = None   # phiên ghép đội mới nhất (property Tournament.partner_draw)
+    unpaired_count: int = 0                 # số người chưa có đội (giải đôi)
 
     class Config:
         from_attributes = True
@@ -524,6 +624,8 @@ class PublicTournamentOut(BaseModel):
     participants: List[PublicParticipantOut] = []
     matches: List[PublicMatchOut] = []
     draw: Optional[DrawSummaryOut] = None   # phiên bốc thăm mới nhất (property Tournament.draw)
+    partner_draw: Optional[PartnerDrawSummaryOut] = None   # phiên ghép đội mới nhất
+    unpaired_count: int = 0
 
     class Config:
         from_attributes = True

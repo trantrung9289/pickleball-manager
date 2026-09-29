@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import {
-  Select, Tabs, Empty, Spin, Card, Tag, Typography,
+  Select, Tabs, Empty, Spin, Card, Tag, Typography, Alert,
   Collapse, Divider, Space, Button, Badge, Modal, Form, Input, AutoComplete, message,
 } from "antd";
 import {
@@ -8,14 +8,17 @@ import {
 } from "@ant-design/icons";
 import ResponsiveTable from "./ResponsiveTable";
 import DrawCeremony from "./draw/DrawCeremony";
+import PartnerDrawCeremony from "./draw/PartnerDrawCeremony";
 import { useViewMode } from "../contexts/ViewModeContext";
 import { teamLabel, teamRank } from "../utils/tournamentLabels";
-import { serverOffset, verifyDraw } from "../utils/drawMath";
+import {
+  serverOffset, verifyDraw, verifyPartnerDraw, partnerLabelForStep, UNRANKED,
+} from "../utils/drawMath";
 
 const { Text } = Typography;
 
 const POLL_MS = 12000;        // poll chi tiết giải + danh sách giải
-const DRAW_POLL_MS = 2000;    // poll nhanh phiên bốc thăm đang mở (endpoint riêng, bucket rate-limit riêng)
+const DRAW_POLL_MS = 2000;    // poll nhanh phiên bốc thăm / ghép đội đang mở (endpoint riêng, bucket rate-limit riêng)
 const DRAW_POLL_SLOW_MS = 5000; // giãn ra khi server trả 429, tới lần thành công kế tiếp
 
 const DRAW_STATUS_TAG = {
@@ -23,6 +26,24 @@ const DRAW_STATUS_TAG = {
   superseded: { label: "Đã thay bằng phiên mới", color: "default" },
   cancelled:  { label: "Đã huỷ", color: "error" },
   open:       { label: "Đang bốc thăm", color: "processing" },
+};
+
+// Phiên GHÉP ĐỘI (partner draw) — khác phiên bốc cặp đấu: "committed" nghĩa là đã chốt danh sách đội
+const PARTNER_STATUS_TAG = {
+  committed:  { label: "Đã chốt", color: "success" },
+  superseded: { label: "Đã thay bằng phiên mới", color: "default" },
+  cancelled:  { label: "Đã huỷ", color: "error" },
+  open:       { label: "Đang ghép đội", color: "processing" },
+};
+
+/** Người chơi đơn lẻ trong giải đôi (chưa có đồng đội) — theo đúng cách backend tính unpaired_count. */
+const isSingleParticipant = (p) => p?.partner_member_id == null && p?.partner_player_id == null;
+
+/** Dòng mô tả quy tắc ghép đội theo thứ tự (dùng ở biên bản). */
+const partnerRulesText = (rules) => {
+  const list = Array.isArray(rules) ? rules.filter(r => r && r.rank1 && r.rank2) : [];
+  if (list.length === 0) return "Ngẫu nhiên toàn bộ (không lọc hạng)";
+  return list.map((r, i) => `Quy tắc ${i + 1}: Hạng ${r.rank1} + Hạng ${r.rank2}`).join("; ");
 };
 
 // Backend trả datetime naive giờ VN (không có Z) → trình duyệt parse theo giờ máy, hợp với người xem trong nước
@@ -550,27 +571,295 @@ function DrawHistory({ api, tid, historyKey, participantsById }) {
   );
 }
 
+// ── Danh sách đội của giải Nháp (public thấy được nhờ đang/đã có phiên ghép đội) ─────
+// Giải chưa có lịch thi đấu nên thay Tabs bằng bảng đội + người chưa có đội (sẽ ghép tay).
+function DraftTeamsCard({ tournament }) {
+  const doubles = tournament.team_type === "doubles";
+  const participants = [...(tournament.participants || [])].sort((a, b) => {
+    // Đội đã ghép lên trước, người đơn lẻ xuống dưới; trong cùng nhóm giữ thứ tự id
+    const sa = doubles && isSingleParticipant(a) ? 1 : 0;
+    const sb = doubles && isSingleParticipant(b) ? 1 : 0;
+    return sa - sb || a.id - b.id;
+  });
+  const singles = doubles ? participants.filter(isSingleParticipant).length : 0;
+  const teams = participants.length - singles;
+
+  const cols = [
+    { title: doubles ? "Đội / Người chơi" : "Người chơi", render: (_, p) => <b>{teamLabel(p)}</b> },
+    {
+      title: "Hạng", width: 120,
+      render: (_, p) => { const r = teamRank(p); return r ? <Tag color="purple">{r}</Tag> : <Text type="secondary">—</Text>; },
+    },
+  ];
+  if (doubles) {
+    cols.push({
+      title: "Trạng thái", width: 130,
+      render: (_, p) => isSingleParticipant(p)
+        ? <Tag color="warning">Chưa có đội</Tag>
+        : <Tag color="success">Đã có đội</Tag>,
+    });
+  }
+
+  return (
+    <>
+      <Alert
+        type="info" showIcon style={{ marginBottom: 12 }}
+        message="Giải chưa bắt đầu — ban tổ chức sẽ bắt đầu và bốc thăm cặp đấu sau khi ghép đội xong"
+      />
+      <Card
+        size="small"
+        title="Danh sách đội"
+        extra={
+          <Space size={4} wrap>
+            {doubles && <Tag color="blue">{teams} đội</Tag>}
+            {singles > 0 && <Tag color="warning">{singles} người chưa có đội</Tag>}
+          </Space>
+        }
+      >
+        {participants.length === 0
+          ? <Empty description="Chưa có người chơi" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+          : (
+            <ResponsiveTable
+              columns={cols} dataSource={participants} rowKey="id" size="small" pagination={false}
+              mobileTitle={(p) => (
+                <span>
+                  <b>{teamLabel(p)}</b>
+                  {doubles && isSingleParticipant(p) && <Tag color="warning" style={{ marginLeft: 6 }}>Chưa có đội</Tag>}
+                </span>
+              )}
+              mobileHideColumns={[cols[0].title, "Trạng thái"]}
+            />
+          )}
+      </Card>
+    </>
+  );
+}
+
+// ── Một phiên ghép đội trong biên bản: seed + quy tắc + bảng lượt + người chưa có đội + Kiểm chứng ─────
+function PartnerDrawHistoryItem({ draw }) {
+  const [verify, setVerify] = useState({ loading: false, result: undefined }); // undefined = chưa bấm
+
+  const handleVerify = async () => {
+    setVerify({ loading: true, result: undefined });
+    const result = await verifyPartnerDraw(draw);   // null = thiếu seed_hex hoặc trình duyệt không có crypto.subtle
+    setVerify({ loading: false, result });
+  };
+
+  const poolById = {};
+  (draw.pool || []).forEach(p => { poolById[p.pid] = p; });
+  const nameOf = (pid) => poolById[pid]?.name || `#${pid}`;
+  const rankOf = (pid) => {
+    const r = poolById[pid]?.rank;
+    return r && r !== UNRANKED ? r : null;
+  };
+
+  const steps = [...(draw.steps || [])].sort((a, b) => a.step_index - b.step_index);
+  const stepResult = (k) => verify.result?.steps?.find(s => s.step_index === k);
+
+  // Người chưa có đội: phiên đã quay đủ → mọi người trong pool không được bốc (gồm cả người dư ngẫu nhiên
+  // của hạng bị tiêu thụ một phần); chưa đủ (huỷ giữa chừng) → chỉ người kế hoạch đã loại từ đầu.
+  const total = draw.total_steps ?? draw.plan?.total_steps ?? 0;
+  const pickedPids = new Set(steps.map(s => s.pid));
+  const unpairedPids = (total > 0 && steps.length >= total)
+    ? (draw.pool || []).map(p => p.pid).filter(pid => !pickedPids.has(pid))
+    : (draw.plan?.unpaired_pids || []);
+
+  const cols = [
+    { title: "Lượt", dataIndex: "step_index", width: 60, align: "center", render: v => v + 1 },
+    { title: "Ô", render: (_, s) => partnerLabelForStep(s, draw.plan) },
+    {
+      title: "Người", dataIndex: "pid",
+      render: (pid, s) => (
+        <span>
+          <b>{nameOf(pid)}</b>
+          {s.auto && <Tag style={{ marginLeft: 4 }}>tự động</Tag>}
+        </span>
+      ),
+    },
+    {
+      title: "Hạng", width: 90,
+      render: (_, s) => { const r = rankOf(s.pid); return r ? <Tag color="purple">{r}</Tag> : <Text type="secondary">—</Text>; },
+    },
+    {
+      title: "Kiểm chứng", width: 100, align: "center",
+      render: (_, s) => {
+        const r = stepResult(s.step_index);
+        if (!r) return null;
+        return r.ok ? <Tag color="success">✅ khớp</Tag> : <Tag color="error">❌ lệch</Tag>;
+      },
+    },
+  ];
+  const tag = PARTNER_STATUS_TAG[draw.status] || { label: draw.status, color: "default" };
+  const endedAt = draw.committed_at || draw.cancelled_at;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      <Space wrap>
+        <Tag color={tag.color}>{tag.label}</Tag>
+        <Text type="secondary">{steps.length}/{total} lượt</Text>
+        <Text type="secondary">Mở: {fmtTime(draw.created_at)}</Text>
+        {endedAt && <Text type="secondary">Kết thúc: {fmtTime(endedAt)}</Text>}
+        {draw.cancel_reason && <Text type="secondary">Lý do: {draw.cancel_reason}</Text>}
+      </Space>
+      <div style={{ fontSize: 12, wordBreak: "break-all" }}>
+        <div><Text type="secondary">Quy tắc:</Text> {partnerRulesText(draw.rules)}. Người không khớp quy tắc được ghép tay sau.</div>
+        <div><Text type="secondary">Cam kết seed (SHA-256):</Text> <Text code>{draw.seed_commit}</Text></div>
+        <div>
+          <Text type="secondary">Seed công khai:</Text>{" "}
+          {draw.seed_hex ? <Text code>{draw.seed_hex}</Text> : <Text type="secondary">chưa công bố</Text>}
+        </div>
+        <Text type="secondary">
+          Công thức: lượt k chọn người thứ idx = SHA256("{"{seed}:{k}"}") mod (số người đủ điều kiện ở lượt k —
+          chưa được chọn và đúng hạng theo quy tắc), danh sách theo id tăng dần.
+        </Text>
+      </div>
+      {steps.length > 0 && (
+        <ResponsiveTable
+          columns={cols} dataSource={steps} rowKey="step_index" size="small" pagination={false}
+          mobileTitle={(s) => (
+            <span>Lượt {s.step_index + 1}: <b>{nameOf(s.pid)}</b> → {partnerLabelForStep(s, draw.plan)}</span>
+          )}
+          mobileHideColumns={["Lượt", "Ô", "Người"]}
+        />
+      )}
+      {unpairedPids.length > 0 && (
+        <div style={{ fontSize: 13 }}>
+          <Text type="secondary">Chưa có đội (ghép tay sau): </Text>
+          {unpairedPids.map(pid => (
+            <Tag key={pid} color="warning" style={{ marginBottom: 4 }}>
+              {nameOf(pid)}{rankOf(pid) ? ` · ${rankOf(pid)}` : ""}
+            </Tag>
+          ))}
+        </div>
+      )}
+      <Space wrap>
+        <Button
+          icon={<SafetyCertificateOutlined />}
+          loading={verify.loading}
+          disabled={!draw.seed_hex}
+          onClick={handleVerify}
+        >
+          Kiểm chứng
+        </Button>
+        {verify.result === null && (
+          <Text type="secondary">Trình duyệt không hỗ trợ tính SHA-256 (cần HTTPS).</Text>
+        )}
+        {verify.result && (
+          verify.result.ok
+            ? <Tag color="success">✅ Khớp toàn bộ ({verify.result.steps.length} lượt, seed đúng cam kết)</Tag>
+            : <Tag color="error">
+                ❌ Không khớp{!verify.result.commitOk ? " — seed không khớp cam kết" : ""}
+              </Tag>
+        )}
+      </Space>
+    </div>
+  );
+}
+
+// ── Biên bản ghép đội của giải (chỉ tải lại khi phiên mới nhất đổi id/trạng thái) ─────
+function PartnerDrawHistory({ api, tid, historyKey }) {
+  const [draws, setDraws] = useState([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.tournaments.partnerDrawHistory(tid)
+      .then(r => { if (!cancelled) setDraws(Array.isArray(r.data) ? r.data : []); })
+      .catch(() => {});   // 429/mạng lỗi: giữ danh sách cũ
+    return () => { cancelled = true; };
+  }, [api, tid, historyKey]);
+
+  if (draws.length === 0) return null;
+
+  return (
+    <Collapse
+      style={{ marginTop: 16 }}
+      items={[{
+        key: "partner-draws",
+        label: <Text strong>🎲 Biên bản ghép đội (có thể kiểm chứng)</Text>,
+        children: (
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            {draws.map(d => (
+              <Card key={d.id} size="small" title={`Phiên #${d.seq}`}>
+                <PartnerDrawHistoryItem draw={d} />
+              </Card>
+            ))}
+          </div>
+        ),
+      }]}
+    />
+  );
+}
+
+/**
+ * Poll nhanh 2s một phiên đang mở (bốc cặp đấu hoặc ghép đội): tạm dừng khi tab ẩn (poll lại ngay
+ * khi hiện), giãn 5s khi 429. Dùng setTimeout nối tiếp thay vì setInterval để đổi nhịp được và không
+ * chồng request. `loadFn` là useCallback trả { ok, status } (đã gắn với giải đang xem).
+ */
+function useFastPoll(enabled, loadFn) {
+  useEffect(() => {
+    if (!enabled) return undefined;
+    let stopped = false;
+    let inflight = false;
+    let timer = null;
+    const tick = async () => {
+      if (stopped || inflight) return;
+      if (document.hidden) return;            // visibilitychange sẽ khởi động lại
+      inflight = true;
+      const res = await loadFn();
+      inflight = false;
+      if (stopped) return;
+      timer = setTimeout(tick, res?.status === 429 ? DRAW_POLL_SLOW_MS : DRAW_POLL_MS);
+    };
+    const onVisible = () => {
+      if (document.hidden) return;
+      clearTimeout(timer);
+      tick();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    tick();   // phát hiện open lần đầu (từ detail 12s) → nạp phiên ngay, không chờ nhịp poll
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [enabled, loadFn]);
+}
+
+/** Phiên "mới nhất" giữa bản local (poll 2s, tươi hơn nếu cùng id) và tóm tắt trong detail (12s). */
+function pickLatest(local, summary) {
+  if (local && summary) {
+    if (local.id === summary.id) return local;
+    return (local.seq ?? 0) >= (summary.seq ?? 0) ? local : summary;
+  }
+  return local || summary || null;
+}
+
 export default function PublicTournamentTracker({ api }) {
   const [list, setList] = useState(null);
   const [selectedId, setSelectedId] = useState(null);
   const [tournament, setTournament] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  // Phiên bốc thăm gắn với giải đang xem: lưu kèm tid để tự "reset" khi đổi giải mà không cần setState trong effect
-  const [drawState, setDrawState] = useState(null);   // { tid, draw: DrawOut|null, offset: number }
+  // Phiên bốc thăm / ghép đội gắn với giải đang xem: lưu kèm tid để tự "reset" khi đổi giải mà không cần setState trong effect
+  const [drawState, setDrawState] = useState(null);           // { tid, draw: DrawOut|null, offset: number }
+  const [partnerState, setPartnerState] = useState(null);     // { tid, draw: PartnerDrawOut|null, offset: number }
   const pollRef = useRef(null);
-  const lastDrawKeyRef = useRef(null);                // "id:status" lần poll trước — phát hiện open → committed/cancelled
+  const lastDrawKeyRef = useRef(null);        // "tid:id:status" lần poll trước — phát hiện open → committed/cancelled
+  const lastPartnerKeyRef = useRef(null);     // như trên, cho phiên ghép đội
 
   // Danh sách giải: tải lúc mount và mỗi tick 12s (bucket rate-limit riêng theo path) để giải vừa
-  // "Bắt đầu" xuất hiện mà không cần F5; tự chọn giải đang diễn ra khi chưa chọn gì / giải cũ biến mất.
+  // "Bắt đầu" xuất hiện mà không cần F5; tự chọn giải khi chưa chọn gì / giải cũ biến mất:
+  // ưu tiên đang diễn ra → Nháp đang ghép đội trực tiếp → phần tử đầu.
   const loadList = useCallback(() => (
     api.tournaments.list()
       .then(r => {
         const data = Array.isArray(r.data) ? r.data : [];
         setList(data);
         if (data.length > 0) {
-          const active = data.find(t => t.status === "active") || data[0];
-          setSelectedId(prev => (prev && data.some(t => t.id === prev)) ? prev : active.id);
+          const preferred = data.find(t => t.status === "active")
+            || data.find(t => t.partner_draw_status === "open")
+            || data[0];
+          setSelectedId(prev => (prev && data.some(t => t.id === prev)) ? prev : preferred.id);
         }
       })
       .catch(() => {})   // lỗi mạng/429: giữ danh sách cũ
@@ -626,46 +915,56 @@ export default function PublicTournamentTracker({ api }) {
 
   // Nguồn quyết định "đang live": phiên local (poll 2s) tươi hơn tóm tắt trong detail (12s) nếu cùng id;
   // khác id thì lấy phiên có seq lớn hơn (detail có thể thấy phiên mới mở trước khi local kịp poll).
-  const summary = tournament?.draw || null;
-  const latestDraw = (() => {
-    if (draw && summary) {
-      if (draw.id === summary.id) return draw;
-      return (draw.seq ?? 0) >= (summary.seq ?? 0) ? draw : summary;
-    }
-    return draw || summary;
-  })();
+  const latestDraw = pickLatest(draw, tournament?.draw || null);
   const isLive = latestDraw?.status === "open";
   const showCeremony = draw?.status === "open";
 
-  // Poll nhanh 2s khi phiên đang mở: tạm dừng khi tab ẩn (poll lại ngay khi hiện), giãn 5s khi 429.
-  // Dùng setTimeout nối tiếp thay vì setInterval để đổi nhịp được và không chồng request.
-  useEffect(() => {
-    if (!isLive || !selectedId) return undefined;
-    let stopped = false;
-    let inflight = false;
-    let timer = null;
-    const tick = async () => {
-      if (stopped || inflight) return;
-      if (document.hidden) return;            // visibilitychange sẽ khởi động lại
-      inflight = true;
-      const res = await loadDraw();
-      inflight = false;
-      if (stopped) return;
-      timer = setTimeout(tick, res.status === 429 ? DRAW_POLL_SLOW_MS : DRAW_POLL_MS);
-    };
-    const onVisible = () => {
-      if (document.hidden) return;
-      clearTimeout(timer);
-      tick();
-    };
-    document.addEventListener("visibilitychange", onVisible);
-    tick();   // phát hiện open lần đầu (từ detail 12s) → nạp phiên ngay, không chờ nhịp poll
-    return () => {
-      stopped = true;
-      clearTimeout(timer);
-      document.removeEventListener("visibilitychange", onVisible);
-    };
-  }, [isLive, selectedId, loadDraw]);
+  // Poll nhanh 2s khi phiên bốc cặp đấu đang mở (cơ chế dùng chung với phiên ghép đội bên dưới)
+  useFastPoll(isLive && !!selectedId, loadDraw);
+
+  // ── Phiên GHÉP ĐỘI (partner draw) — giải Nháp đôi, public thấy được nhờ có phiên open/committed ──
+  const partnerDraw = partnerState?.tid === selectedId ? partnerState.draw : null;
+  const partnerOffset = partnerState?.tid === selectedId ? partnerState.offset : 0;
+
+  const loadPartnerDraw = useCallback(async () => {
+    if (!selectedId) return { ok: false };
+    try {
+      const r = await api.tournaments.partnerDraw(selectedId);
+      const d = r.data?.partner_draw || null;
+      setPartnerState({ tid: selectedId, draw: d, offset: serverOffset(r.data?.server_now_ms) });
+      const key = d ? `${selectedId}:${d.id}:${d.status}` : null;
+      const prev = lastPartnerKeyRef.current;
+      lastPartnerKeyRef.current = key;
+      // Vừa rời trạng thái open (chốt/huỷ) → nạp lại chi tiết ngay để danh sách đội + biên bản xuất hiện.
+      // (Huỷ → giải Nháp biến mất khỏi public: detail 404 giữ dữ liệu cũ, list 12s sẽ chuyển sang giải khác.)
+      if (prev && prev.startsWith(`${selectedId}:`) && prev.endsWith(":open") && key !== prev) loadDetail(true);
+      return { ok: true };
+    } catch (err) {
+      const status = err?.response?.status;
+      // Phiên đang mở bị huỷ → giải Nháp không còn hiển thị public (404): bỏ phiên local và nạp lại danh
+      // sách ngay để Select chuyển sang giải khác thay vì chờ tick 12s. Chỉ làm 1 lần cho mỗi lần chuyển
+      // (xoá key) để không gọi list lặp mỗi 2s.
+      const prev = lastPartnerKeyRef.current;
+      if (status === 404 && prev && prev.startsWith(`${selectedId}:`) && prev.endsWith(":open")) {
+        lastPartnerKeyRef.current = null;
+        setPartnerState({ tid: selectedId, draw: null, offset: 0 });
+        // Detail cũng 404 nên tóm tắt `tournament.partner_draw` vẫn là "open" → cập nhật local thành
+        // cancelled để tắt poll 2s ngay (nếu list không còn giải nào khác, Select không đổi và poll sẽ
+        // nhận 404 vô hạn).
+        setTournament((t) => (t && t.id === selectedId
+          ? { ...t, partner_draw: t.partner_draw ? { ...t.partner_draw, status: "cancelled" } : null }
+          : t));
+        loadList();
+      }
+      return { ok: false, status };
+    }
+  }, [selectedId, api, loadDetail, loadList]);
+
+  const latestPartnerDraw = pickLatest(partnerDraw, tournament?.partner_draw || null);
+  const isPartnerLive = latestPartnerDraw?.status === "open";
+  const showPartnerCeremony = partnerDraw?.status === "open";
+
+  useFastPoll(isPartnerLive && !!selectedId, loadPartnerDraw);
 
   const participantsById = (() => {
     const m = {};
@@ -682,9 +981,13 @@ export default function PublicTournamentTracker({ api }) {
   }
 
   const matches = tournament?.matches || [];
+  // Giải Nháp chỉ lọt ra public khi đang/đã ghép đội → không có lịch, hiện danh sách đội thay Tabs
+  const isDraft = tournament?.status === "draft";
   // Giải đã "Bắt đầu" nhưng chưa có lịch và không đang bốc thăm → màn chờ thay vì Tabs rỗng
   const waiting = tournament && tournament.status === "active" && matches.length === 0 && !showCeremony;
   const showHistory = tournament && latestDraw && latestDraw.status !== "open";
+  const showPartnerHistory = tournament && latestPartnerDraw && latestPartnerDraw.status !== "open";
+  const anyLive = isLive || isPartnerLive;
 
   return (
     <div>
@@ -701,13 +1004,18 @@ export default function PublicTournamentTracker({ api }) {
                 {t.name}
                 {t.status === "active" && <Tag color="green" style={{ marginLeft: 6 }}>Đang diễn ra</Tag>}
                 {t.status === "completed" && <Tag color="default" style={{ marginLeft: 6 }}>Đã kết thúc</Tag>}
+                {t.status === "draft" && (
+                  t.partner_draw_status === "open"
+                    ? <Tag color="processing" style={{ marginLeft: 6 }}>Đang ghép đội</Tag>
+                    : <Tag color="orange" style={{ marginLeft: 6 }}>Chuẩn bị</Tag>
+                )}
               </span>
             ),
           }))}
         />
         <Button
           icon={refreshing ? <SyncOutlined spin /> : <ReloadOutlined />}
-          onClick={() => { loadDetail(true); if (isLive) loadDraw(); }}
+          onClick={() => { loadDetail(true); if (isLive) loadDraw(); if (isPartnerLive) loadPartnerDraw(); }}
           loading={false}
         >
           Làm mới
@@ -717,13 +1025,27 @@ export default function PublicTournamentTracker({ api }) {
       {tournament && (
         <>
           <Space style={{ marginBottom: 12 }}>
-            <Badge status={isLive || tournament.status === "active" ? "processing" : "default"} />
+            <Badge status={anyLive || tournament.status === "active" ? "processing" : "default"} />
             <Text type="secondary">
-              {isLive
-                ? `Đang theo dõi bốc thăm trực tiếp (cập nhật ${DRAW_POLL_MS / 1000}s)`
-                : `Tự động cập nhật mỗi ${POLL_MS / 1000}s`}
+              {isPartnerLive
+                ? `Đang theo dõi ghép đội trực tiếp (cập nhật ${DRAW_POLL_MS / 1000}s)`
+                : isLive
+                  ? `Đang theo dõi bốc thăm trực tiếp (cập nhật ${DRAW_POLL_MS / 1000}s)`
+                  : `Tự động cập nhật mỗi ${POLL_MS / 1000}s`}
             </Text>
           </Space>
+
+          {showPartnerCeremony && (
+            <Card size="small" title="🎡 Lễ ghép đội trực tiếp" style={{ marginBottom: 16 }}>
+              <PartnerDrawCeremony
+                mode="public"
+                tournament={tournament}
+                draw={partnerDraw}
+                serverOffsetMs={partnerOffset}
+                fullscreen={false}
+              />
+            </Card>
+          )}
 
           {showCeremony && (
             <Card size="small" title="🎡 Lễ bốc thăm trực tiếp" style={{ marginBottom: 16 }}>
@@ -737,9 +1059,19 @@ export default function PublicTournamentTracker({ api }) {
             </Card>
           )}
 
-          {waiting
-            ? <Empty description="Chưa có lịch thi đấu — ban tổ chức sẽ bốc thăm/sinh lịch trước giờ đấu" />
-            : <TournamentContent tournament={tournament} api={api} onScored={() => loadDetail(true)} />}
+          {isDraft
+            ? <DraftTeamsCard tournament={tournament} />
+            : waiting
+              ? <Empty description="Chưa có lịch thi đấu — ban tổ chức sẽ bốc thăm/sinh lịch trước giờ đấu" />
+              : <TournamentContent tournament={tournament} api={api} onScored={() => loadDetail(true)} />}
+
+          {showPartnerHistory && (
+            <PartnerDrawHistory
+              api={api}
+              tid={tournament.id}
+              historyKey={`${latestPartnerDraw.id}:${latestPartnerDraw.status}`}
+            />
+          )}
 
           {showHistory && (
             <DrawHistory

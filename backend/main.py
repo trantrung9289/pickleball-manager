@@ -2,7 +2,7 @@ from fastapi import FastAPI, Depends, HTTPException, Query, UploadFile, File, Re
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 from sqlalchemy import func, extract, text, or_, case
 from sqlalchemy.exc import IntegrityError
 from typing import Optional, List
@@ -29,6 +29,7 @@ from tournament_engine import (
     generate_schedule, generate_group_schedule,
     generate_knockout_from_groups, compute_standings,
     DRAW_SUPPORTED_FORMATS, draw_slot_label, draw_picks_to_pid_list, draw_pick_index,
+    normalize_rank, partner_draw_plan, partner_step_context,
 )
 from auth import (
     hash_password, verify_password, create_access_token,
@@ -111,6 +112,8 @@ def _run_migration():
         # Bảng club_memberships — club admin bật/tắt quyền dùng bot Telegram cho từng tài khoản
         # (mặc định bật để không ảnh hưởng người đang dùng)
         ("club_memberships", "bot_enabled", "BOOLEAN DEFAULT 1 NOT NULL", None),
+        # Bảng tournaments — quy tắc ghép ĐỒNG ĐỘI cho vòng quay ghép đội (giải đôi)
+        ("tournaments", "partner_rules", "JSON", None),
     ]
 
     with engine.connect() as conn:
@@ -1928,15 +1931,19 @@ def public_report_transactions(
 @limiter.limit("60/minute")
 def public_tournaments_list(request: Request, slug: str, db: Session = Depends(get_db)):
     rec = _validate_token(slug, db)
-    ts = db.query(models.Tournament).filter(
+    # Lọc bằng Python vì quy tắc hiển thị phụ thuộc phiên ghép đội (property), không chỉ status
+    # selectinload participants: unpaired_count duyệt t.participants cho từng giải → tránh N+1 trên endpoint public
+    ts = [t for t in db.query(models.Tournament).filter(
         models.Tournament.club_id == rec.club_id,
-        models.Tournament.status != models.TournamentStatus.draft,
-    ).order_by(models.Tournament.id.desc()).all()
+    ).options(selectinload(models.Tournament.participants)).order_by(models.Tournament.id.desc()).all()
+        if _is_public_visible(t)]
     return [
         {
             "id": t.id, "name": t.name, "format": t.format,
             "status": t.status, "team_type": t.team_type,
             "created_at": t.created_at.isoformat() if t.created_at else None,
+            "partner_draw_status": t.partner_draw.status if t.partner_draw else None,
+            "unpaired_count": t.unpaired_count,
         }
         for t in ts
     ]
@@ -1949,9 +1956,8 @@ def public_tournament_detail(request: Request, slug: str, tid: int, db: Session 
     t = db.query(models.Tournament).filter(
         models.Tournament.id == tid,
         models.Tournament.club_id == rec.club_id,
-        models.Tournament.status != models.TournamentStatus.draft,
     ).first()
-    if not t:
+    if not t or not _is_public_visible(t):
         raise HTTPException(404, "Không tìm thấy giải đấu")
     return t
 
@@ -1967,9 +1973,8 @@ def public_tournament_standings(
     t = db.query(models.Tournament).filter(
         models.Tournament.id == tid,
         models.Tournament.club_id == rec.club_id,
-        models.Tournament.status != models.TournamentStatus.draft,
     ).first()
-    if not t:
+    if not t or not _is_public_visible(t):
         raise HTTPException(404, "Không tìm thấy giải đấu")
 
     matches_q = db.query(models.TournamentMatch).filter(
@@ -2011,9 +2016,8 @@ def public_update_score(
     t = db.query(models.Tournament).filter(
         models.Tournament.id == tid,
         models.Tournament.club_id == rec.club_id,
-        models.Tournament.status != models.TournamentStatus.draft,
     ).first()
-    if not t:
+    if not t or not _is_public_visible(t):
         raise HTTPException(404, "Không tìm thấy giải đấu")
     if not t.public_scoring_enabled or not t.score_pin_hash:
         raise HTTPException(403, "Giải đấu này chưa bật nhập điểm qua trang public")
@@ -2036,6 +2040,16 @@ def public_update_score(
     return match
 
 
+def _is_public_visible(t: "models.Tournament") -> bool:
+    """Quy tắc hiển thị trên trang public: giải đã bắt đầu, HOẶC giải Nháp đang/đã ghép đội bằng vòng quay
+    (khán giả theo dõi trực tiếp ngay từ đầu). Nháp không có phiên, hoặc mọi phiên đều đã huỷ → ẩn."""
+    if t.status != models.TournamentStatus.draft:
+        return True
+    # Xét MỌI phiên chứ không chỉ phiên mới nhất: đã có phiên chốt (đội đã công khai) thì huỷ một phiên
+    # mở thêm sau đó không được làm giải "biến mất" khỏi public. Chỉ ẩn khi mọi phiên đều bị huỷ.
+    return any(d.status in ("open", "committed", "superseded") for d in t.partner_draws)
+
+
 def _public_draw_out(draw: "models.TournamentDraw", t: "models.Tournament") -> dict:
     """Bản public của DrawOut: bỏ created_by (tên đăng nhập của admin không đưa ra trang không cần đăng nhập)."""
     out = _draw_out(draw, t)
@@ -2048,9 +2062,8 @@ def _public_tournament_or_404(db: Session, slug: str, tid: int) -> "models.Tourn
     t = db.query(models.Tournament).filter(
         models.Tournament.id == tid,
         models.Tournament.club_id == rec.club_id,
-        models.Tournament.status != models.TournamentStatus.draft,
     ).first()
-    if not t:
+    if not t or not _is_public_visible(t):
         raise HTTPException(404, "Không tìm thấy giải đấu")
     return t
 
@@ -2074,6 +2087,34 @@ def public_tournament_draws(request: Request, slug: str, tid: int, db: Session =
     """Lịch sử mọi phiên bốc thăm (seq giảm dần) kèm seed để khán giả kiểm chứng."""
     t = _public_tournament_or_404(db, slug, tid)
     return [_public_draw_out(d, t) for d in sorted(t.draws, key=lambda d: d.seq, reverse=True)]
+
+
+def _public_partner_draw_out(draw: "models.TournamentPartnerDraw", t: "models.Tournament") -> dict:
+    """Bản public của PartnerDrawOut: bỏ created_by (tên đăng nhập admin không ra trang public)."""
+    out = _partner_draw_out(draw, t)
+    out.pop("created_by", None)
+    return out
+
+
+@app.get("/api/public/report/{slug}/tournaments/{tid}/partner-draw")
+@limiter.limit("600/minute")
+def public_tournament_partner_draw(request: Request, slug: str, tid: int, db: Session = Depends(get_db)):
+    """Khán giả theo dõi ghép đội trực tiếp bằng polling 2s (bucket riêng, nới rộng như /draw).
+    Không PII: pool chỉ có pid/member_id/player_id/name/rank."""
+    t = _public_tournament_or_404(db, slug, tid)
+    pd = t.partner_draw
+    return {
+        "partner_draw": _public_partner_draw_out(pd, t) if pd is not None else None,
+        "server_now_ms": int(time.time() * 1000),
+    }
+
+
+@app.get("/api/public/report/{slug}/tournaments/{tid}/partner-draws")  # không response_model: dict đã bỏ created_by
+@limiter.limit("60/minute")
+def public_tournament_partner_draws(request: Request, slug: str, tid: int, db: Session = Depends(get_db)):
+    """Lịch sử mọi phiên ghép đội (seq giảm dần) kèm seed để khán giả kiểm chứng."""
+    t = _public_tournament_or_404(db, slug, tid)
+    return [_public_partner_draw_out(d, t) for d in sorted(t.partner_draws, key=lambda d: d.seq, reverse=True)]
 
 
 # ── TOURNAMENTS ───────────────────────────────────────────
@@ -2287,6 +2328,7 @@ def create_tournament(
         name=data.name, format=data.format,
         team_type=data.team_type,
         pairing_mode=data.pairing_mode, rank_rules=data.rank_rules,
+        partner_rules=[r.model_dump() for r in data.partner_rules] if data.partner_rules is not None else None,
         num_groups=data.num_groups, description=data.description,
         score_pin_hash=hash_password(data.score_pin) if data.score_pin else None,
         public_scoring_enabled=data.public_scoring_enabled,
@@ -2328,7 +2370,11 @@ def create_tournament(
             )
             db.add(pt)
     else:
-        # Singles: kết hợp member_ids (thành viên) + player_ids (khách mời)
+        # Singles: kết hợp member_ids (thành viên) + player_ids (khách mời).
+        # Giải ĐÔI không gửi teams cũng đi nhánh này: mỗi người là 1 participant đơn lẻ (chưa có partner),
+        # ghép đội sau bằng vòng quay / ghép tay trên trang giải.
+        if data.team_type == "doubles" and len(data.member_ids or []) + len(data.player_ids or []) < 2:
+            raise HTTPException(400, "Cần ít nhất 2 người chơi")
         idx = 0
         for mid in (data.member_ids or []):
             member = _get_member_in_club(db, mid, perms.club_id)
@@ -2391,6 +2437,11 @@ def update_tournament(
         # Không kết thúc giải khi còn phiên bốc thăm dở — tránh phiên "mồ côi" không chốt được
         if new_status == models.TournamentStatus.completed and any(d.status == "open" for d in t.draws):
             raise HTTPException(400, "Đang có phiên bốc thăm chưa kết thúc — huỷ hoặc chốt phiên trước khi kết thúc giải")
+        if new_status == models.TournamentStatus.active:
+            # Bắt đầu giải = khoá danh sách; giải đôi phải ghép xong hết (không tự vét/tự loại người dư)
+            if _open_partner_draw(t) is not None:
+                raise HTTPException(400, "Đang có phiên ghép đội chưa kết thúc")
+            _require_all_paired(t)
 
     for k, v in updates.items():
         setattr(t, k, v)
@@ -2436,6 +2487,9 @@ def add_participant(
     if not t: raise HTTPException(404, "Không tìm thấy giải đấu")
     if t.status != models.TournamentStatus.draft:
         raise HTTPException(400, "Chỉ có thể thêm người chơi khi giải đấu ở trạng thái Nháp")
+    if _open_partner_draw(t) is not None:
+        # Pool của phiên ghép đội là snapshot — đổi danh sách giữa chừng làm commit không toàn vẹn
+        raise HTTPException(400, PARTNER_DRAW_OPEN_MSG)
     if not data.member_id and not data.player_id:
         raise HTTPException(400, "Cần chọn thành viên hoặc khách mời")
     if data.member_id and data.player_id:
@@ -2482,6 +2536,8 @@ def remove_participant(
     if not t: raise HTTPException(404, "Không tìm thấy giải đấu")
     if t.status != models.TournamentStatus.draft:
         raise HTTPException(400, "Chỉ có thể xóa người chơi khi giải đấu ở trạng thái Nháp")
+    if _open_partner_draw(t) is not None:
+        raise HTTPException(400, PARTNER_DRAW_OPEN_MSG)
     p = db.query(models.TournamentParticipant).filter(
         models.TournamentParticipant.id == pid, models.TournamentParticipant.tournament_id == tid,
     ).first()
@@ -2499,6 +2555,51 @@ def delete_tournament(
     t = db.query(models.Tournament).filter(models.Tournament.id == tid, models.Tournament.club_id == perms.club_id).first()
     if not t: raise HTTPException(404, "Không tìm thấy giải đấu")
     db.delete(t); db.commit()
+
+
+# ── Helpers ghép đội đôi (partner draw) — dùng cho guard ở nhiều endpoint ──
+PARTNER_DRAW_OPEN_MSG = "Đang có phiên ghép đội chưa kết thúc — chốt hoặc huỷ phiên trước"
+
+
+def _single_participants(t: "models.Tournament") -> list:
+    """Participant đơn lẻ (chưa có người 2) — chỉ có nghĩa với giải đôi."""
+    return [p for p in t.participants if p.partner_member_id is None and p.partner_player_id is None]
+
+
+def _open_partner_draw(t: "models.Tournament"):
+    """Phiên ghép đội đang mở của giải, hoặc None."""
+    for d in t.partner_draws:
+        if d.status == "open":
+            return d
+    return None
+
+
+def _require_all_paired(t: "models.Tournament") -> None:
+    """Giải đôi còn người chưa có đội → 400. Người dư được ĐỂ LẠI ghép tay, không tự vét/tự loại."""
+    if t.team_type == "doubles":
+        n = t.unpaired_count
+        if n > 0:
+            raise HTTPException(400, f"Còn {n} người chưa có đội — ghép đội hoặc xoá khỏi giải trước khi bắt đầu")
+
+
+def _merge_pair(db: Session, t: "models.Tournament", a: "models.TournamentParticipant",
+                b: "models.TournamentParticipant") -> None:
+    """Gộp 2 participant đơn lẻ thành 1 đội: a giữ lại làm người 1, b trở thành người 2 rồi bị xoá.
+    Dùng chung cho chốt phiên ghép đội và ghép tay. KHÔNG commit — caller commit."""
+    if a.id == b.id:
+        raise HTTPException(400, "Không thể ghép một người với chính mình")
+    if a.tournament_id != t.id or b.tournament_id != t.id:
+        raise HTTPException(404, "Không tìm thấy người chơi trong giải")
+    for x in (a, b):
+        if x.partner_member_id is not None or x.partner_player_id is not None:
+            raise HTTPException(400, "Người này đã có đội")
+    n1 = _resolve_display_name(db, a.member_id, a.player_id)
+    n2 = _resolve_display_name(db, b.member_id, b.player_id)
+    a.partner_member_id = b.member_id
+    a.partner_player_id = b.player_id
+    a.team_name = f"{n1} / {n2}" if n1 and n2 else (n1 or n2)
+    db.delete(b)
+    db.flush()
 
 
 def _save_matches(db, tid: int, raw_matches: list, offset_idx: int = 0):
@@ -2657,6 +2758,11 @@ def _check_generate_preconditions(db: Session, t: "models.Tournament", force: bo
     participants = list(t.participants)
     if len(participants) < 2:
         raise HTTPException(400, "Cần ít nhất 2 đội/người chơi để sinh lịch")
+    # Giải đôi còn người chưa có đội → không sinh lịch (chặn cả khi gọi thẳng API lúc draft).
+    # Chỉ áp khi còn Nháp: giải đã active đã qua guard ở update_tournament; dữ liệu cũ (participant đôi
+    # thiếu người 2 tạo trước tính năng này) không còn cách ghép nên không được chặn generate/bốc cặp đấu.
+    if t.status == models.TournamentStatus.draft:
+        _require_all_paired(t)
     if t.format.value == "combined":
         if t.num_groups < 1:
             raise HTTPException(400, "Số bảng phải ≥ 1")
@@ -2963,6 +3069,304 @@ def cancel_draw(
     return _draw_out(draw, t)
 
 
+# ── GHÉP ĐỘI ĐÔI BẰNG VÒNG QUAY (partner draw): bảng riêng, seed commit–reveal, chốt → gộp participant ──
+
+def _partner_people(draw: "models.TournamentPartnerDraw") -> list:
+    """Pool đã snapshot lúc mở phiên, dạng [{"pid","rank",...}] cho engine."""
+    return list(draw.pool_json or [])
+
+
+def _partner_draw_out(draw: "models.TournamentPartnerDraw", t: "models.Tournament") -> dict:
+    """Dựng PartnerDrawOut dùng chung admin & public. seed_hex chỉ lộ khi phiên đã kết thúc.
+    next_step = ngữ cảnh lượt kế tiếp (chỉ khi open và chưa đủ lượt) để UI biết ô nào/ai đủ điều kiện."""
+    steps = sorted(draw.steps, key=lambda st: st.step_index)
+    done = len(steps)
+    next_step = None
+    if draw.status == "open" and done < draw.total_steps:
+        ctx = partner_step_context(_partner_people(draw), draw.plan_json or {},
+                                   [{"step_index": st.step_index, "pid": st.pid} for st in steps], done)
+        if ctx["side"] is not None:
+            next_step = ctx
+    return {
+        "id": draw.id,
+        "tournament_id": draw.tournament_id,
+        "seq": draw.seq,
+        "status": draw.status,
+        "total_steps": draw.total_steps,
+        "done_steps": done,
+        "reveal_ms": draw.reveal_ms,
+        "pool": list(draw.pool_json or []),
+        "rules": list(draw.rules_json or []),
+        "plan": dict(draw.plan_json or {}),
+        "next_step": next_step,
+        "steps": [
+            {
+                "step_index": st.step_index, "team_index": st.team_index, "side": st.side,
+                "phase_index": st.phase_index, "pid": st.pid,
+                "member_id": st.member_id, "player_id": st.player_id,
+                "pick_index": st.pick_index, "auto": bool(st.auto),
+                "eligible_pids": list(st.eligible_pids_json or []),
+                "spun_at": st.spun_at, "spun_at_ms": st.spun_at_ms,
+            }
+            for st in steps
+        ],
+        "seed_commit": draw.seed_commit,
+        "seed_hex": draw.seed_hex if draw.status != "open" else None,
+        "created_by": draw.created_by,
+        "created_at": draw.created_at,
+        "committed_at": draw.committed_at,
+        "cancelled_at": draw.cancelled_at,
+        "cancel_reason": draw.cancel_reason,
+        "server_now_ms": int(time.time() * 1000),
+    }
+
+
+@app.get("/api/tournaments/{tid}/partner-draw", response_model=schemas.PartnerDrawOut)
+def get_partner_draw(
+    tid: int,
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    """Phiên ghép đội mới nhất (mọi trạng thái) — 404 nếu giải chưa ghép lần nào."""
+    perms.require_view()
+    t = _get_club_tournament(db, tid, perms)
+    pd = t.partner_draw
+    if pd is None:
+        raise HTTPException(404, "Giải đấu chưa có phiên ghép đội nào")
+    return _partner_draw_out(pd, t)
+
+
+@app.get("/api/tournaments/{tid}/partner-draws", response_model=List[schemas.PartnerDrawOut])
+def list_partner_draws(
+    tid: int,
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    """Lịch sử mọi phiên ghép đội, seq giảm dần."""
+    perms.require_view()
+    t = _get_club_tournament(db, tid, perms)
+    return [_partner_draw_out(d, t) for d in sorted(t.partner_draws, key=lambda d: d.seq, reverse=True)]
+
+
+@app.post("/api/tournaments/{tid}/partner-draw", response_model=schemas.PartnerDrawOut, status_code=201)
+def open_partner_draw(
+    tid: int,
+    data: schemas.PartnerDrawOpenIn,
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    """Mở phiên ghép đội: snapshot pool người đơn lẻ (kèm hạng đã normalize; khách mời chung pool),
+    lập kế hoạch theo quy tắc hạng, sinh seed bí mật và công bố seed_commit."""
+    perms.require_edit()
+    t = _get_club_tournament(db, tid, perms)
+    if t.status != models.TournamentStatus.draft:
+        raise HTTPException(400, "Ghép đội bằng vòng quay chỉ thực hiện khi giải ở trạng thái Nháp")
+    if t.team_type != "doubles":
+        raise HTTPException(400, "Chỉ áp dụng cho giải đấu đôi")
+    if _open_partner_draw(t) is not None:
+        raise HTTPException(409, "Đang có phiên ghép đội chưa kết thúc")
+    singles = sorted(_single_participants(t), key=lambda p: p.id)
+    if len(singles) < 2:
+        raise HTTPException(400, "Cần ít nhất 2 người chưa có đội")
+
+    if data.rules is not None:
+        rules = [r.model_dump() for r in data.rules]
+    else:
+        rules = list(t.partner_rules or [])
+    for i, r in enumerate(rules):
+        if not str(r.get("rank1") or "").strip() or not str(r.get("rank2") or "").strip():
+            raise HTTPException(400, f"Quy tắc #{i + 1}: cần chọn đủ hạng cho cả 2 người")
+    rules = [{"rank1": normalize_rank(r["rank1"]), "rank2": normalize_rank(r["rank2"])} for r in rules]
+    t.partner_rules = rules   # lưu lại để lần mở sau / UI hiển thị
+
+    people = [
+        {
+            "pid": p.id, "member_id": p.member_id, "player_id": p.player_id,
+            "name": p.team_name or _resolve_display_name(db, p.member_id, p.player_id),
+            "rank": normalize_rank(_participant_rank(p)),
+        }
+        for p in singles
+    ]
+    plan = partner_draw_plan([{"pid": x["pid"], "rank": x["rank"]} for x in people], rules)
+    if plan["total_steps"] == 0:
+        db.rollback()
+        raise HTTPException(400, "Không có quy tắc nào ghép được đội với danh sách hiện tại")
+
+    seed_hex = secrets.token_hex(16)
+    membership = perms.membership
+    user = getattr(membership, "user", None)
+    if user is None:
+        user = db.query(models.User).filter(models.User.id == membership.user_id).first()
+    pd = models.TournamentPartnerDraw(
+        tournament_id=t.id,
+        seq=(max((d.seq for d in t.partner_draws), default=0) + 1),
+        status="open",
+        seed_hex=seed_hex,
+        seed_commit=hashlib.sha256(seed_hex.encode()).hexdigest(),
+        pool_json=people,
+        rules_json=rules,
+        plan_json=plan,
+        total_steps=plan["total_steps"],
+        reveal_ms=data.reveal_ms,
+        created_by=user.username if user is not None else None,
+        created_at=_now_vn(),
+    )
+    db.add(pd)
+    try:
+        db.commit()
+    except IntegrityError:
+        # 2 request mở gần như đồng thời cùng qua check "đang open" → UNIQUE(tournament_id, seq) chặn bản 2
+        db.rollback()
+        raise HTTPException(409, "Đang có phiên ghép đội chưa kết thúc")
+    db.refresh(pd); db.refresh(t)
+    return _partner_draw_out(pd, t)
+
+
+@app.post("/api/tournaments/{tid}/partner-draw/spin", response_model=schemas.PartnerDrawOut)
+def spin_partner_draw(
+    tid: int,
+    data: schemas.PartnerDrawSpinIn,
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    """Quay một lượt: idx = SHA256("{seed}:{k}") mod (số người đủ điều kiện ở lượt k).
+    Đủ điều kiện = chưa được chọn và đúng hạng theo quy tắc của ô (người 1 → rank1, người 2 → rank2)."""
+    perms.require_edit()
+    t = _get_club_tournament(db, tid, perms)
+    pd = t.partner_draw
+    if pd is None or pd.status != "open":
+        raise HTTPException(409, "Không có phiên ghép đội đang mở")
+    done = len(pd.steps)
+    if data.expected_step != done:
+        raise HTTPException(409, "Lượt bốc không khớp — tải lại phiên")
+    if done >= pd.total_steps:
+        raise HTTPException(409, "Đã bốc đủ lượt — bấm 'Chốt & tạo đội'")
+
+    people = _partner_people(pd)
+    ctx = partner_step_context(people, pd.plan_json or {},
+                               [{"step_index": st.step_index, "pid": st.pid} for st in pd.steps], done)
+    eligible = ctx["eligible_pids"]
+    if not eligible:
+        raise HTTPException(409, "Kế hoạch ghép đội không hợp lệ")
+    idx = draw_pick_index(pd.seed_hex, done, len(eligible))
+    pid = eligible[idx]
+    person = next((x for x in people if x["pid"] == pid), {})
+    step = models.TournamentPartnerDrawStep(
+        draw_id=pd.id,
+        step_index=done,
+        team_index=ctx["team_index"],
+        side=ctx["side"],
+        phase_index=ctx["phase_index"],
+        pid=pid,
+        member_id=person.get("member_id"),
+        player_id=person.get("player_id"),
+        pick_index=idx,
+        auto=(len(eligible) == 1),
+        eligible_pids_json=list(eligible),
+        spun_at=_now_vn(),
+        spun_at_ms=int(time.time() * 1000),
+    )
+    db.add(step)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "Lượt này đã được quay (bấm trùng)")
+    db.refresh(pd); db.refresh(t)
+    return _partner_draw_out(pd, t)
+
+
+@app.post("/api/tournaments/{tid}/partner-draw/commit", response_model=schemas.TournamentOut)
+def commit_partner_draw(
+    tid: int,
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    """Chốt phiên: gộp từng cặp (người 1 + người 2) thành 1 participant đội. Người không có lượt
+    (dư / không khớp quy tắc) giữ nguyên đơn lẻ để ghép tay. Sau chốt seed_hex được công khai."""
+    perms.require_edit()
+    t = _get_club_tournament(db, tid, perms)
+    pd = t.partner_draw
+    if pd is None or pd.status != "open":
+        raise HTTPException(409, "Không có phiên ghép đội đang mở")
+    steps = sorted(pd.steps, key=lambda st: st.step_index)
+    if len(steps) != pd.total_steps:
+        raise HTTPException(409, f"Chưa bốc đủ ({len(steps)}/{pd.total_steps} lượt)")
+    if t.status != models.TournamentStatus.draft:
+        raise HTTPException(400, "Ghép đội bằng vòng quay chỉ thực hiện khi giải ở trạng thái Nháp")
+    singles_by_id = {p.id: p for p in _single_participants(t)}
+    # So cả NGƯỜI (member/player) chứ không chỉ pid: pool là snapshot lúc mở phiên, khán giả đã xem theo đó
+    for x in (pd.pool_json or []):
+        p = singles_by_id.get(x["pid"])
+        if p is None or p.member_id != x.get("member_id") or p.player_id != x.get("player_id"):
+            raise HTTPException(409, "Danh sách người đã thay đổi trong lúc ghép — huỷ phiên và mở lại")
+
+    teams: dict = {}
+    for st in steps:
+        teams.setdefault(st.team_index, {})[st.side] = st.pid
+    for team_index in sorted(teams):
+        sides = teams[team_index]
+        if 1 not in sides or 2 not in sides:
+            raise HTTPException(409, "Kế hoạch ghép đội không hợp lệ")
+        _merge_pair(db, t, singles_by_id[sides[1]], singles_by_id[sides[2]])
+
+    now = _now_vn()
+    for d in t.partner_draws:
+        if d.status == "committed" and d.id != pd.id:
+            d.status = "superseded"
+    pd.status = "committed"
+    pd.committed_at = now
+    db.commit(); db.refresh(t)
+    return t
+
+
+@app.post("/api/tournaments/{tid}/partner-draw/cancel", response_model=schemas.PartnerDrawOut)
+def cancel_partner_draw(
+    tid: int,
+    data: schemas.PartnerDrawCancelIn,
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    """Huỷ phiên đang mở (không undo từng lượt). Phiên huỷ vẫn giữ trong lịch sử kèm seed."""
+    perms.require_edit()
+    t = _get_club_tournament(db, tid, perms)
+    pd = t.partner_draw
+    if pd is None or pd.status != "open":
+        raise HTTPException(409, "Không có phiên ghép đội đang mở")
+    pd.status = "cancelled"
+    pd.cancelled_at = _now_vn()
+    pd.cancel_reason = data.reason
+    db.commit(); db.refresh(pd); db.refresh(t)
+    return _partner_draw_out(pd, t)
+
+
+@app.post("/api/tournaments/{tid}/participants/pair", response_model=schemas.TournamentOut)
+def pair_participants(
+    tid: int,
+    data: schemas.PairParticipantsIn,
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    """Ghép tay 2 người đơn lẻ thành 1 đội (cho người dư / không khớp quy tắc sau vòng quay)."""
+    perms.require_edit()
+    t = _get_club_tournament(db, tid, perms)
+    if t.status != models.TournamentStatus.draft:
+        raise HTTPException(400, "Chỉ ghép đội khi giải ở trạng thái Nháp")
+    if t.team_type != "doubles":
+        raise HTTPException(400, "Chỉ áp dụng cho giải đấu đôi")
+    if _open_partner_draw(t) is not None:
+        raise HTTPException(400, PARTNER_DRAW_OPEN_MSG)
+    if data.p1_id == data.p2_id:
+        raise HTTPException(400, "Không thể ghép một người với chính mình")
+    by_id = {p.id: p for p in t.participants}
+    a, b = by_id.get(data.p1_id), by_id.get(data.p2_id)
+    if a is None or b is None:
+        raise HTTPException(404, "Không tìm thấy người chơi trong giải")
+    _merge_pair(db, t, a, b)
+    db.commit(); db.refresh(t)
+    return t
+
+
 @app.post("/api/tournaments/{tid}/start-knockout", response_model=schemas.TournamentOut)
 def start_knockout(
     tid: int,
@@ -3181,6 +3585,10 @@ def replace_participant_slot(
     perms.require_edit()
     t = db.query(models.Tournament).filter(models.Tournament.id == tid, models.Tournament.club_id == perms.club_id).first()
     if not t: raise HTTPException(404, "Không tìm thấy giải đấu")
+    # Pool của phiên ghép đội là snapshot (pid + member/player + tên + hạng): đổi người khi phiên đang mở
+    # sẽ làm khán giả thấy một đằng, đội thật tạo ra một nẻo. Chỉ áp cho Nháp để không ảnh hưởng thay người giữa giải.
+    if t.status == models.TournamentStatus.draft and _open_partner_draw(t) is not None:
+        raise HTTPException(400, PARTNER_DRAW_OPEN_MSG)
     p = db.query(models.TournamentParticipant).filter(
         models.TournamentParticipant.id == pid, models.TournamentParticipant.tournament_id == tid,
     ).first()
