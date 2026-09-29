@@ -201,87 +201,225 @@ def normalize_rank(r) -> str:
     return s if s else UNRANKED
 
 
-def partner_draw_plan(people: List[Dict], rules: Optional[List[Dict]]) -> Dict:
-    """Kế hoạch ghép đội từ danh sách người (đã normalize rank, sắp theo pid) và quy tắc hạng.
-    - rules rỗng → 1 phase ngẫu nhiên toàn pool, team_count = n // 2.
-    - có rules: mô phỏng THEO THỨ TỰ với bộ đếm còn lại theo hạng (quy tắc trước tiêu thụ người trước):
-        cùng hạng  → team_count = còn // 2
-        khác hạng  → team_count = min(còn1, còn2)
-    - Người dư / không khớp quy tắc nào / chưa có hạng → unpaired_pids (ĐỂ LẠI ghép tay, không tự vét).
-    Chỉ trả các phase có team_count > 0 (index vẫn là thứ tự quy tắc gốc để đối chiếu)."""
-    people = sorted(people, key=lambda x: x["pid"])
-    n = len(people)
-    if not rules:
-        team_count = n // 2
-        phases = [{"index": 0, "rank1": None, "rank2": None, "team_count": team_count}] if team_count > 0 else []
-        # Không quy tắc: n lẻ → người cuối cùng theo kế hoạch không xác định trước lúc quay,
-        # nên unpaired_pids để trống; người dư sẽ là người không được chọn sau khi quay hết.
-        return {"phases": phases, "total_steps": 2 * team_count, "unpaired_pids": []}
+def normalize_partner_rules(rules) -> List[Dict]:
+    """Chuẩn hoá quy tắc ghép đội về shape v2: [{"ranks1": [...], "ranks2": [...]}].
+    Nhận None / [] / shape cũ [{"rank1": "A", "rank2": "B"}] / shape mới [{"ranks1": [...], "ranks2": [...]}]
+    (hoặc trộn cả hai trong một quy tắc — rank1 chuỗi được gộp vào ranks1).
+    Mỗi phần tử hạng đi qua normalize_rank; loại trùng nhưng giữ thứ tự. Bên rỗng = BẤT KỲ hạng.
+    Phần tử None/"" (và rank1/rank2 = None/"" của shape cũ) được coi là "để trống" → BỎ, KHÔNG đổi thành
+    "Chưa xếp hạng" (muốn hạng đó thì chọn tường minh UNRANKED).
+    Quy tắc cả 2 bên rỗng vẫn hợp lệ (= ghép ngẫu nhiên toàn bộ)."""
+    out: List[Dict] = []
+    for rule in (rules or []):
+        if rule is None:
+            continue
+        if not isinstance(rule, dict):
+            rule = dict(rule)
+        norm = {}
+        for side in (1, 2):
+            raw = list(rule.get(f"ranks{side}") or [])
+            raw.append(rule.get(f"rank{side}"))          # shape cũ: chuỗi đơn gộp vào danh sách
+            seen: List[str] = []
+            for r in raw:
+                if r is None or not str(r).strip():
+                    continue                              # để trống ≠ "Chưa xếp hạng"
+                nr = normalize_rank(r)
+                if nr not in seen:
+                    seen.append(nr)
+            norm[f"ranks{side}"] = seen
+        out.append(norm)
+    return out
 
-    remaining: Dict[str, int] = {}
-    for p in people:
-        remaining[p["rank"]] = remaining.get(p["rank"], 0) + 1
-    consumed: Dict[str, int] = {}
+
+def _normalize_partner_plan(plan) -> Dict:
+    """Đưa plan_json về shape v2 để API luôn trả cùng một hợp đồng, kể cả phiên mở/chốt TRƯỚC đợt 3
+    (shape cũ: phases[].rank1/rank2/team_count, total_steps, leftover_by_rank).
+    Ánh xạ: rank1→ranks1 (None/""→[]), rank2→ranks2, team_count→team_max, total_steps→total_steps_max;
+    bổ sung mặc định team_cap (= team_max), overlap, total_steps_est, estimated, unpaired_pids.
+    Plan đã là v2 thì giữ nguyên giá trị, chỉ điền trường thiếu."""
+    plan = dict(plan or {})
+    phases_out = []
+    for i, ph in enumerate(plan.get("phases") or []):
+        ph = dict(ph or {})
+        ranks1 = ph.get("ranks1")
+        ranks2 = ph.get("ranks2")
+        if ranks1 is None:
+            r1 = ph.get("rank1")
+            ranks1 = [normalize_rank(r1)] if (r1 is not None and str(r1).strip()) else []
+        if ranks2 is None:
+            r2 = ph.get("rank2")
+            ranks2 = [normalize_rank(r2)] if (r2 is not None and str(r2).strip()) else []
+        team_max = ph.get("team_max")
+        if team_max is None:
+            team_max = ph.get("team_count") or 0
+        team_max = int(team_max or 0)
+        team_cap = ph.get("team_cap")
+        team_cap = int(team_cap) if team_cap is not None else team_max
+        overlap = ph.get("overlap")
+        if overlap is None:
+            # Plan cũ: cùng hạng 2 bên (hoặc 2 bên rỗng) → hai bên trùng nhau
+            overlap = (not ranks1 or not ranks2) or bool(set(ranks1) & set(ranks2))
+        phases_out.append({
+            "index": int(ph.get("index", i)),
+            "ranks1": list(ranks1), "ranks2": list(ranks2),
+            "team_max": team_max, "team_cap": team_cap, "overlap": bool(overlap),
+        })
+    total_est = plan.get("total_steps_est")
+    if total_est is None:
+        total_est = 2 * sum(ph["team_max"] for ph in phases_out)
+    total_max = plan.get("total_steps_max")
+    if total_max is None:
+        total_max = plan.get("total_steps")
+    if total_max is None:
+        total_max = 2 * sum(ph["team_cap"] for ph in phases_out)
+    estimated = plan.get("estimated")
+    if estimated is None:
+        estimated = any(ph["overlap"] for ph in phases_out)
+    out = dict(plan)
+    out.pop("total_steps", None)
+    out.update({
+        "phases": phases_out,
+        "total_steps_max": int(total_max),
+        "total_steps_est": int(total_est),
+        "unpaired_pids": list(plan.get("unpaired_pids") or []),
+        "estimated": bool(estimated),
+    })
+    return out
+
+
+def _side_pool(people_remaining: List[Dict], ranks: List[str]) -> List[Dict]:
+    """Người còn lại đủ điều kiện cho một bên: ranks rỗng → tất cả; else rank ∈ ranks."""
+    if not ranks:
+        return list(people_remaining)
+    allowed = set(ranks)
+    return [p for p in people_remaining if p["rank"] in allowed]
+
+
+def _people_sorted(people: List[Dict]) -> List[Dict]:
+    return sorted(({"pid": p["pid"], "rank": normalize_rank(p.get("rank"))} for p in people), key=lambda x: x["pid"])
+
+
+def partner_draw_plan(people: List[Dict], rules: Optional[List[Dict]]) -> Dict:
+    """Kế hoạch (ƯỚC LƯỢNG) ghép đội v2 từ danh sách người và quy tắc nhiều hạng.
+    - rules rỗng → 1 phase {index 0, ranks1 [], ranks2 [], team_max n//2, overlap True}.
+    - Mỗi phase tính trên "remaining" ước lượng: S1/S2 theo _side_pool;
+        a = |S1 \ S2|, b = |S2 \ S1|, c = |S1 ∩ S2|;
+        team_max = min(a + c, b + c, (a + b + c) // 2) (cỡ ghép cặp lớn nhất); overlap = c > 0.
+      Tiêu thụ ước lượng cho phase sau: lặp team_max lần — bên 1 lấy từ S1\S2 trước, hết thì từ giao;
+      bên 2 lấy từ S2\S1 trước, hết thì từ giao.
+    - unpaired_pids: người có hạng không thuộc hợp của mọi ranks1 ∪ ranks2 — CHỈ khi không quy tắc nào
+      có bên rỗng (bên rỗng = bất kỳ hạng nên ai cũng có thể được chọn).
+    - estimated = any(overlap): khi hai bên có hạng trùng nhau, số đội thực tế có thể ÍT hơn team_max
+      (quy tắc dừng sớm khi hết cặp hợp lệ).
+    - team_cap (mỗi phase): cỡ ghép cặp lớn nhất của quy tắc trên TOÀN BỘ pool (không trừ tiêu thụ) —
+      cận trên THẬT của số đội phase đó dù các phase trước tiêu thụ thế nào.
+    - total_steps_est = 2 × Σ team_max (con số "dự kiến" để UI hiển thị);
+      total_steps_max = 2 × min(Σ team_cap, n // 2) — TRẦN THẬT số lượt: replay không bao giờ vượt, nên
+      điều kiện kết thúc chỉ cần "hết cặp hợp lệ" (partner_step_context → None) mà vẫn không quá
+      "tối đa N lượt" đã công bố. Luôn có total_steps_max ≥ total_steps_est."""
+    ppl = _people_sorted(people)
+    rules = normalize_partner_rules(rules)
+    if not rules:
+        rules = [{"ranks1": [], "ranks2": []}]
+
+    def _pair_capacity(pool: List[Dict], ranks1: List[str], ranks2: List[str]):
+        """(team_max, only1, only2, both) của một quy tắc trên `pool`: a=|S1\\S2|, b=|S2\\S1|, c=|S1∩S2|."""
+        s1 = _side_pool(pool, ranks1)
+        s2 = _side_pool(pool, ranks2)
+        ids2 = {p["pid"] for p in s2}
+        ids1 = {p["pid"] for p in s1}
+        only1 = [p for p in s1 if p["pid"] not in ids2]
+        only2 = [p for p in s2 if p["pid"] not in ids1]
+        both = [p for p in s1 if p["pid"] in ids2]
+        a, b, c = len(only1), len(only2), len(both)
+        return min(a + c, b + c, (a + b + c) // 2), only1, only2, both
+
+    remaining = list(ppl)
     phases = []
     for i, rule in enumerate(rules):
-        r1 = normalize_rank(rule.get("rank1"))
-        r2 = normalize_rank(rule.get("rank2"))
-        if r1 == r2:
-            team_count = remaining.get(r1, 0) // 2
-            if team_count > 0:
-                remaining[r1] -= 2 * team_count
-                consumed[r1] = consumed.get(r1, 0) + 2 * team_count
-        else:
-            team_count = min(remaining.get(r1, 0), remaining.get(r2, 0))
-            if team_count > 0:
-                remaining[r1] -= team_count
-                remaining[r2] -= team_count
-                consumed[r1] = consumed.get(r1, 0) + team_count
-                consumed[r2] = consumed.get(r2, 0) + team_count
-        if team_count > 0:
-            phases.append({"index": i, "rank1": r1, "rank2": r2, "team_count": team_count})
+        ranks1, ranks2 = rule["ranks1"], rule["ranks2"]
+        team_cap, _, _, _ = _pair_capacity(ppl, ranks1, ranks2)          # trên toàn bộ pool
+        team_max, only1, only2, both = _pair_capacity(remaining, ranks1, ranks2)   # trên phần còn lại (ước lượng)
+        phases.append({"index": i, "ranks1": list(ranks1), "ranks2": list(ranks2),
+                       "team_max": team_max, "team_cap": team_cap, "overlap": len(both) > 0})
+        consumed = set()
+        for _ in range(team_max):
+            for primary in (only1, only2):
+                src = primary if primary else both
+                if not src:
+                    break
+                consumed.add(src.pop(0)["pid"])
+        remaining = [p for p in remaining if p["pid"] not in consumed]
 
-    # Người không vào đội nào theo kế hoạch: với mỗi hạng, số người dư = remaining[rank].
-    # Vì chưa quay nên chưa biết AI trong hạng đó sẽ dư — quy ước: nếu cả hạng không bị tiêu thụ
-    # thì tất cả đều unpaired; nếu tiêu thụ một phần thì danh sách chỉ xác định sau khi quay (để trống
-    # ở đây, xác định ở commit: người không có step). Để UI báo trước, ta liệt kê hạng bị dư toàn bộ.
-    unpaired = [p["pid"] for p in people if consumed.get(p["rank"], 0) == 0]
-    # Số người dư của hạng bị tiêu thụ MỘT PHẦN (ai dư chỉ biết sau khi quay) — thông tin thêm cho UI
-    leftover_by_rank = {r: c for r, c in remaining.items() if c > 0 and consumed.get(r, 0) > 0}
-    total_steps = 2 * sum(ph["team_count"] for ph in phases)
-    return {"phases": phases, "total_steps": total_steps, "unpaired_pids": unpaired,
-            "leftover_by_rank": leftover_by_rank}
-
-
-def partner_step_context(people: List[Dict], rules_plan: Dict, steps: List[Dict], k: int) -> Dict:
-    """Ngữ cảnh lượt k: phase/team_index/side theo kế hoạch (mỗi phase có team_count đội × 2 lượt,
-    lượt chẵn = người 1, lượt lẻ = người 2) và danh sách eligible (chưa bị chọn, đúng hạng theo side;
-    rank None → toàn pool), sắp theo pid. Trả eligible rỗng nếu k vượt kế hoạch."""
-    picked = {st["pid"] for st in steps}
-    offset = 0
-    team_base = 0
-    phase_index = None
-    rank_needed = None
-    for ph in rules_plan.get("phases", []):
-        span = 2 * ph["team_count"]
-        if k < offset + span:
-            local = k - offset
-            phase_index = ph["index"]
-            team_index = team_base + local // 2
-            side = 1 if local % 2 == 0 else 2
-            rank_needed = ph["rank1"] if side == 1 else ph["rank2"]
-            break
-        offset += span
-        team_base += ph["team_count"]
+    any_side_empty = any(not r["ranks1"] or not r["ranks2"] for r in rules)
+    if any_side_empty:
+        unpaired: List[int] = []
     else:
-        return {"step_index": k, "phase_index": None, "team_index": None, "side": None, "eligible_pids": []}
+        union = set()
+        for r in rules:
+            union.update(r["ranks1"]); union.update(r["ranks2"])
+        unpaired = [p["pid"] for p in ppl if p["rank"] not in union]
 
-    eligible = [
-        p["pid"] for p in sorted(people, key=lambda x: x["pid"])
-        if p["pid"] not in picked and (rank_needed is None or p["rank"] == rank_needed)
-    ]
-    return {"step_index": k, "phase_index": phase_index, "team_index": team_index,
-            "side": side, "eligible_pids": eligible}
+    return {
+        "phases": phases,
+        "total_steps_max": 2 * min(sum(ph["team_cap"] for ph in phases), len(ppl) // 2),
+        "total_steps_est": 2 * sum(ph["team_max"] for ph in phases),
+        "unpaired_pids": unpaired,
+        "estimated": any(ph["overlap"] for ph in phases),
+    }
+
+
+def partner_step_context(people: List[Dict], rules: Optional[List[Dict]], steps: List[Dict]) -> Optional[Dict]:
+    """Ngữ cảnh lượt kế tiếp (k = len(steps)) bằng REPLAY tất định — không dùng kế hoạch ước lượng.
+    steps: [{"pid", "side", "phase_index", "team_index"}] theo thứ tự lượt.
+    - Lượt trước là bên 1 → lượt này là bên 2 cùng phase/đội: eligible = _side_pool(remaining, ranks2).
+    - Ngược lại: duyệt phase từ phase của lượt trước (hoặc 0): eligible bên 1 = người trong S1 mà
+      sau khi chọn thì bên 2 VẪN còn người (loại người khiến bên 2 cạn → không có đội dở dang);
+      phase không còn ai đủ điều kiện → sang phase kế; hết phase → None (đã hết lượt hợp lệ).
+    - team_index = số lượt bên 2 đã có (0-based cho đội mới).
+    Trả {"step_index", "phase_index", "team_index", "side", "eligible_pids" (sắp theo pid)} hoặc None."""
+    ppl = _people_sorted(people)
+    rules = normalize_partner_rules(rules)
+    if not rules:
+        rules = [{"ranks1": [], "ranks2": []}]
+    steps = list(steps or [])
+    k = len(steps)
+    picked = {st["pid"] for st in steps}
+    remaining = [p for p in ppl if p["pid"] not in picked]
+
+    if steps and steps[-1].get("side") == 1:
+        last = steps[-1]
+        ph_i = int(last.get("phase_index") or 0)
+        ph_i = min(max(ph_i, 0), len(rules) - 1)
+        eligible = [p["pid"] for p in _side_pool(remaining, rules[ph_i]["ranks2"])]
+        return {"step_index": k, "phase_index": ph_i, "team_index": int(last.get("team_index") or 0),
+                "side": 2, "eligible_pids": eligible}
+
+    start = int(steps[-1].get("phase_index") or 0) if steps else 0
+    start = min(max(start, 0), len(rules) - 1)
+    team_index = sum(1 for st in steps if st.get("side") == 2)
+    for i in range(start, len(rules)):
+        s1 = _side_pool(remaining, rules[i]["ranks1"])
+        s2_ids = [p["pid"] for p in _side_pool(remaining, rules[i]["ranks2"])]
+        eligible1 = [p["pid"] for p in s1 if any(y != p["pid"] for y in s2_ids)]
+        if eligible1:
+            return {"step_index": k, "phase_index": i, "team_index": team_index,
+                    "side": 1, "eligible_pids": eligible1}
+    return None
+
+
+def partner_draw_finished(people: List[Dict], rules: Optional[List[Dict]], steps: List[Dict]) -> bool:
+    """Phiên đã hết lượt ⇔ không còn cặp hợp lệ (replay → None). KHÔNG dùng trần total_steps làm điều kiện
+    kết thúc: total_steps_max của plan v2 là cận trên thật nên replay không thể vượt nó."""
+    return partner_step_context(people, rules, list(steps or [])) is None
+
+
+def partner_draw_stuck(people: List[Dict], rules: Optional[List[Dict]], steps: List[Dict]) -> bool:
+    """Phiên KẸT: lượt cuối là bên 1 nhưng bên 2 không còn ai đủ điều kiện (chỉ xảy ra với dữ liệu hỏng /
+    phiên mở bằng engine cũ — engine v2 lọc bên 1 nên bên 2 luôn ≥ 1). Không thể quay tiếp lẫn chốt
+    (đội dở dang) → UI gợi ý huỷ phiên và mở lại."""
+    ctx = partner_step_context(people, rules, list(steps or []))
+    return ctx is not None and not ctx["eligible_pids"]
 
 
 def generate_group_schedule(

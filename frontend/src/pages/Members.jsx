@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, useRef } from "react";
+import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import {
   Button, Space, Input, Select, Tag, Modal, Form,
   DatePicker, message, Typography, Row, Col, Popover,
@@ -8,17 +8,18 @@ import {
   PlusOutlined, EditOutlined, DeleteOutlined, SearchOutlined,
   SaveOutlined, InfoCircleOutlined, DownloadOutlined,
   FileExcelOutlined, UploadOutlined, CheckCircleOutlined,
-  CloseCircleOutlined, WarningOutlined,
+  CloseCircleOutlined, WarningOutlined, SettingOutlined,
 } from "@ant-design/icons";
 import dayjs from "dayjs";
 import { membersApi } from "../api";
+import { useAuth } from "../context/AuthContext";
 import useHotkey from "../hooks/useHotkey";
+import { useRankLevels } from "../hooks/useRankLevels";
 import ResponsiveTable from "../components/ResponsiveTable";
+import RankLevelsModal from "../components/RankLevelsModal";
 
 const { Title } = Typography;
 const { Option } = Select;
-
-const RANKS = ["A", "B", "C", "D", "Hạt giống 1", "Hạt giống 2", "Hạt giống 3", "Chưa xếp hạng"];
 
 const STATUS_MAP = {
   active: { color: "green", label: "Hoạt động" },
@@ -41,6 +42,14 @@ export default function Members() {
   const [editing, setEditing] = useState(null);
   const [form] = Form.useForm();
   const searchRef = useRef(null);
+
+  // Quyền: chỉ người có quyền sửa mới thấy nút "Cấu hình hạng"
+  const { perms } = useAuth();
+  const canEdit = !!perms?.canEdit;
+
+  // Danh sách hạng của CLB (cấu hình chung cho Thành viên / Khách mời / ghép đội)
+  const { options: rankOptions, unranked, error: rankLevelsError, isFallback: rankLevelsFallback } = useRankLevels();
+  const [rankCfgOpen, setRankCfgOpen] = useState(false);
 
   // Excel import state
   const [importOpen, setImportOpen] = useState(false);
@@ -177,6 +186,17 @@ export default function Members() {
     }
   };
 
+  // Bộ lọc cột Hạng: danh sách CLB + các hạng ngoài danh sách còn tồn tại trong dữ liệu (dữ liệu cũ)
+  const rankFilters = useMemo(() => {
+    const extra = data.map((r) => r.rank).filter((r) => r && !rankOptions.includes(r));
+    return [...new Set([...rankOptions, ...extra])].map((r) => ({ text: r, value: r }));
+  }, [data, rankOptions]);
+
+  // Ô chọn hạng trong form: giữ hạng ngoài danh sách của bản ghi đang sửa để không mất giá trị
+  const formRankOptions = editing?.rank && !rankOptions.includes(editing.rank)
+    ? [...rankOptions, editing.rank]
+    : rankOptions;
+
   const columns = [
     { title: "Mã TV", dataIndex: "member_code", width: 90 },
     {
@@ -202,8 +222,9 @@ export default function Members() {
     {
       title: "Hạng", dataIndex: "rank", width: 90,
       render: (v) => v ? <Tag color="purple">{v}</Tag> : "—",
-      filters: RANKS.map(r => ({ text: r, value: r })),
-      onFilter: (value, record) => record.rank === value,
+      filters: rankFilters,
+      // "Chưa xếp hạng" khớp cả bản ghi chưa có hạng (rank rỗng) — cùng cách hiểu với backend
+      onFilter: (value, record) => (value === unranked ? (!record.rank || record.rank === unranked) : record.rank === value),
     },
     { title: "Ngày tham gia", dataIndex: "join_date", render: (v) => v ? dayjs(v).format("DD/MM/YYYY") : "—" },
     {
@@ -232,9 +253,18 @@ export default function Members() {
           <Button icon={<FileExcelOutlined />} style={{ color: "#52c41a", borderColor: "#52c41a" }} onClick={() => { setImportResult(null); setImportOpen(true); }}>
             Nhập từ Excel
           </Button>
+          {canEdit && (
+            <Button icon={<SettingOutlined />} onClick={() => setRankCfgOpen(true)}>Cấu hình hạng</Button>
+          )}
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>Thêm thành viên (N)</Button>
         </Space>
       </Row>
+      {rankLevelsError && (
+        <Alert type="warning" showIcon style={{ marginBottom: 12 }}
+          message={rankLevelsFallback
+            ? "Không tải được danh sách hạng của CLB — ô chọn hạng đang dùng danh sách mặc định."
+            : "Không tải lại được danh sách hạng của CLB — ô chọn hạng đang dùng danh sách đã tải trước đó."} />
+      )}
 
       <Row gutter={12} style={{ marginBottom: 16 }}>
         <Col flex="auto">
@@ -415,7 +445,7 @@ export default function Members() {
             <Col span={12}>
               <Form.Item name="rank" label="Hạng (Rank)">
                 <Select placeholder="Chọn hoặc nhập hạng" allowClear showSearch>
-                  {RANKS.map(r => <Option key={r} value={r}>{r}</Option>)}
+                  {formRankOptions.map(r => <Option key={r} value={r}>{r}</Option>)}
                 </Select>
               </Form.Item>
             </Col>
@@ -428,6 +458,9 @@ export default function Members() {
           </Form.Item>
         </Form>
       </Modal>
+
+      {/* Cấu hình danh sách hạng của CLB (chỉ người có quyền sửa) */}
+      {canEdit && <RankLevelsModal open={rankCfgOpen} onClose={() => setRankCfgOpen(false)} />}
     </div>
   );
 }

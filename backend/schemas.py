@@ -271,9 +271,35 @@ class TransactionOut(TransactionBase):
 
 # ── Tournament ────────────────────────────────────────────
 class PartnerRule(BaseModel):
-    """Một quy tắc ghép ĐỒNG ĐỘI theo hạng (giải đôi): người 1 hạng rank1 + người 2 hạng rank2."""
-    rank1: str
-    rank2: str
+    """Một quy tắc ghép ĐỒNG ĐỘI theo hạng (giải đôi), shape v2: người 1 có hạng ∈ ranks1, người 2 có hạng ∈ ranks2.
+    Bên rỗng = bất kỳ hạng. rank1/rank2 (chuỗi) là shape cũ — được normalize_partner_rules gộp vào ranks1/ranks2."""
+    ranks1: List[str] = []
+    ranks2: List[str] = []
+    rank1: Optional[str] = None
+    rank2: Optional[str] = None
+
+
+class PartnerRuleOut(BaseModel):
+    """Quy tắc ghép đội đã chuẩn hoá (đầu ra) — chỉ shape v2, không kèm rank1/rank2 cũ."""
+    ranks1: List[str] = []
+    ranks2: List[str] = []
+
+
+class RankLevelsIn(BaseModel):
+    """Cấu hình danh sách hạng của CLB (không gồm 'Chưa xếp hạng' — hạng ngầm định)."""
+    rank_levels: List[str]
+
+
+class RankLevelsOut(BaseModel):
+    rank_levels: List[str]
+    unranked_label: str
+    in_use: Dict[str, int] = {}   # hạng → số người (thành viên + khách mời của CLB) đang mang hạng đó
+
+
+class BulkParticipantsIn(BaseModel):
+    """Thêm hàng loạt người chơi đơn lẻ vào giải (Nháp)."""
+    member_ids: List[int] = []
+    player_ids: List[int] = []
 
 
 class TournamentCreate(BaseModel):
@@ -494,10 +520,12 @@ class PartnerDrawOut(BaseModel):
     total_steps: int
     done_steps: int
     reveal_ms: int
+    finished: bool = False                            # hết lượt hợp lệ (replay → không còn cặp); số lượt có thể < total_steps (trần)
+    stuck: bool = False                               # lượt cuối bên 1 mà bên 2 không còn ai (dữ liệu hỏng/phiên cũ) → huỷ phiên và mở lại
     pool: List[PartnerPoolPersonOut] = []
-    rules: List[PartnerRule] = []
-    plan: Dict[str, Any] = {}
-    next_step: Optional[PartnerDrawNextOut] = None   # None khi đã bốc đủ hoặc phiên không còn open
+    rules: List[PartnerRuleOut] = []                  # luôn shape v2 (ranks1/ranks2) kể cả phiên cũ
+    plan: Dict[str, Any] = {}                         # luôn v2 (phiên cũ được _normalize_partner_plan): phases[{index, ranks1, ranks2, team_max (dự kiến), team_cap (trần), overlap}], total_steps_max (trần thật), total_steps_est (dự kiến), unpaired_pids, estimated
+    next_step: Optional[PartnerDrawNextOut] = None   # None khi finished/stuck hoặc phiên không còn open
     steps: List[PartnerDrawStepOut] = []
     seed_commit: str
     seed_hex: Optional[str] = None      # chỉ lộ khi status != open (commit–reveal)
@@ -516,6 +544,8 @@ class PartnerDrawSummaryOut(BaseModel):
     status: str
     total_steps: int
     done_steps: int
+    finished: bool = False   # property TournamentPartnerDraw.finished
+    stuck: bool = False      # property TournamentPartnerDraw.stuck
     reveal_ms: int
 
     class Config:
@@ -545,6 +575,13 @@ class TournamentOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class BulkParticipantsOut(BaseModel):
+    """Kết quả thêm hàng loạt: số người đã thêm, tên những người bị bỏ qua (đã có trong giải), giải sau khi thêm."""
+    added: int
+    skipped: List[str] = []
+    tournament: TournamentOut
 
 
 # ── Public (không đăng nhập): chỉ tên + hạng, KHÔNG có SĐT/email/địa chỉ/ghi chú ──

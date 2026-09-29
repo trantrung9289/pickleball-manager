@@ -12,7 +12,8 @@ import PartnerDrawCeremony from "./draw/PartnerDrawCeremony";
 import { useViewMode } from "../contexts/ViewModeContext";
 import { teamLabel, teamRank } from "../utils/tournamentLabels";
 import {
-  serverOffset, verifyDraw, verifyPartnerDraw, partnerLabelForStep, UNRANKED,
+  serverOffset, verifyDraw, verifyPartnerDraw, partnerLabelForStep, partnerDrawFinished, partnerDrawStuck,
+  normalizePartnerRules, ranksPhrase, UNRANKED,
 } from "../utils/drawMath";
 
 const { Text } = Typography;
@@ -39,11 +40,18 @@ const PARTNER_STATUS_TAG = {
 /** Người chơi đơn lẻ trong giải đôi (chưa có đồng đội) — theo đúng cách backend tính unpaired_count. */
 const isSingleParticipant = (p) => p?.partner_member_id == null && p?.partner_player_id == null;
 
-/** Dòng mô tả quy tắc ghép đội theo thứ tự (dùng ở biên bản). */
+/**
+ * Dòng mô tả quy tắc ghép đội theo thứ tự (dùng ở biên bản). Quy tắc v2 mỗi bên là danh sách hạng
+ * (bên rỗng = bất kỳ hạng); quy tắc cũ rank1/rank2 được normalize về cùng shape.
+ */
 const partnerRulesText = (rules) => {
-  const list = Array.isArray(rules) ? rules.filter(r => r && r.rank1 && r.rank2) : [];
-  if (list.length === 0) return "Ngẫu nhiên toàn bộ (không lọc hạng)";
-  return list.map((r, i) => `Quy tắc ${i + 1}: Hạng ${r.rank1} + Hạng ${r.rank2}`).join("; ");
+  const list = normalizePartnerRules(rules);
+  // Không có quy tắc, hoặc chỉ 1 quy tắc "bất kỳ + bất kỳ" → ghép ngẫu nhiên toàn bộ
+  const allAny = list.every(r => r.ranks1.length === 0 && r.ranks2.length === 0);
+  if (list.length === 0 || (list.length === 1 && allAny)) return "Ngẫu nhiên toàn bộ (không lọc hạng)";
+  return list
+    .map((r, i) => `Quy tắc ${i + 1}: ${ranksPhrase(r.ranks1, true)} + ${ranksPhrase(r.ranks2, true)}`)
+    .join("; ");
 };
 
 // Backend trả datetime naive giờ VN (không có Z) → trình duyệt parse theo giờ máy, hợp với người xem trong nước
@@ -656,11 +664,28 @@ function PartnerDrawHistoryItem({ draw }) {
   const steps = [...(draw.steps || [])].sort((a, b) => a.step_index - b.step_index);
   const stepResult = (k) => verify.result?.steps?.find(s => s.step_index === k);
 
-  // Người chưa có đội: phiên đã quay đủ → mọi người trong pool không được bốc (gồm cả người dư ngẫu nhiên
-  // của hạng bị tiêu thụ một phần); chưa đủ (huỷ giữa chừng) → chỉ người kế hoạch đã loại từ đầu.
-  const total = draw.total_steps ?? draw.plan?.total_steps ?? 0;
+  // Kế hoạch v2 (API luôn trả v2): total_steps = TRẦN THẬT (plan.total_steps_max), plan.total_steps_est = DỰ KIẾN.
+  // Hai bên quy tắc trùng hạng (plan.estimated) hoặc dự kiến < trần → số lượt thật có thể khác → "k lượt (tối đa N, dự kiến M)".
+  const total = Number(draw.total_steps ?? draw.plan?.total_steps_max) || 0;
+  const totalEst = Number(draw.plan?.total_steps_est ?? total) || 0;
+  const estimated = !!draw.plan?.estimated || totalEst < total;
+  // Hết lượt hợp lệ / kẹt: ưu tiên cờ server trả; thiếu cờ → replay theo drawMath v2 (không còn trần).
+  // Phiên đã chốt luôn coi là đã hết lượt.
+  const finished = draw.status === "committed"
+    || (typeof draw.finished === "boolean"
+      ? draw.finished
+      : partnerDrawFinished(draw.pool || [], draw.rules || [], steps));
+  const stuck = typeof draw.stuck === "boolean"
+    ? draw.stuck
+    : partnerDrawStuck(draw.pool || [], draw.rules || [], steps);
+  // "Kết thúc sớm" so với DỰ KIẾN (total_steps_est), không so với trần total_steps_max — trần có thể cao hơn
+  // dự kiến ngay cả khi không trùng hạng (team_cap tính trên toàn pool), khi đó không phải kết thúc sớm.
+  const endedEarly = finished && totalEst > 0 && steps.length < totalEst;
+  // Người chưa có đội: phiên đã hết lượt hợp lệ → mọi người trong pool không được bốc (gồm cả người dư
+  // ngẫu nhiên của hạng bị tiêu thụ một phần, và người còn lại khi quy tắc kết thúc sớm);
+  // chưa hết (huỷ giữa chừng) → chỉ người kế hoạch đã loại từ đầu.
   const pickedPids = new Set(steps.map(s => s.pid));
-  const unpairedPids = (total > 0 && steps.length >= total)
+  const unpairedPids = (finished && steps.length > 0)
     ? (draw.pool || []).map(p => p.pid).filter(pid => !pickedPids.has(pid))
     : (draw.plan?.unpaired_pids || []);
 
@@ -696,7 +721,13 @@ function PartnerDrawHistoryItem({ draw }) {
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <Space wrap>
         <Tag color={tag.color}>{tag.label}</Tag>
-        <Text type="secondary">{steps.length}/{total} lượt</Text>
+        <Text type="secondary">
+          {estimated
+            ? `${steps.length} lượt (tối đa ${total}${totalEst < total ? `, dự kiến ${totalEst}` : ""})`
+            : `${steps.length}/${total} lượt`}
+        </Text>
+        {stuck && <Tag color="error">Phiên bị kẹt — bên 2 không còn ai đủ điều kiện</Tag>}
+        {endedEarly && !stuck && <Tag color="default">Kết thúc sớm — hết người đủ điều kiện</Tag>}
         <Text type="secondary">Mở: {fmtTime(draw.created_at)}</Text>
         {endedAt && <Text type="secondary">Kết thúc: {fmtTime(endedAt)}</Text>}
         {draw.cancel_reason && <Text type="secondary">Lý do: {draw.cancel_reason}</Text>}
@@ -710,7 +741,9 @@ function PartnerDrawHistoryItem({ draw }) {
         </div>
         <Text type="secondary">
           Công thức: lượt k chọn người thứ idx = SHA256("{"{seed}:{k}"}") mod (số người đủ điều kiện ở lượt k —
-          chưa được chọn và đúng hạng theo quy tắc), danh sách theo id tăng dần.
+          chưa được chọn và có hạng thuộc danh sách hạng của bên đang bốc; bên để trống = bất kỳ hạng),
+          danh sách theo id tăng dần. Lượt bên 1 loại những người mà nếu chọn thì bên 2 không còn ai;
+          quy tắc dừng khi hết cặp hợp lệ{estimated ? " nên số lượt thật có thể ít hơn trần / khác dự kiến" : ""}.
         </Text>
       </div>
       {steps.length > 0 && (

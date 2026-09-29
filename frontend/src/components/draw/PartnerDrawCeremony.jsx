@@ -2,8 +2,11 @@
  * PartnerDrawCeremony — "lễ GHÉP ĐỘI ĐÔI" bằng vòng quay, dùng chung admin (overlay) và public (inline).
  * Nhận dữ liệu thuần (tournament, draw = PartnerDrawOut) + callback; không tự gọi API.
  * Khác DrawCeremony (bốc cặp đấu): pool là NGƯỜI đơn lẻ (pid), mỗi lượt có danh sách đủ điều kiện
- * riêng (eligible_pids — theo hạng của quy tắc), 2 lượt liên tiếp tạo thành 1 đội; lượt chỉ còn 1 người
- * đủ điều kiện được điền tự động (không quay). Khung hiển thị do DrawStage đảm nhiệm.
+ * riêng (eligible_pids — theo hạng của quy tắc nhiều hạng), 2 lượt liên tiếp tạo thành 1 đội; lượt chỉ còn
+ * 1 người đủ điều kiện được điền tự động (không quay). Kế hoạch v2: total_steps (= plan.total_steps_max) là
+ * TRẦN THẬT, plan.total_steps_est là số lượt DỰ KIẾN; phiên kết thúc khi không còn cặp hợp lệ (draw.finished,
+ * số lượt có thể ít hơn trần) — khi đó admin "Chốt & tạo đội", người còn lại ghép tay. draw.stuck (bên 2 không
+ * còn ai — dữ liệu hỏng) → admin chỉ còn Huỷ phiên. Khung hiển thị do DrawStage đảm nhiệm.
  *
  * Props: { mode: 'admin'|'public', tournament, draw, serverOffsetMs, busy,
  *          onSpin, onCommit, onCancel, onClose, fullscreen }
@@ -17,7 +20,8 @@ import DrawWheel from "./DrawWheel";
 import PairBoard from "./PairBoard";
 import DrawStage, { useStageColors, useStageViewport } from "./DrawStage";
 import {
-  UNRANKED, rankLabel, revealAtClientMs, extraTurnsFor, partnerLabelForStep, verifyPartnerDraw,
+  UNRANKED, ranksPhrase, normalizePartnerRules, revealAtClientMs, extraTurnsFor, partnerLabelForStep, verifyPartnerDraw,
+  partnerDrawFinished, partnerDrawStuck,
 } from "../../utils/drawMath";
 
 const STATUS_TAG = {
@@ -38,11 +42,11 @@ const countRevealedNow = (steps, revealMs, offsetMs) => {
 
 const isAutoStep = (s) => !!s && (s.auto === true || (Array.isArray(s.eligible_pids) && s.eligible_pids.length === 1));
 
-/** Dòng mô tả quy tắc theo thứ tự (hiện ở header). */
+/** Dòng mô tả quy tắc theo thứ tự (hiện ở header) — nhận shape cũ lẫn mới. */
 const rulesText = (rules) => {
-  const list = Array.isArray(rules) ? rules.filter((r) => r && r.rank1 && r.rank2) : [];
-  if (!list.length) return "Ngẫu nhiên toàn bộ (không lọc hạng).";
-  return list.map((r, i) => `Quy tắc ${i + 1}: ${rankLabel(r.rank1, true)} + ${rankLabel(r.rank2, true)}`).join("; ") + ".";
+  const list = normalizePartnerRules(rules);
+  if (!list.length || list.every((r) => !r.ranks1.length && !r.ranks2.length)) return "Ngẫu nhiên toàn bộ (không lọc hạng).";
+  return list.map((r, i) => `Quy tắc ${i + 1}: ${ranksPhrase(r.ranks1, true)} + ${ranksPhrase(r.ranks2, true)}`).join("; ") + ".";
 };
 
 // Bọc ngoài với key=draw.id để mọi state cục bộ (revealedCount, highlight...) reset khi sang phiên khác
@@ -60,7 +64,10 @@ function PartnerDrawCeremonyInner({
   const steps = useMemo(() => sortSteps(draw?.steps), [draw?.steps]);
   const pool = useMemo(() => draw?.pool || [], [draw?.pool]);
   const plan = draw?.plan;
-  const total = draw?.total_steps ?? plan?.total_steps ?? 0;
+  // Trần THẬT số lượt (server: total_steps = plan.total_steps_max) và số lượt DỰ KIẾN (plan.total_steps_est)
+  const total = Number(draw?.total_steps ?? plan?.total_steps_max) || 0;
+  const totalEst = Number(plan?.total_steps_est ?? total) || 0;
+  const estimated = plan?.estimated === true || totalEst < total;
   const revealMs = draw?.reveal_ms ?? 5000;
 
   const poolById = useMemo(() => {
@@ -108,12 +115,21 @@ function PartnerDrawCeremonyInner({
     setRevealedCount((c) => c + 1);
   }, [nextStep]);
 
-  // ── Admin: điều kiện nút ──
+  // ── Trạng thái phiên & điều kiện nút ──
   const allRevealed = revealed === steps.length;
   const isOpen = draw?.status === "open";
-  const remainingCount = total - steps.length;
-  const canSpin = isAdmin && isOpen && !busy && !spinning && allRevealed && remainingCount > 0;
-  const canCommit = isAdmin && isOpen && !busy && !spinning && allRevealed && steps.length === total && total > 0;
+  // Hết lượt hợp lệ / kẹt: ưu tiên cờ server trả; thiếu cờ → replay theo drawMath (cùng thuật toán)
+  const finished = typeof draw?.finished === "boolean"
+    ? draw.finished
+    : partnerDrawFinished(pool, draw?.rules || [], steps);
+  const stuck = typeof draw?.stuck === "boolean"
+    ? draw.stuck
+    : partnerDrawStuck(pool, draw?.rules || [], steps);
+  const lastStep = steps.length ? steps[steps.length - 1] : null;
+  const leftover = Math.max(0, pool.length - steps.length);   // người còn lại (ghép tay) khi hết lượt
+  const canSpin = isAdmin && isOpen && !busy && !spinning && allRevealed && !finished && !stuck;
+  const canCommit = isAdmin && isOpen && !busy && !spinning && allRevealed && finished && !stuck
+    && steps.length > 0 && Number(lastStep?.side) === 2;
   const serverNextAuto = (draw?.next_step?.eligible_pids?.length ?? 0) === 1;
 
   // Phím Space = QUAY (bỏ qua khi focus đang ở button/input để không kích hoạt 2 lần)
@@ -143,11 +159,17 @@ function PartnerDrawCeremonyInner({
   const panelStyle = { background: c.panel, border: `1px solid ${c.border}`, borderRadius: 12, padding: 12 };
 
   const tags = [
-    <span key="turn" style={{ color: c.text, fontWeight: 600 }}>Lượt {revealed}/{total}</span>,
+    <span key="turn" style={{ color: c.text, fontWeight: 600 }}>
+      {estimated
+        ? `Lượt ${revealed} · tối đa ${total}${totalEst < total ? ` · dự kiến ${totalEst}` : ""}`
+        : `Lượt ${revealed}/${total}`}
+    </span>,
     <Tag key="status" color={st.color} style={{ marginInlineEnd: 0 }}>{st.label}</Tag>,
     draw?.seq != null && <span key="seq" style={{ color: c.muted, fontSize: 12 }}>Phiên #{draw.seq}</span>,
   ];
-  const ruleText = `${rulesText(draw?.rules)} Người không khớp quy tắc sẽ được ghép tay sau.`;
+  const ruleText = `${rulesText(draw?.rules)} Bên để trống = bất kỳ hạng. `
+    + "Lượt bên 1 loại những người mà nếu chọn thì bên 2 không còn ai; quy tắc dừng khi hết cặp hợp lệ "
+    + "(số lượt thật có thể ít hơn trần) — người còn lại sẽ được ghép tay sau.";
 
   const lastCard = lastPicked && (
     <div style={{
@@ -163,9 +185,28 @@ function PartnerDrawCeremonyInner({
     </div>
   );
 
+  // Phiên kẹt (bên 2 không còn ai đủ điều kiện — dữ liệu hỏng / phiên engine cũ): không quay, không chốt
+  const stuckNote = isOpen && stuck && allRevealed && (
+    <Alert
+      type="error" showIcon
+      message="Phiên bị kẹt — bên 2 không còn ai đủ điều kiện"
+      description={isAdmin
+        ? "Không thể quay tiếp lẫn chốt. Huỷ phiên và mở lại (kết quả các lượt đã quay vẫn lưu trong biên bản)."
+        : "Chờ ban tổ chức huỷ phiên và mở lại."}
+    />
+  );
+
+  // Dòng báo hết lượt hợp lệ (chỉ khi đã reveal xong lượt cuối để không lộ sớm)
+  const finishedNote = isOpen && finished && !stuck && allRevealed && (
+    <div style={{ ...panelStyle, color: c.text, fontSize: 14, textAlign: "center" }}>
+      Đã hết lượt hợp lệ — {leftover > 0 ? `${leftover} người còn lại sẽ ghép tay` : "tất cả đã có đội"}
+      {steps.length < totalEst && <span style={{ color: c.muted, fontSize: 12 }}> (dừng sớm: {steps.length}/{totalEst} lượt dự kiến)</span>}
+    </div>
+  );
+
   const controls = isAdmin ? (
     <Space wrap size={8} style={{ justifyContent: "center", width: "100%" }}>
-      {isOpen && remainingCount > 0 && (
+      {isOpen && !finished && !stuck && (
         <Button
           type="primary" size="large"
           icon={serverNextAuto ? <ThunderboltOutlined /> : <SyncOutlined spin={spinning} />}
@@ -175,7 +216,7 @@ function PartnerDrawCeremonyInner({
           {serverNextAuto ? "Điền tự động" : "QUAY"}
         </Button>
       )}
-      {isOpen && steps.length === total && total > 0 && (
+      {isOpen && finished && !stuck && steps.length > 0 && (
         <Button
           type="primary" size="large" icon={<CheckCircleOutlined />}
           onClick={() => onCommit?.()} disabled={!canCommit} loading={busy}
@@ -196,20 +237,25 @@ function PartnerDrawCeremonyInner({
       ) : draw?.status === "committed" ? (
         <Alert type="success" showIcon message="Đã chốt đội — danh sách đội bên dưới" />
       ) : null}
-      {isOpen && !spinning && remainingCount > 0 && (
+      {isOpen && !spinning && !finished && !stuck && (
         <div style={{ color: c.muted, fontSize: 13, marginTop: 4 }}>Chờ ban tổ chức quay lượt tiếp theo…</div>
+      )}
+      {isOpen && !spinning && finished && !stuck && (
+        <div style={{ color: c.muted, fontSize: 13, marginTop: 4 }}>Chờ ban tổ chức chốt đội…</div>
       )}
     </div>
   );
 
-  // Ô đang chờ trên bảng: lượt đang quay, hoặc (rảnh & còn mở) lượt kế tiếp server đã tính
-  const pendingSlot = nextStep || (isOpen ? draw?.next_step : null);
+  // Ô đang chờ trên bảng: lượt đang quay, hoặc (rảnh & còn mở & chưa hết lượt) lượt kế tiếp server đã tính
+  const pendingSlot = nextStep || (isOpen && !finished && !stuck ? draw?.next_step : null);
 
   const board = (
     <PairBoard
       plan={plan} pool={pool}
       steps={steps.slice(0, revealed)}       /* chỉ điền ô đã reveal để khớp với vòng quay */
       nextStep={pendingSlot} spinning={spinning} highlightStep={highlightStep} dark={fullscreen}
+      finished={finished && allRevealed}
+      stuck={stuck && allRevealed}
     />
   );
 
@@ -232,12 +278,14 @@ function PartnerDrawCeremonyInner({
       tags={tags}
       ruleText={ruleText}
       wheel={wheel}
-      underWheel={<>{lastCard}{controls}</>}
+      underWheel={<>{lastCard}{stuckNote}{finishedNote}{controls}</>}
       board={board}
       transparency={{
         seedCommit: draw?.seed_commit,
         seedHex: draw?.seed_hex,
-        formulaText: 'idx = SHA256("{seed}:{k}") mod (số người đủ điều kiện ở lượt k; đủ điều kiện = chưa được chọn và đúng hạng theo quy tắc)',
+        formulaText: 'idx = SHA256("{seed}:{k}") mod (số người đủ điều kiện ở lượt k; đủ điều kiện = chưa được chọn, '
+          + "có hạng thuộc danh sách hạng của bên đang bốc — bên để trống = bất kỳ hạng; lượt bên 1 loại người mà nếu "
+          + "chọn thì bên 2 không còn ai; quy tắc dừng khi hết cặp hợp lệ)",
         onVerify: runVerify,
         verifyState,
       }}

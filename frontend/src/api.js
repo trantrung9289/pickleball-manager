@@ -40,6 +40,9 @@ export const authApi = {
   getClub: () => api.get("/api/club"),
   updateClub: (data) => api.put("/api/club", data),
   myMemberships: () => api.get("/api/my-memberships"),
+  // Cấu hình danh sách hạng của CLB (dùng chung Thành viên / Khách mời / quy tắc ghép đội)
+  rankLevels: () => api.get("/api/club/rank-levels"),
+  updateRankLevels: (levels) => api.put("/api/club/rank-levels", { rank_levels: levels }),
 };
 
 export const adminApi = {
@@ -131,6 +134,8 @@ export const tournamentsApi = {
   replaceParticipant: (tid, pid, data) => api.patch(`/api/tournaments/${tid}/participants/${pid}`, data),
   addParticipant: (tid, data) => api.post(`/api/tournaments/${tid}/participants`, data),
   removeParticipant: (tid, pid) => api.delete(`/api/tournaments/${tid}/participants/${pid}`),
+  // Thêm nhiều người chơi vào giải Nháp một lần — {member_ids: [], player_ids: []} → {added, skipped, tournament}
+  addParticipantsBulk: (tid, data) => api.post(`/api/tournaments/${tid}/participants/bulk`, data),
   withdraw: (tid, pid) => api.post(`/api/tournaments/${tid}/participants/${pid}/withdraw`),
   // Phiên bốc thăm bằng vòng quay (server random có seed, admin quay từng lượt rồi chốt)
   draw: {

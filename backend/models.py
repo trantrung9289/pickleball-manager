@@ -122,6 +122,9 @@ class Club(Base):
     address = Column(String(300), nullable=True)
     phone = Column(String(20), nullable=True)
     email = Column(String(100), nullable=True)
+    # Danh sách hạng của CLB (dùng chung cho Thành viên, Khách mời, quy tắc ghép đội).
+    # NULL → dùng DEFAULT_RANK_LEVELS (main.py). "Chưa xếp hạng" là hạng ngầm định, KHÔNG nằm trong danh sách.
+    rank_levels = Column(JSON, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
 
 
@@ -400,6 +403,29 @@ class TournamentPartnerDraw(Base):
     @property
     def done_steps(self) -> int:
         return len(self.steps)
+
+    @property
+    def finished(self) -> bool:
+        """Đã hết lượt hợp lệ (không còn cặp nào ghép được theo quy tắc — replay → None; KHÔNG so với trần
+        total_steps vì plan v2 là cận trên thật). Dùng cho PartnerDrawSummaryOut nhúng trong TournamentOut."""
+        from tournament_engine import partner_draw_finished   # import trễ: tránh phụ thuộc vòng lúc nạp module
+        steps = [
+            {"step_index": st.step_index, "pid": st.pid, "side": st.side,
+             "phase_index": st.phase_index, "team_index": st.team_index}
+            for st in sorted(self.steps, key=lambda s: s.step_index)
+        ]
+        return partner_draw_finished(list(self.pool_json or []), list(self.rules_json or []), steps)
+
+    @property
+    def stuck(self) -> bool:
+        """Phiên kẹt: lượt cuối là bên 1 mà bên 2 không còn ai (dữ liệu hỏng / phiên engine cũ)."""
+        from tournament_engine import partner_draw_stuck
+        steps = [
+            {"step_index": st.step_index, "pid": st.pid, "side": st.side,
+             "phase_index": st.phase_index, "team_index": st.team_index}
+            for st in sorted(self.steps, key=lambda s: s.step_index)
+        ]
+        return partner_draw_stuck(list(self.pool_json or []), list(self.rules_json or []), steps)
 
 
 class TournamentPartnerDrawStep(Base):

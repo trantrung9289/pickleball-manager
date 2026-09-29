@@ -29,7 +29,8 @@ from tournament_engine import (
     generate_schedule, generate_group_schedule,
     generate_knockout_from_groups, compute_standings,
     DRAW_SUPPORTED_FORMATS, draw_slot_label, draw_picks_to_pid_list, draw_pick_index,
-    normalize_rank, partner_draw_plan, partner_step_context,
+    normalize_rank, normalize_partner_rules, partner_draw_plan, partner_step_context, partner_draw_finished,
+    partner_draw_stuck, _normalize_partner_plan, UNRANKED,
 )
 from auth import (
     hash_password, verify_password, create_access_token,
@@ -114,6 +115,8 @@ def _run_migration():
         ("club_memberships", "bot_enabled", "BOOLEAN DEFAULT 1 NOT NULL", None),
         # Bảng tournaments — quy tắc ghép ĐỒNG ĐỘI cho vòng quay ghép đội (giải đôi)
         ("tournaments", "partner_rules", "JSON", None),
+        # Bảng clubs — danh sách hạng cấu hình ở cấp CLB (NULL → DEFAULT_RANK_LEVELS)
+        ("clubs", "rank_levels", "JSON", None),
     ]
 
     with engine.connect() as conn:
@@ -287,6 +290,88 @@ def update_club(payload: schemas.ClubUpdate, db: Session = Depends(get_db),
     db.commit()
     db.refresh(club)
     return club
+
+
+# ── CẤU HÌNH HẠNG CỦA CLB (dùng chung Thành viên / Khách mời / quy tắc ghép đội) ──
+DEFAULT_RANK_LEVELS = ["A", "B", "C", "D", "Hạt giống 1", "Hạt giống 2", "Hạt giống 3"]
+MAX_RANK_LEVELS = 30
+MAX_RANK_LEN = 30   # khớp members.rank String(30)
+
+
+def _club_rank_levels(club: "models.Club") -> list:
+    """Danh sách hạng hiệu lực của CLB: cấu hình riêng hoặc mặc định. 'Chưa xếp hạng' KHÔNG nằm trong đây."""
+    levels = club.rank_levels
+    return list(levels) if isinstance(levels, list) else list(DEFAULT_RANK_LEVELS)
+
+
+def _rank_in_use(db: Session, club_id: int) -> dict:
+    """Đếm số người đang mang từng hạng trong CLB: thành viên + khách mời (players.member_id IS NULL),
+    theo normalize_rank (NULL/rỗng → 'Chưa xếp hạng'). Chỉ trả hạng có count > 0."""
+    counts: dict = {}
+    for (r,) in db.query(models.Member.rank).filter(models.Member.club_id == club_id).all():
+        k = normalize_rank(r)
+        counts[k] = counts.get(k, 0) + 1
+    for (r,) in db.query(models.Player.rank).filter(
+        models.Player.club_id == club_id, models.Player.member_id.is_(None)
+    ).all():
+        k = normalize_rank(r)
+        counts[k] = counts.get(k, 0) + 1
+    return counts
+
+
+def _rank_levels_out(db: Session, club: "models.Club") -> dict:
+    return {
+        "rank_levels": _club_rank_levels(club),
+        "unranked_label": UNRANKED,
+        "in_use": _rank_in_use(db, club.id),
+    }
+
+
+@app.get("/api/club/rank-levels", response_model=schemas.RankLevelsOut)
+def get_rank_levels(db: Session = Depends(get_db), perms: ClubPermissions = Depends(get_club_permission)):
+    perms.require_view()
+    club = db.query(models.Club).filter(models.Club.id == perms.club_id).first()
+    if not club:
+        raise HTTPException(404, "Không tìm thấy CLB")
+    return _rank_levels_out(db, club)
+
+
+@app.put("/api/club/rank-levels", response_model=schemas.RankLevelsOut)
+def update_rank_levels(
+    data: schemas.RankLevelsIn,
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    """Lưu danh sách hạng của CLB. Không cho bỏ hạng đang có người dùng (đổi hạng của họ trước).
+    Endpoint tạo/sửa thành viên/khách mời KHÔNG từ chối hạng ngoài danh sách (giữ dữ liệu cũ)."""
+    perms.require_edit()
+    club = db.query(models.Club).filter(models.Club.id == perms.club_id).first()
+    if not club:
+        raise HTTPException(404, "Không tìm thấy CLB")
+
+    levels = []
+    for raw in data.rank_levels:
+        s = str(raw or "").strip()
+        if not s:
+            continue
+        if len(s) > MAX_RANK_LEN:
+            raise HTTPException(400, f"Hạng quá dài (tối đa {MAX_RANK_LEN} ký tự): {s[:MAX_RANK_LEN]}…")
+        if s == UNRANKED:
+            raise HTTPException(400, f"'{UNRANKED}' là hạng ngầm định, luôn có sẵn — không thêm vào danh sách")
+        if s in levels:
+            raise HTTPException(400, f"Hạng bị trùng: {s}")
+        levels.append(s)
+    if len(levels) > MAX_RANK_LEVELS:
+        raise HTTPException(400, f"Tối đa {MAX_RANK_LEVELS} hạng")
+
+    in_use = _rank_in_use(db, club.id)
+    for old in _club_rank_levels(club):
+        if old not in levels and in_use.get(old, 0) > 0:
+            raise HTTPException(400, f"Hạng {old} đang được dùng bởi {in_use[old]} người — đổi hạng của họ trước khi xoá")
+
+    club.rank_levels = levels
+    db.commit(); db.refresh(club)
+    return _rank_levels_out(db, club)
 
 
 # ── SYSTEM ADMIN ─────────────────────────────────────────
@@ -2328,7 +2413,7 @@ def create_tournament(
         name=data.name, format=data.format,
         team_type=data.team_type,
         pairing_mode=data.pairing_mode, rank_rules=data.rank_rules,
-        partner_rules=[r.model_dump() for r in data.partner_rules] if data.partner_rules is not None else None,
+        partner_rules=normalize_partner_rules([r.model_dump() for r in data.partner_rules]) if data.partner_rules is not None else None,
         num_groups=data.num_groups, description=data.description,
         score_pin_hash=hash_password(data.score_pin) if data.score_pin else None,
         public_scoring_enabled=data.public_scoring_enabled,
@@ -2373,8 +2458,8 @@ def create_tournament(
         # Singles: kết hợp member_ids (thành viên) + player_ids (khách mời).
         # Giải ĐÔI không gửi teams cũng đi nhánh này: mỗi người là 1 participant đơn lẻ (chưa có partner),
         # ghép đội sau bằng vòng quay / ghép tay trên trang giải.
-        if data.team_type == "doubles" and len(data.member_ids or []) + len(data.player_ids or []) < 2:
-            raise HTTPException(400, "Cần ít nhất 2 người chơi")
+        # Cho phép tạo giải RỖNG (0 người): chọn người hàng loạt tại trang giải khi Nháp;
+        # điều kiện ≥ 2 đội/người chơi được kiểm tra lúc "Bắt đầu giải".
         idx = 0
         for mid in (data.member_ids or []):
             member = _get_member_in_club(db, mid, perms.club_id)
@@ -2441,6 +2526,8 @@ def update_tournament(
             # Bắt đầu giải = khoá danh sách; giải đôi phải ghép xong hết (không tự vét/tự loại người dư)
             if _open_partner_draw(t) is not None:
                 raise HTTPException(400, "Đang có phiên ghép đội chưa kết thúc")
+            if len(t.participants) < 2:
+                raise HTTPException(400, "Cần ít nhất 2 đội/người chơi trước khi bắt đầu giải")
             _require_all_paired(t)
 
     for k, v in updates.items():
@@ -2523,6 +2610,71 @@ def add_participant(
     )
     db.add(p); db.commit(); db.refresh(p)
     return p
+
+
+@app.post("/api/tournaments/{tid}/participants/bulk", response_model=schemas.BulkParticipantsOut)
+def add_participants_bulk(
+    tid: int,
+    data: schemas.BulkParticipantsIn,
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    """Thêm hàng loạt người chơi ĐƠN LẺ (thành viên + khách mời) vào giải Nháp — dùng cho ParticipantsPanel.
+    Người đã có trong giải (ở bất kỳ vị trí, kể cả người 2 của một đội) → bỏ qua, không lỗi.
+    Giải đôi: mỗi người là 1 participant chưa có đội, ghép sau bằng vòng quay / ghép tay."""
+    perms.require_edit()
+    t = db.query(models.Tournament).filter(models.Tournament.id == tid, models.Tournament.club_id == perms.club_id).first()
+    if not t: raise HTTPException(404, "Không tìm thấy giải đấu")
+    if t.status != models.TournamentStatus.draft:
+        raise HTTPException(400, "Chỉ có thể thêm người chơi khi giải đấu ở trạng thái Nháp")
+    if _open_partner_draw(t) is not None:
+        raise HTTPException(400, PARTNER_DRAW_OPEN_MSG)
+
+    # Loại trùng trong chính request (giữ thứ tự)
+    member_ids = list(dict.fromkeys(data.member_ids or []))
+    player_ids = list(dict.fromkeys(data.player_ids or []))
+    for mid in member_ids:
+        _check_people_in_club(db, perms.club_id, member_id=mid)
+    # Bản ghi Player gắn thành viên (member_id != NULL) là CÙNG MỘT NGƯỜI với thành viên đó → quy đổi sang
+    # member_id để không vào giải 2 lần (một lần qua member_ids, một lần qua player_ids)
+    guest_ids = []
+    for plid in player_ids:
+        pl = _get_player_in_club(db, plid, perms.club_id)
+        if pl.member_id is not None:
+            if pl.member_id not in member_ids:
+                _check_people_in_club(db, perms.club_id, member_id=pl.member_id)
+                member_ids.append(pl.member_id)
+        else:
+            guest_ids.append(plid)
+    player_ids = guest_ids
+
+    existing_members, existing_players = set(), set()
+    for o in t.participants:
+        for mid, plid in [(o.member_id, o.player_id), (o.partner_member_id, o.partner_player_id)]:
+            if mid is not None: existing_members.add(mid)
+            if plid is not None: existing_players.add(plid)
+
+    max_seed = db.query(func.max(models.TournamentParticipant.seed)).filter(
+        models.TournamentParticipant.tournament_id == tid
+    ).scalar() or 0
+    added, skipped = 0, []
+    for mid in member_ids:
+        name = _resolve_display_name(db, member_id=mid)
+        if mid in existing_members:
+            skipped.append(name); continue
+        max_seed += 1
+        db.add(models.TournamentParticipant(tournament_id=tid, member_id=mid, team_name=name, seed=max_seed))
+        existing_members.add(mid); added += 1
+    for plid in player_ids:
+        name = _resolve_display_name(db, player_id=plid) or "Khách"
+        if plid in existing_players:
+            skipped.append(name); continue
+        max_seed += 1
+        db.add(models.TournamentParticipant(tournament_id=tid, player_id=plid, team_name=name, seed=max_seed))
+        existing_players.add(plid); added += 1
+
+    db.commit(); db.refresh(t)
+    return {"added": added, "skipped": skipped, "tournament": schemas.TournamentOut.model_validate(t)}
 
 
 @app.delete("/api/tournaments/{tid}/participants/{pid}", status_code=204)
@@ -3076,17 +3228,29 @@ def _partner_people(draw: "models.TournamentPartnerDraw") -> list:
     return list(draw.pool_json or [])
 
 
+def _partner_step_dicts(steps) -> list:
+    """Các lượt đã quay → dict cho engine replay (partner_step_context v2 cần side/phase_index/team_index)."""
+    return [
+        {"step_index": st.step_index, "pid": st.pid, "side": st.side,
+         "phase_index": st.phase_index, "team_index": st.team_index}
+        for st in sorted(steps, key=lambda s: s.step_index)
+    ]
+
+
 def _partner_draw_out(draw: "models.TournamentPartnerDraw", t: "models.Tournament") -> dict:
     """Dựng PartnerDrawOut dùng chung admin & public. seed_hex chỉ lộ khi phiên đã kết thúc.
-    next_step = ngữ cảnh lượt kế tiếp (chỉ khi open và chưa đủ lượt) để UI biết ô nào/ai đủ điều kiện."""
+    next_step = ngữ cảnh lượt kế tiếp (chỉ khi open và chưa hết lượt) để UI biết ô nào/ai đủ điều kiện.
+    finished = không còn cặp hợp lệ (replay → None). stuck = lượt cuối là bên 1 mà bên 2 không còn ai
+    (dữ liệu hỏng / phiên engine cũ): không quay tiếp lẫn chốt được → UI gợi ý huỷ phiên và mở lại."""
     steps = sorted(draw.steps, key=lambda st: st.step_index)
     done = len(steps)
-    next_step = None
-    if draw.status == "open" and done < draw.total_steps:
-        ctx = partner_step_context(_partner_people(draw), draw.plan_json or {},
-                                   [{"step_index": st.step_index, "pid": st.pid} for st in steps], done)
-        if ctx["side"] is not None:
-            next_step = ctx
+    rules = normalize_partner_rules(draw.rules_json or [])   # phiên cũ lưu shape rank1/rank2 → luôn trả v2
+    step_dicts = _partner_step_dicts(steps)
+    people = _partner_people(draw)
+    ctx = partner_step_context(people, rules, step_dicts)
+    finished = ctx is None
+    stuck = ctx is not None and not ctx["eligible_pids"]
+    next_step = ctx if (draw.status == "open" and ctx is not None and not stuck) else None
     return {
         "id": draw.id,
         "tournament_id": draw.tournament_id,
@@ -3094,10 +3258,12 @@ def _partner_draw_out(draw: "models.TournamentPartnerDraw", t: "models.Tournamen
         "status": draw.status,
         "total_steps": draw.total_steps,
         "done_steps": done,
+        "finished": finished,
+        "stuck": stuck,
         "reveal_ms": draw.reveal_ms,
         "pool": list(draw.pool_json or []),
-        "rules": list(draw.rules_json or []),
-        "plan": dict(draw.plan_json or {}),
+        "rules": rules,
+        "plan": _normalize_partner_plan(draw.plan_json or {}),   # phiên cũ lưu plan shape cũ → luôn trả v2
         "next_step": next_step,
         "steps": [
             {
@@ -3169,15 +3335,9 @@ def open_partner_draw(
     if len(singles) < 2:
         raise HTTPException(400, "Cần ít nhất 2 người chưa có đội")
 
-    if data.rules is not None:
-        rules = [r.model_dump() for r in data.rules]
-    else:
-        rules = list(t.partner_rules or [])
-    for i, r in enumerate(rules):
-        if not str(r.get("rank1") or "").strip() or not str(r.get("rank2") or "").strip():
-            raise HTTPException(400, f"Quy tắc #{i + 1}: cần chọn đủ hạng cho cả 2 người")
-    rules = [{"rank1": normalize_rank(r["rank1"]), "rank2": normalize_rank(r["rank2"])} for r in rules]
-    t.partner_rules = rules   # lưu lại để lần mở sau / UI hiển thị
+    # Quy tắc v2: mỗi bên là DANH SÁCH hạng (rỗng = bất kỳ hạng); shape cũ rank1/rank2 được chuyển đổi
+    rules = normalize_partner_rules([r.model_dump() for r in data.rules] if data.rules is not None else t.partner_rules)
+    t.partner_rules = rules   # lưu lại (shape v2) để lần mở sau / UI hiển thị
 
     people = [
         {
@@ -3188,7 +3348,7 @@ def open_partner_draw(
         for p in singles
     ]
     plan = partner_draw_plan([{"pid": x["pid"], "rank": x["rank"]} for x in people], rules)
-    if plan["total_steps"] == 0:
+    if plan["total_steps_max"] == 0:
         db.rollback()
         raise HTTPException(400, "Không có quy tắc nào ghép được đội với danh sách hiện tại")
 
@@ -3206,7 +3366,7 @@ def open_partner_draw(
         pool_json=people,
         rules_json=rules,
         plan_json=plan,
-        total_steps=plan["total_steps"],
+        total_steps=plan["total_steps_max"],   # TRẦN THẬT số lượt (cận trên; số lượt thực tế có thể ít hơn — xem plan.total_steps_est)
         reveal_ms=data.reveal_ms,
         created_by=user.username if user is not None else None,
         created_at=_now_vn(),
@@ -3230,24 +3390,27 @@ def spin_partner_draw(
     perms: ClubPermissions = Depends(get_club_permission),
 ):
     """Quay một lượt: idx = SHA256("{seed}:{k}") mod (số người đủ điều kiện ở lượt k).
-    Đủ điều kiện = chưa được chọn và đúng hạng theo quy tắc của ô (người 1 → rank1, người 2 → rank2)."""
+    Đủ điều kiện (replay v2): chưa được chọn, hạng ∈ danh sách của bên (rỗng = bất kỳ); lượt bên 1 loại
+    những người mà nếu chọn thì bên 2 không còn ai; quy tắc dừng khi không còn cặp hợp lệ."""
     perms.require_edit()
     t = _get_club_tournament(db, tid, perms)
     pd = t.partner_draw
     if pd is None or pd.status != "open":
         raise HTTPException(409, "Không có phiên ghép đội đang mở")
-    done = len(pd.steps)
+    steps = _partner_step_dicts(pd.steps)
+    done = len(steps)
+    people = _partner_people(pd)
+    rules = normalize_partner_rules(pd.rules_json or [])
+    ctx = partner_step_context(people, rules, steps)
+    # Kết thúc = hết cặp hợp lệ (không so với trần total_steps: plan v2 là cận trên thật nên không thể vượt)
+    if ctx is None:
+        raise HTTPException(409, "Đã hết lượt hợp lệ — bấm 'Chốt & tạo đội'")
     if data.expected_step != done:
         raise HTTPException(409, "Lượt bốc không khớp — tải lại phiên")
-    if done >= pd.total_steps:
-        raise HTTPException(409, "Đã bốc đủ lượt — bấm 'Chốt & tạo đội'")
 
-    people = _partner_people(pd)
-    ctx = partner_step_context(people, pd.plan_json or {},
-                               [{"step_index": st.step_index, "pid": st.pid} for st in pd.steps], done)
     eligible = ctx["eligible_pids"]
     if not eligible:
-        raise HTTPException(409, "Kế hoạch ghép đội không hợp lệ")
+        raise HTTPException(409, "Phiên bị kẹt — bên 2 không còn ai đủ điều kiện; huỷ phiên và mở lại")
     idx = draw_pick_index(pd.seed_hex, done, len(eligible))
     pid = eligible[idx]
     person = next((x for x in people if x["pid"] == pid), {})
@@ -3290,8 +3453,15 @@ def commit_partner_draw(
     if pd is None or pd.status != "open":
         raise HTTPException(409, "Không có phiên ghép đội đang mở")
     steps = sorted(pd.steps, key=lambda st: st.step_index)
-    if len(steps) != pd.total_steps:
-        raise HTTPException(409, f"Chưa bốc đủ ({len(steps)}/{pd.total_steps} lượt)")
+    # Điều kiện chốt v2: đã có lượt, lượt cuối là bên 2 (không có đội dở dang) và không còn cặp hợp lệ.
+    # Số lượt thực tế có thể ÍT hơn trần total_steps khi hai bên trùng hạng (trần chỉ là cận trên).
+    step_dicts = _partner_step_dicts(steps)
+    rules = normalize_partner_rules(pd.rules_json or [])
+    if partner_draw_stuck(_partner_people(pd), rules, step_dicts):
+        raise HTTPException(409, "Phiên bị kẹt — bên 2 không còn ai đủ điều kiện; huỷ phiên và mở lại")
+    finished = partner_draw_finished(_partner_people(pd), rules, step_dicts)
+    if not steps or steps[-1].side != 2 or not finished:
+        raise HTTPException(409, "Chưa hết lượt — còn người đủ điều kiện để quay")
     if t.status != models.TournamentStatus.draft:
         raise HTTPException(400, "Ghép đội bằng vòng quay chỉ thực hiện khi giải ở trạng thái Nháp")
     singles_by_id = {p.id: p for p in _single_participants(t)}

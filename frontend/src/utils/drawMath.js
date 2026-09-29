@@ -172,14 +172,22 @@ export async function verifyDraw(draw) {
   return { ok: allOk, commitOk, steps: results };
 }
 
-// ── Ghép ĐỘI ĐÔI bằng vòng quay (partner draw) — mirror tournament_engine.py:
-//    normalize_rank / partner_draw_plan / partner_step_context / draw_pick_index ─────────────
+// ── Ghép ĐỘI ĐÔI bằng vòng quay (partner draw) v2 — mirror tournament_engine.py:
+//    normalize_rank / normalize_partner_rules / _side_pool / partner_draw_plan / partner_step_context /
+//    partner_draw_finished / partner_draw_stuck / draw_pick_index.
+//    Quy tắc NHIỀU HẠNG mỗi bên: {ranks1: [...], ranks2: [...]} — bên rỗng = bất kỳ hạng.
+//    Plan API luôn là v2 (server chuẩn hoá cả phiên cũ) nên KHÔNG còn fallback rank1/rank2/team_count/total_steps.
+//    Danh sách hạng của CLB lấy từ hook useRankLevels (không còn mảng cứng ở đây).
 export const UNRANKED = "Chưa xếp hạng";
-export const PARTNER_RANK_OPTIONS = ["A", "B", "C", "D", "Hạt giống 1", "Hạt giống 2", "Hạt giống 3", UNRANKED];
 
 /** Hạng đã chuẩn hoá: null/""/khoảng trắng → "Chưa xếp hạng", còn lại trim. */
+export function normalizeRank(r) {
+  const s = r == null ? "" : String(r).trim();
+  return s === "" ? UNRANKED : s;
+}
+
 /**
- * Nhãn hạng để ghép câu: "hạng A" / "Chưa xếp hạng" (không thành "hạng Chưa xếp hạng").
+ * Nhãn MỘT hạng để ghép câu: "hạng A" / "Chưa xếp hạng" (không thành "hạng Chưa xếp hạng").
  * cap=true → viết hoa chữ đầu ("Hạng A") cho tiêu đề.
  */
 export function rankLabel(r, cap = false) {
@@ -188,136 +196,229 @@ export function rankLabel(r, cap = false) {
   return `${cap ? "Hạng" : "hạng"} ${v}`;
 }
 
-export function normalizeRank(r) {
-  const s = r == null ? "" : String(r).trim();
-  return s === "" ? UNRANKED : s;
+/**
+ * Danh sách hạng một bên đã chuẩn hoá — mirror vòng lặp trong normalize_partner_rules:
+ * phần tử null/""/khoảng trắng bị BỎ (để trống ≠ "Chưa xếp hạng"; muốn hạng đó thì chọn tường minh UNRANKED),
+ * loại trùng, giữ thứ tự; không phải mảng → [].
+ */
+function normalizeRankList(list) {
+  const out = [];
+  (Array.isArray(list) ? list : []).forEach((r) => {
+    if (r == null || !String(r).trim()) return;
+    const v = normalizeRank(r);
+    if (!out.includes(v)) out.push(v);
+  });
+  return out;
 }
+
+/**
+ * Nhãn NHIỀU hạng của một bên quy tắc: ["A","B"] → "A/B"; [] → "bất kỳ hạng"; ["Chưa xếp hạng"] → "Chưa xếp hạng".
+ * Dùng cho dòng quy tắc, biên bản, xem trước kế hoạch.
+ */
+export function ranksLabel(ranks) {
+  const list = normalizeRankList(ranks);
+  if (!list.length) return "bất kỳ hạng";
+  return list.join("/");
+}
+
+/**
+ * Cụm từ đầy đủ để ghép câu: "hạng A/B" / "bất kỳ hạng" / "Chưa xếp hạng" (có "Chưa xếp hạng" trong
+ * nhiều hạng → "hạng A/Chưa xếp hạng"). cap=true → viết hoa chữ đầu ("Hạng A/B", "Bất kỳ hạng").
+ */
+export function ranksPhrase(ranks, cap = false) {
+  const list = normalizeRankList(ranks);
+  let s;
+  if (!list.length) s = "bất kỳ hạng";
+  else if (list.length === 1 && list[0] === UNRANKED) s = UNRANKED;
+  else s = `hạng ${list.join("/")}`;
+  return cap ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+}
+
+/**
+ * Chuẩn hoá quy tắc về shape mới — mirror normalize_partner_rules:
+ *   nhận [] / null / [{rank1, rank2}] (cũ) / [{ranks1: [...], ranks2: [...]}] (mới)
+ *   → luôn trả [{ranks1: [...], ranks2: [...]}]; rank1 chuỗi được gộp vào ranks1 (nếu có cả hai);
+ *   rank1/rank2 = null/""/khoảng trắng và phần tử rỗng trong ranks1/ranks2 bị BỎ; loại trùng, giữ thứ tự.
+ *   Quy tắc CẢ 2 bên rỗng vẫn giữ (= "bất kỳ + bất kỳ", ghép ngẫu nhiên toàn bộ).
+ */
+export function normalizePartnerRules(rules) {
+  if (!Array.isArray(rules)) return [];
+  const side = (list, legacy) => normalizeRankList([...(Array.isArray(list) ? list : []), legacy]);
+  return rules
+    .filter((r) => r && typeof r === "object")
+    .map((r) => ({ ranks1: side(r.ranks1, r.rank1), ranks2: side(r.ranks2, r.rank2) }));
+}
+
+/** Quy tắc để tính plan/replay — rỗng → 1 quy tắc "bất kỳ + bất kỳ" (như engine). */
+const rulesOrDefault = (rules) => {
+  const list = normalizePartnerRules(rules);
+  return list.length ? list : [{ ranks1: [], ranks2: [] }];
+};
 
 const sortPeople = (people) =>
   [...(people || [])]
     .map((p) => ({ pid: Number(p.pid), rank: normalizeRank(p.rank) }))
     .sort((a, b) => a.pid - b.pid);
 
+/** Người còn lại thoả một bên quy tắc — mirror _side_pool: ranks rỗng → tất cả; else rank ∈ ranks. */
+function sidePool(remaining, ranks) {
+  const list = Array.isArray(ranks) ? ranks : [];
+  if (!list.length) return [...remaining];
+  return remaining.filter((p) => list.includes(p.rank));
+}
+
 /**
- * Kế hoạch ghép đội — công bố TRƯỚC lượt đầu để kiểm chứng được.
- *   people: [{pid, rank}] ; rules: [{rank1, rank2}] hoặc [] (rỗng = ngẫu nhiên toàn bộ).
- * Mô phỏng các quy tắc THEO THỨ TỰ với bộ đếm còn lại theo hạng (quy tắc trước tiêu thụ người trước):
- *   cùng hạng → team_count = còn // 2 ; khác hạng → min(còn1, còn2).
- * Trả {phases: [{index (vị trí quy tắc gốc), rank1|null, rank2|null, team_count}] (chỉ phase có đội),
- *      total_steps: 2 × Σ team_count,
- *      unpaired_pids: người KHÔNG THỂ vào đội nào theo kế hoạch (hạng không được quy tắc nào dùng tới,
- *                     kể cả "Chưa xếp hạng"). Người dư của một hạng CÓ được dùng (VD 3 A ghép A+B với 2 B)
- *                     chỉ biết sau khi quay xong, không nằm trong danh sách này.}
+ * (team, only1, only2, both) của một quy tắc trên `pool` — mirror _pair_capacity:
+ *   S1/S2 theo sidePool; a=|S1\S2|, b=|S2\S1|, c=|S1∩S2|; team = min(a+c, b+c, (a+b+c)//2) (cỡ ghép cặp lớn nhất).
+ */
+function pairCapacity(pool, ranks1, ranks2) {
+  const s1 = sidePool(pool, ranks1);
+  const s2 = sidePool(pool, ranks2);
+  const in1 = new Set(s1.map((p) => p.pid));
+  const in2 = new Set(s2.map((p) => p.pid));
+  const only1 = s1.filter((p) => !in2.has(p.pid));
+  const only2 = s2.filter((p) => !in1.has(p.pid));
+  const both = s1.filter((p) => in2.has(p.pid));
+  const a = only1.length, b = only2.length, c = both.length;
+  return { team: Math.min(a + c, b + c, Math.floor((a + b + c) / 2)), only1, only2, both };
+}
+
+/**
+ * Kế hoạch (ƯỚC LƯỢNG) ghép đội v2 — công bố TRƯỚC lượt đầu — mirror partner_draw_plan.
+ *   people: [{pid, rank}] ; rules: [] / [{rank1,rank2}] / [{ranks1,ranks2}] (tự normalize; rỗng → 1 quy tắc bất kỳ + bất kỳ).
+ *   Mỗi phase:
+ *     team_cap = cỡ ghép cặp lớn nhất của quy tắc trên TOÀN BỘ pool (không trừ tiêu thụ) — cận trên THẬT;
+ *     team_max = cỡ ghép cặp lớn nhất trên phần "remaining" ước lượng (DỰ KIẾN, có thể nhiều/ít hơn khi bốc thật);
+ *     overlap = hai bên có người chung (c > 0).
+ *     Tiêu thụ ước lượng cho phase sau (lặp team_max lần): bên 1 lấy từ S1\S2 trước, hết thì từ giao;
+ *     bên 2 lấy từ S2\S1 trước, hết thì từ giao.
+ * Trả {phases: [{index, ranks1, ranks2, team_max, team_cap, overlap}] (MỌI quy tắc, kể cả team_max 0),
+ *      total_steps_est: 2 × Σ team_max (con số "dự kiến"),
+ *      total_steps_max: 2 × min(Σ team_cap, n // 2) (TRẦN THẬT — replay không bao giờ vượt; ≥ total_steps_est),
+ *      unpaired_pids: người có hạng ∉ hợp của mọi ranks1 ∪ ranks2 (chỉ khi KHÔNG phase nào có bên rỗng),
+ *      estimated: có phase overlap → số đội/lượt chỉ là ước lượng}.
  */
 export function partnerPlan(people, rules) {
   const ppl = sortPeople(people);
-  const n = ppl.length;
-  const list = Array.isArray(rules) ? rules : [];
-  if (list.length === 0) {
-    const tc = Math.floor(n / 2);
-    return {
-      phases: tc > 0 ? [{ index: 0, rank1: null, rank2: null, team_count: tc }] : [],
-      total_steps: 2 * tc,
-      unpaired_pids: [],
-    };
-  }
-  const remain = {};
-  ppl.forEach((p) => { remain[p.rank] = (remain[p.rank] || 0) + 1; });
-  const usedRanks = new Set();
+  const list = rulesOrDefault(rules);
+  let remaining = [...ppl];
   const phases = [];
   list.forEach((rule, i) => {
-    const r1 = normalizeRank(rule?.rank1);
-    const r2 = normalizeRank(rule?.rank2);
-    let tc;
-    if (r1 === r2) {
-      tc = Math.floor((remain[r1] || 0) / 2);
-      remain[r1] = (remain[r1] || 0) - 2 * tc;
-    } else {
-      tc = Math.min(remain[r1] || 0, remain[r2] || 0);
-      remain[r1] = (remain[r1] || 0) - tc;
-      remain[r2] = (remain[r2] || 0) - tc;
+    const { team: teamCap } = pairCapacity(ppl, rule.ranks1, rule.ranks2);                       // trên toàn bộ pool
+    const { team: teamMax, only1, only2, both } = pairCapacity(remaining, rule.ranks1, rule.ranks2); // trên phần còn lại
+    phases.push({
+      index: i, ranks1: [...rule.ranks1], ranks2: [...rule.ranks2],
+      team_max: teamMax, team_cap: teamCap, overlap: both.length > 0,
+    });
+    // Tiêu thụ ước lượng: ưu tiên người CHỈ thuộc một bên, giữ người thuộc giao cho lượt/phase sau
+    const used = new Set();
+    const take = (primary, fallback) => {
+      const src = primary.find((p) => !used.has(p.pid)) || fallback.find((p) => !used.has(p.pid));
+      if (src) used.add(src.pid);
+    };
+    for (let t = 0; t < teamMax; t++) {
+      take(only1, both);
+      take(only2, both);
     }
-    if (tc > 0) {
-      phases.push({ index: i, rank1: r1, rank2: r2, team_count: tc });
-      usedRanks.add(r1); usedRanks.add(r2);
-    }
+    remaining = remaining.filter((p) => !used.has(p.pid));
   });
-  const totalTeams = phases.reduce((s, ph) => s + ph.team_count, 0);
+  const anyOpenSide = list.some((r) => !r.ranks1.length || !r.ranks2.length);
+  const union = new Set();
+  list.forEach((r) => { r.ranks1.forEach((x) => union.add(x)); r.ranks2.forEach((x) => union.add(x)); });
   return {
     phases,
-    total_steps: 2 * totalTeams,
-    unpaired_pids: ppl.filter((p) => !usedRanks.has(p.rank)).map((p) => p.pid),
+    total_steps_max: 2 * Math.min(phases.reduce((s, ph) => s + ph.team_cap, 0), Math.floor(ppl.length / 2)),
+    total_steps_est: 2 * phases.reduce((s, ph) => s + ph.team_max, 0),
+    unpaired_pids: anyOpenSide ? [] : ppl.filter((p) => !union.has(p.rank)).map((p) => p.pid),
+    estimated: phases.some((ph) => ph.overlap),
   };
 }
 
-/** Phase + số thứ tự đội (0-based toàn phiên) + bên (1|2) của lượt k, chạy tuần tự qua các phase. */
-function locateStep(plan, k) {
-  let offset = 0;
-  let teamBase = 0;
-  const phases = plan?.phases || [];
-  for (let pi = 0; pi < phases.length; pi++) {
-    const ph = phases[pi];
-    const tc = Number(ph.team_count) || 0;
-    const span = 2 * tc;
-    if (k < offset + span) {
-      const local = k - offset;
-      // phase_index = "index" của phase (thứ tự quy tắc gốc) — giống engine; vị trí mảng chỉ để dự phòng
-      const phaseIndex = Number.isFinite(Number(ph.index)) ? Number(ph.index) : pi;
-      return { phase: ph, phase_index: phaseIndex, team_index: teamBase + Math.floor(local / 2), side: (local % 2) + 1 };
+/**
+ * Ngữ cảnh lượt kế tiếp v2 — mirror partner_step_context: KHÔNG nhận k, k = số step đã có. Replay tất định:
+ *   picked = {pid các step}; remaining = people − picked.
+ *   Nếu step cuối là bên 1 → lượt bên 2 cùng phase/đội: eligible = sidePool(remaining, ranks2).
+ *   Ngược lại → duyệt phase từ phase của step cuối (hoặc 0): S1, S2 theo sidePool;
+ *     eligible1 = người trong S1 mà khi bỏ họ ra S2 vẫn còn ≥ 1 (tránh đội dở dang);
+ *     eligible1 rỗng → phase kế tiếp; hết phase → null (đã hết lượt hợp lệ, người còn lại ghép tay).
+ *     team_index = số step bên 2 đã có (đội mới, 0-based).
+ * Trả {step_index, phase_index, team_index, side, eligible_pids (sắp theo pid)} hoặc null.
+ */
+export function partnerStepContext(people, rules, stepsSoFar) {
+  const ppl = sortPeople(people);
+  const list = rulesOrDefault(rules);
+  const steps = [...(stepsSoFar || [])].sort((a, b) => a.step_index - b.step_index);
+  const k = steps.length;
+  const picked = new Set(steps.map((s) => Number(s.pid)));
+  const remaining = ppl.filter((p) => !picked.has(p.pid));
+  const last = steps.length ? steps[steps.length - 1] : null;
+  // Kẹp chỉ số phase vào [0, số quy tắc − 1] như engine (dữ liệu lệch không làm replay văng)
+  const clamp = (v) => Math.min(Math.max(Number(v) || 0, 0), list.length - 1);
+
+  if (last && Number(last.side) === 1) {
+    const pi = clamp(last.phase_index);
+    return {
+      step_index: k, phase_index: pi, team_index: Number(last.team_index) || 0, side: 2,
+      eligible_pids: sidePool(remaining, list[pi].ranks2).map((p) => p.pid),
+    };
+  }
+  const start = last ? clamp(last.phase_index) : 0;
+  const teamIndex = steps.filter((s) => Number(s.side) === 2).length;
+  for (let pi = start; pi < list.length; pi++) {
+    const rule = list[pi];
+    const s1 = sidePool(remaining, rule.ranks1);
+    const s2 = sidePool(remaining, rule.ranks2);
+    const eligible1 = s1.filter((x) => s2.some((y) => y.pid !== x.pid));
+    if (eligible1.length) {
+      return { step_index: k, phase_index: pi, team_index: teamIndex, side: 1, eligible_pids: eligible1.map((p) => p.pid) };
     }
-    offset += span;
-    teamBase += tc;
   }
   return null;
 }
 
 /**
- * Ngữ cảnh lượt k: phase / đội / bên và danh sách người đủ điều kiện (chưa được chọn, đúng hạng theo
- * quy tắc — null = mọi người), sắp theo pid tăng dần. `rules` nhận [{rank1,rank2}] hoặc sẵn một plan
- * ({phases}) để khỏi tính lại. k vượt quá kế hoạch → eligible_pids rỗng, phase/team/side null (như engine).
+ * Phiên đã hết lượt — mirror partner_draw_finished: không còn cặp hợp lệ (replay → null).
+ * KHÔNG so với trần total_steps: total_steps_max của plan v2 là cận trên thật nên replay không thể vượt.
  */
-export function partnerStepContext(people, rules, stepsSoFar, k) {
-  const ppl = sortPeople(people);
-  const plan = rules && !Array.isArray(rules) && Array.isArray(rules.phases) ? rules : partnerPlan(ppl, rules);
-  const loc = locateStep(plan, Number(k) || 0);
-  if (!loc) return { step_index: Number(k) || 0, phase_index: null, team_index: null, side: null, eligible_pids: [] };
-  const picked = new Set((stepsSoFar || []).map((s) => Number(s.pid)));
-  const want = loc.side === 1 ? loc.phase.rank1 : loc.phase.rank2;
-  const eligible = ppl
-    .filter((p) => !picked.has(p.pid) && (want == null || p.rank === want))
-    .map((p) => p.pid);
-  return {
-    step_index: Number(k) || 0,
-    phase_index: loc.phase_index,
-    team_index: loc.team_index,
-    side: loc.side,
-    eligible_pids: eligible,
-  };
+export function partnerDrawFinished(people, rules, steps) {
+  return partnerStepContext(people, rules, steps) === null;
 }
 
-/** Hạng yêu cầu ở ô (team_index, side) theo kế hoạch — null nếu không lọc hạng / không tìm thấy. */
-export function partnerSlotRank(plan, teamIndex, side) {
-  let base = 0;
-  for (const ph of plan?.phases || []) {
-    const tc = Number(ph.team_count) || 0;
-    if (teamIndex < base + tc) return (side === 1 ? ph.rank1 : ph.rank2) ?? null;
-    base += tc;
-  }
-  return null;
+/**
+ * Phiên KẸT — mirror partner_draw_stuck: lượt cuối là bên 1 mà bên 2 không còn ai đủ điều kiện (chỉ xảy ra với
+ * dữ liệu hỏng / phiên mở bằng engine cũ). Không quay tiếp lẫn chốt được → huỷ phiên và mở lại.
+ */
+export function partnerDrawStuck(people, rules, steps) {
+  const ctx = partnerStepContext(people, rules, steps);
+  return ctx !== null && ctx.eligible_pids.length === 0;
 }
 
-/** Nhãn ô đích của một lượt: "Đội 3 – Người 1" + " (hạng A)" khi quy tắc có lọc hạng. */
+/** Hạng yêu cầu (mảng) của một bên trong phase v2 — [] = bất kỳ hạng / không có phase. */
+export function phaseRanks(ph, side) {
+  const list = Number(side) === 1 ? ph?.ranks1 : ph?.ranks2;
+  return Array.isArray(list) ? list : [];
+}
+
+/** Phase của một step/ctx trong plan: khớp theo ph.index (thứ tự quy tắc) — dự phòng theo vị trí mảng. */
+function planPhaseFor(plan, phaseIndex) {
+  const phases = plan?.phases || [];
+  const idx = Number(phaseIndex);
+  if (!Number.isFinite(idx)) return null;
+  return phases.find((ph) => Number(ph.index) === idx) || phases[idx] || null;
+}
+
+/** Nhãn ô đích của một lượt: "Đội 3 – Người 1 (hạng A/B)" | "… (bất kỳ hạng)" | "… (Chưa xếp hạng)". */
 export function partnerLabelForStep(ctx, plan) {
   if (!ctx) return "";
   const base = `Đội ${(Number(ctx.team_index) || 0) + 1} – Người ${ctx.side}`;
-  const rank = partnerSlotRank(plan, Number(ctx.team_index) || 0, ctx.side);
-  return rank ? `${base} (${rankLabel(rank)})` : base;
+  return `${base} (${ranksPhrase(phaseRanks(planPhaseFor(plan, ctx.phase_index), ctx.side))})`;
 }
 
 /**
- * Kiểm chứng phiên ghép đội đã lộ seed:
+ * Kiểm chứng phiên ghép đội đã lộ seed (v2):
  *   - SHA256(seed_hex) == seed_commit
- *   - lượt k: eligible_k tái lập từ pool + rules + các lượt trước; eligible_k[SHA256(`${seed}:${k}`) mod len] == pid
+ *   - lượt k: ctx_k tái lập từ pool + rules + các lượt trước (replay); eligible_k[SHA256(`${seed}:${k}`) mod len] == pid,
+ *     và ô ghi nhận (phase/đội/bên) khớp replay.
  * Trả null nếu không tính được (thiếu seed_hex hoặc không có crypto.subtle).
  */
 export async function verifyPartnerDraw(draw) {
@@ -326,21 +427,29 @@ export async function verifyPartnerDraw(draw) {
   if (commit === null) return null;
   const commitOk = commit === draw.seed_commit;
   const people = sortPeople(draw.pool || []);
-  const plan = partnerPlan(people, draw.rules || []);
+  const rules = normalizePartnerRules(draw.rules || []);
   const steps = [...(draw.steps || [])].sort((a, b) => a.step_index - b.step_index);
   const results = [];
   let allOk = commitOk;
   for (let k = 0; k < steps.length; k++) {
-    const ctx = partnerStepContext(people, plan, steps.slice(0, k), steps[k].step_index);
+    const st = steps[k];
+    const ctx = partnerStepContext(people, rules, steps.slice(0, k));
     const eligible = ctx?.eligible_pids || [];
-    const h = await sha256Hex(`${draw.seed_hex}:${steps[k].step_index}`);
+    const h = await sha256Hex(`${draw.seed_hex}:${st.step_index}`);
     const idx = pickIndexFromHash(h, eligible.length);
     const expected = eligible.length ? eligible[idx] : null;
-    const ok = expected != null && expected === Number(steps[k].pid);
+    const slotOk = !!ctx
+      && (st.side == null || Number(st.side) === ctx.side)
+      && (st.team_index == null || Number(st.team_index) === ctx.team_index);
+    const ok = expected != null && expected === Number(st.pid) && slotOk;
     if (!ok) allOk = false;
     results.push({
-      step_index: steps[k].step_index, expected_pid: expected, actual_pid: steps[k].pid, pick_index: idx, ok,
+      step_index: st.step_index, expected_pid: expected, actual_pid: st.pid, pick_index: idx, ok, slot_ok: slotOk,
     });
   }
-  return { ok: allOk, commitOk, steps: results };
+  // Thông tin thêm (không gộp vào `ok` vì phiên huỷ giữa chừng vẫn kiểm chứng được các lượt đã quay):
+  // finished = replay sau lượt cuối không còn cặp hợp lệ; stuck = bên 2 không còn ai (dữ liệu hỏng)
+  const finished = partnerDrawFinished(people, rules, steps);
+  const stuck = partnerDrawStuck(people, rules, steps);
+  return { ok: allOk, commitOk, finished, stuck, steps: results };
 }

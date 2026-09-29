@@ -68,9 +68,11 @@ def _teams(t):
 
 
 def _spin_all(client, world, tid, draw):
-    """Quay đủ total_steps lượt; kiểm tra next_step/side/eligible nhất quán giữa các response."""
-    n = draw["total_steps"]
-    for k in range(n):
+    """Quay tới khi `finished` (v2: số lượt có thể < trần total_steps khi hai bên trùng hạng);
+    kiểm tra next_step/side/eligible nhất quán giữa các response."""
+    k = draw["done_steps"]
+    while not draw["finished"]:
+        assert k < draw["total_steps"]
         nxt = draw["next_step"]
         assert nxt is not None and nxt["step_index"] == k
         r = _spin(client, world, tid, k)
@@ -85,48 +87,60 @@ def _spin_all(client, world, tid, draw):
         assert st["pid"] in st["eligible_pids"]
         assert st["auto"] == (len(st["eligible_pids"]) == 1)
         assert isinstance(st["spun_at_ms"], int) and isinstance(draw["server_now_ms"], int)
-    assert draw["next_step"] is None
+        k += 1
+    assert draw["next_step"] is None and draw["finished"] is True
+    assert draw["done_steps"] % 2 == 0 and draw["done_steps"] <= draw["total_steps"]
     return draw
 
 
-def _phase_side_for_step(plan, k):
-    """Tái lập ĐỘC LẬP (không dùng engine) phase/side/team_index của lượt k từ plan['phases']:
-    mỗi phase chiếm 2*team_count lượt liên tiếp; lượt chẵn = người 1, lượt lẻ = người 2."""
-    offset, team_base = 0, 0
-    for ph in plan["phases"]:
-        span = 2 * ph["team_count"]
-        if k < offset + span:
-            local = k - offset
-            side = 1 if local % 2 == 0 else 2
-            return ph, side, team_base + local // 2
-        offset += span
-        team_base += ph["team_count"]
-    raise AssertionError(f"lượt {k} vượt kế hoạch")
+def _replay_next(people, rules, steps):
+    """Tái lập ĐỘC LẬP (không dùng engine) ngữ cảnh lượt kế tiếp theo quy tắc v2:
+    - lượt trước là bên 1 → bên 2 cùng đội, eligible = người còn lại có hạng ∈ ranks2 (rỗng = bất kỳ);
+    - ngược lại duyệt quy tắc từ quy tắc của lượt trước: eligible bên 1 = người ∈ S1 mà bên 2 vẫn còn người khác;
+    - hết quy tắc → None. Trả (phase_index, side, team_index, eligible)."""
+    rules = rules or [{"ranks1": [], "ranks2": []}]
+    picked = {s["pid"] for s in steps}
+    rem = [p for p in people if p["pid"] not in picked]
+
+    def pool(ranks):
+        return sorted(p["pid"] for p in rem if not ranks or p["rank"] in ranks)
+
+    if steps and steps[-1]["side"] == 1:
+        ph = steps[-1]["phase_index"]
+        return ph, 2, steps[-1]["team_index"], pool(rules[ph]["ranks2"])
+    start = steps[-1]["phase_index"] if steps else 0
+    team_index = sum(1 for s in steps if s["side"] == 2)
+    for i in range(start, len(rules)):
+        s2 = pool(rules[i]["ranks2"])
+        elig = [x for x in pool(rules[i]["ranks1"]) if any(y != x for y in s2)]
+        if elig:
+            return i, 1, team_index, elig
+    return None
 
 
 def _verify_picks(draw):
-    """Khán giả kiểm chứng: tái lập eligible từ pool + plan + steps trước (KHÔNG gọi engine backend,
+    """Khán giả kiểm chứng: tái lập eligible từ pool + rules + steps trước (KHÔNG gọi engine backend,
     để engine sai cùng kiểu ở cả spin lẫn kiểm chứng vẫn bị phát hiện), idx bằng hashlib thô."""
     seed_hex = draw["seed_hex"]
     assert seed_hex and hashlib.sha256(seed_hex.encode()).hexdigest() == draw["seed_commit"]
     people = [{"pid": x["pid"], "rank": x["rank"]} for x in draw["pool"]]
-    picked = set()
-    for k, st in enumerate(sorted(draw["steps"], key=lambda s: s["step_index"])):
-        ph, side, team_index = _phase_side_for_step(draw["plan"], k)
-        rank_needed = ph["rank1"] if side == 1 else ph["rank2"]
-        eligible = sorted(p["pid"] for p in people
-                          if p["pid"] not in picked and (rank_needed is None or p["rank"] == rank_needed))
+    steps = sorted(draw["steps"], key=lambda s: s["step_index"])
+    for k, st in enumerate(steps):
+        ctx = _replay_next(people, draw["rules"], steps[:k])
+        assert ctx is not None, f"lượt {k} không còn cặp hợp lệ"
+        phase_index, side, team_index, eligible = ctx
         assert st["step_index"] == k and st["side"] == side and st["team_index"] == team_index
-        assert st["phase_index"] == ph["index"]
+        assert st["phase_index"] == phase_index
         assert eligible == st["eligible_pids"]
         idx = int(hashlib.sha256(f"{seed_hex}:{k}".encode()).hexdigest(), 16) % len(eligible)
         assert st["pick_index"] == idx and st["pid"] == eligible[idx]
-        picked.add(st["pid"])
+    # Phiên đã chốt: không còn cặp hợp lệ hoặc đã chạm trần
+    assert _replay_next(people, draw["rules"], steps) is None or len(steps) == draw["total_steps"]
 
 
 PUBLIC_KEYS = {
-    "id", "tournament_id", "seq", "status", "total_steps", "done_steps", "reveal_ms", "pool", "rules", "plan",
-    "next_step", "steps", "seed_commit", "seed_hex", "created_at", "committed_at", "cancelled_at",
+    "id", "tournament_id", "seq", "status", "total_steps", "done_steps", "finished", "stuck", "reveal_ms", "pool", "rules",
+    "plan", "next_step", "steps", "seed_commit", "seed_hex", "created_at", "committed_at", "cancelled_at",
     "cancel_reason", "server_now_ms",
 }
 POOL_KEYS = {"pid", "member_id", "player_id", "name", "rank"}
@@ -148,76 +162,83 @@ def _ppl(*ranks):
 @pytest.mark.parametrize("n,teams", [(6, 3), (7, 3), (2, 1), (1, 0)])
 def test_plan_no_rules(n, teams):
     plan = eng.partner_draw_plan(_ppl(*(["A"] * n)), [])
-    assert plan["total_steps"] == 2 * teams
-    if teams:
-        assert plan["phases"] == [{"index": 0, "rank1": None, "rank2": None, "team_count": teams}]
-    else:
-        assert plan["phases"] == []
+    assert plan["total_steps_max"] == 2 * teams
+    # v2: không quy tắc → 1 phase "bất kỳ + bất kỳ" (2 bên rỗng), team_max = n // 2, luôn overlap
+    assert plan["phases"] == [{"index": 0, "ranks1": [], "ranks2": [], "team_max": teams, "team_cap": teams, "overlap": True}]
+    assert plan["total_steps_est"] == 2 * teams
     assert plan["unpaired_pids"] == []   # người dư chỉ xác định sau khi quay
 
 
 def test_plan_same_rank_odd():
     plan = eng.partner_draw_plan(_ppl("A", "A", "A", "B"), [{"rank1": "A", "rank2": "A"}])
-    assert plan["phases"] == [{"index": 0, "rank1": "A", "rank2": "A", "team_count": 1}]
-    assert plan["total_steps"] == 2
+    assert plan["phases"] == [{"index": 0, "ranks1": ["A"], "ranks2": ["A"], "team_max": 1, "team_cap": 1, "overlap": True}]
+    assert plan["total_steps_max"] == 2
     assert plan["unpaired_pids"] == [4]              # hạng B không quy tắc nào dùng
-    assert plan["leftover_by_rank"] == {"A": 1}      # 1 A dư — ai dư biết sau khi quay
+    assert plan["estimated"] is True                 # cùng hạng 2 bên → 1 A dư, ai dư biết sau khi quay
 
 
 def test_plan_cross_rank_uneven():
     plan = eng.partner_draw_plan(_ppl("A", "A", "A", "B", "B"), [{"rank1": "A", "rank2": "B"}])
-    assert plan["phases"][0]["team_count"] == 2 and plan["total_steps"] == 4
-    assert plan["unpaired_pids"] == [] and plan["leftover_by_rank"] == {"A": 1}
+    assert plan["phases"][0]["team_max"] == 2 and plan["total_steps_max"] == 4
+    assert plan["phases"][0]["overlap"] is False and plan["estimated"] is False
+    assert plan["unpaired_pids"] == []
 
 
 def test_plan_overlapping_rules_consume_in_order():
-    # A+B rồi B+C: B bị A+B tiêu thụ trước → B+C không còn B → phase bị bỏ, C dư toàn bộ
+    # A+B rồi B+C: B bị A+B tiêu thụ trước → B+C không còn B → phase 2 tối đa 0 đội (C ghép tay)
     plan = eng.partner_draw_plan(_ppl("A", "A", "B", "B", "C", "C"),
                                  [{"rank1": "A", "rank2": "B"}, {"rank1": "B", "rank2": "C"}])
-    assert [ph["index"] for ph in plan["phases"]] == [0]
-    assert plan["phases"][0]["team_count"] == 2
-    assert plan["unpaired_pids"] == [5, 6]
-    # Đảo thứ tự: B+C trước → A dư
+    assert [ph["index"] for ph in plan["phases"]] == [0, 1]
+    assert [ph["team_max"] for ph in plan["phases"]] == [2, 0] and plan["total_steps_est"] == 4
+    # Trần THẬT: team_cap tính trên toàn bộ pool [2, 2] → 2 × min(4, 6 // 2) = 6 ≥ dự kiến 4
+    assert [ph["team_cap"] for ph in plan["phases"]] == [2, 2] and plan["total_steps_max"] == 6
+    assert plan["unpaired_pids"] == []               # C có trong hợp các hạng → không "không khớp", chỉ là dư
+    # Đảo thứ tự: B+C trước → A+B không còn B
     plan2 = eng.partner_draw_plan(_ppl("A", "A", "B", "B", "C", "C"),
                                   [{"rank1": "B", "rank2": "C"}, {"rank1": "A", "rank2": "B"}])
-    assert [ph["index"] for ph in plan2["phases"]] == [0] and plan2["unpaired_pids"] == [1, 2]
+    assert [ph["team_max"] for ph in plan2["phases"]] == [2, 0] and plan2["total_steps_est"] == 4
+    assert plan2["total_steps_max"] == 6
 
 
 def test_plan_unranked_go_unpaired_and_rule_ranks_normalized():
     plan = eng.partner_draw_plan(_ppl("A", "A", eng.UNRANKED), [{"rank1": " A ", "rank2": "A"}])
-    assert plan["phases"][0]["rank1"] == "A" and plan["total_steps"] == 2
+    assert plan["phases"][0]["ranks1"] == ["A"] and plan["total_steps_max"] == 2
     assert plan["unpaired_pids"] == [3]
     # Quy tắc nhắc tới hạng "Chưa xếp hạng" thì người không hạng vẫn ghép được
     plan2 = eng.partner_draw_plan(_ppl("A", eng.UNRANKED), [{"rank1": "A", "rank2": eng.UNRANKED}])
-    assert plan2["total_steps"] == 2 and plan2["unpaired_pids"] == []
+    assert plan2["total_steps_max"] == 2 and plan2["unpaired_pids"] == []
 
 
 def test_plan_no_rule_matches_gives_zero_steps():
     plan = eng.partner_draw_plan(_ppl("A", "B"), [{"rank1": "C", "rank2": "D"}])
-    assert plan["phases"] == [] and plan["total_steps"] == 0 and plan["unpaired_pids"] == [1, 2]
+    assert [ph["team_max"] for ph in plan["phases"]] == [0]
+    assert plan["total_steps_max"] == 0 and plan["unpaired_pids"] == [1, 2]
+
+
+def _st(pid, side, phase_index, team_index):
+    return {"pid": pid, "side": side, "phase_index": phase_index, "team_index": team_index}
 
 
 def test_step_context_sides_eligible_and_multi_phase():
     people = _ppl("A", "A", "B", "B", "C", "C")
     rules = [{"rank1": "A", "rank2": "B"}, {"rank1": "C", "rank2": "C"}]
     plan = eng.partner_draw_plan(people, rules)
-    assert [ph["team_count"] for ph in plan["phases"]] == [2, 1] and plan["total_steps"] == 6
-    c0 = eng.partner_step_context(people, plan, [], 0)
-    assert (c0["phase_index"], c0["team_index"], c0["side"], c0["eligible_pids"]) == (0, 0, 1, [1, 2])
-    c1 = eng.partner_step_context(people, plan, [{"step_index": 0, "pid": 2}], 1)
-    assert (c1["team_index"], c1["side"], c1["eligible_pids"]) == (0, 2, [3, 4])
-    done = [{"step_index": 0, "pid": 2}, {"step_index": 1, "pid": 4}]
-    c2 = eng.partner_step_context(people, plan, done, 2)
+    assert [ph["team_max"] for ph in plan["phases"]] == [2, 1] and plan["total_steps_max"] == 6
+    c0 = eng.partner_step_context(people, rules, [])
+    assert (c0["step_index"], c0["phase_index"], c0["team_index"], c0["side"], c0["eligible_pids"]) == (0, 0, 0, 1, [1, 2])
+    c1 = eng.partner_step_context(people, rules, [_st(2, 1, 0, 0)])
+    assert (c1["step_index"], c1["team_index"], c1["side"], c1["eligible_pids"]) == (1, 0, 2, [3, 4])
+    done = [_st(2, 1, 0, 0), _st(4, 2, 0, 0)]
+    c2 = eng.partner_step_context(people, rules, done)
     assert (c2["team_index"], c2["side"], c2["eligible_pids"]) == (1, 1, [1])   # người đã chọn không còn eligible
-    done += [{"step_index": 2, "pid": 1}, {"step_index": 3, "pid": 3}]
-    c4 = eng.partner_step_context(people, plan, done, 4)
-    assert (c4["phase_index"], c4["team_index"], c4["side"], c4["eligible_pids"]) == (1, 2, 1, [5, 6])
-    c5 = eng.partner_step_context(people, plan, done + [{"step_index": 4, "pid": 6}], 5)
+    done += [_st(1, 1, 0, 1), _st(3, 2, 0, 1)]
+    c4 = eng.partner_step_context(people, rules, done)
+    assert (c4["step_index"], c4["phase_index"], c4["team_index"], c4["side"], c4["eligible_pids"]) == (4, 1, 2, 1, [5, 6])
+    c5 = eng.partner_step_context(people, rules, done + [_st(6, 1, 1, 2)])
     assert (c5["team_index"], c5["side"], c5["eligible_pids"]) == (2, 2, [5])
-    assert eng.partner_step_context(people, plan, [], 6)["eligible_pids"] == []   # vượt kế hoạch
+    assert eng.partner_step_context(people, rules, done + [_st(6, 1, 1, 2), _st(5, 2, 1, 2)]) is None   # hết lượt hợp lệ
     # Không quy tắc → eligible = toàn bộ người chưa chọn
-    plan0 = eng.partner_draw_plan(people, [])
-    assert eng.partner_step_context(people, plan0, [{"step_index": 0, "pid": 3}], 1)["eligible_pids"] == [1, 2, 4, 5, 6]
+    assert eng.partner_step_context(people, [], [_st(3, 1, 0, 0)])["eligible_pids"] == [1, 2, 4, 5, 6]
 
 
 # ── API luồng ──────────────────────────────────────────────────────────────
@@ -226,11 +247,14 @@ def test_create_doubles_without_teams_makes_singles(client, world):
     t = _create_doubles(client, world, partner_rules=[{"rank1": "A", "rank2": "B"}])
     assert t["team_type"] == "doubles" and len(t["participants"]) == 6
     assert len(_singles(t)) == 6 and t["unpaired_count"] == 6
-    assert t["partner_rules"] == [{"rank1": "A", "rank2": "B"}]
+    assert t["partner_rules"] == [{"ranks1": ["A"], "ranks2": ["B"]}]   # shape cũ được chuẩn hoá về v2
     assert t["partner_draw"] is None and t["draw"] is None
+    # Đợt 3: cho phép tạo giải với < 2 người (chọn người tại trang giải); guard ≥ 2 chuyển sang lúc "Bắt đầu giải"
     r = client.post("/api/tournaments", json={"name": "x", "format": "knockout", "team_type": "doubles",
                                               "member_ids": [world.members1[0].id]}, headers=_h(world))
-    assert r.status_code == 400 and "2 người" in r.json()["detail"]
+    assert r.status_code == 201 and len(r.json()["participants"]) == 1
+    r = client.put(f"/api/tournaments/{r.json()['id']}", json={"status": "active"}, headers=_h(world))
+    assert r.status_code == 400 and "Cần ít nhất 2" in r.json()["detail"]
 
 
 def test_flow_cross_rank_rules_leaves_unmatched_for_manual(client, world, db):
@@ -248,10 +272,11 @@ def test_flow_cross_rank_rules_leaves_unmatched_for_manual(client, world, db):
     assert draw["status"] == "open" and draw["seq"] == 1 and draw["reveal_ms"] == 5000
     assert draw["total_steps"] == 4 and draw["done_steps"] == 0 and draw["seed_hex"] is None
     assert len(draw["seed_commit"]) == 64
-    assert draw["rules"] == [{"rank1": "A", "rank2": "B"}]
-    assert draw["plan"]["phases"] == [{"index": 0, "rank1": "A", "rank2": "B", "team_count": 2}]
+    assert draw["rules"] == [{"ranks1": ["A"], "ranks2": ["B"]}]
+    assert draw["plan"]["phases"] == [{"index": 0, "ranks1": ["A"], "ranks2": ["B"], "team_max": 2, "team_cap": 2, "overlap": False}]
     assert draw["plan"]["unpaired_pids"] == [guest_pid]            # khách mời không hạng → ghép tay
-    assert draw["plan"]["leftover_by_rank"] == {"A": 1}
+    assert draw["plan"]["total_steps_max"] == 4 and draw["plan"]["estimated"] is False
+    assert draw["finished"] is False
     assert [x["pid"] for x in draw["pool"]] == sorted(x["pid"] for x in draw["pool"])
     assert all(set(x.keys()) == POOL_KEYS for x in draw["pool"])
     guest = next(x for x in draw["pool"] if x["pid"] == guest_pid)
@@ -261,7 +286,8 @@ def test_flow_cross_rank_rules_leaves_unmatched_for_manual(client, world, db):
     # TournamentOut nhúng tóm tắt phiên và lưu partner_rules
     d = _detail(client, world, tid)
     assert d["partner_draw"]["status"] == "open" and d["partner_draw"]["total_steps"] == 4
-    assert d["partner_rules"] == [{"rank1": "A", "rank2": "B"}]
+    assert d["partner_draw"]["finished"] is False
+    assert d["partner_rules"] == [{"ranks1": ["A"], "ranks2": ["B"]}]
     assert d["draw"] is None   # không lẫn với phiên bốc cặp đấu
 
     draw = _spin_all(client, world, tid, draw)
@@ -273,7 +299,9 @@ def test_flow_cross_rank_rules_leaves_unmatched_for_manual(client, world, db):
     assert steps[3]["eligible_pids"] == [b for b in b_pids if b != steps[1]["pid"]] and steps[3]["auto"] is True
     assert steps[0]["auto"] is False
 
-    assert _spin(client, world, tid, 4).status_code == 409   # đã đủ lượt
+    assert draw["done_steps"] == 4 and draw["finished"] is True
+    r = _spin(client, world, tid, 4)
+    assert r.status_code == 409 and "hết lượt" in r.json()["detail"]   # đã hết lượt hợp lệ
 
     r = _commit(client, world, tid)
     assert r.status_code == 200, r.text
@@ -281,7 +309,7 @@ def test_flow_cross_rank_rules_leaves_unmatched_for_manual(client, world, db):
     assert t2["status"] == "draft"
     teams, singles = _teams(t2), _singles(t2)
     assert len(teams) == 2 and len(singles) == 2 and t2["unpaired_count"] == 2
-    assert t2["partner_draw"]["status"] == "committed"
+    assert t2["partner_draw"]["status"] == "committed" and t2["partner_draw"]["finished"] is True
     by_pid = {x["pid"]: x for x in draw["pool"]}
     teams_by_id = {p["id"]: p for p in teams}
     for ti in range(2):
@@ -323,7 +351,8 @@ def test_flow_no_rules_all_paired(client, world, db):
     assert r.status_code == 201, r.text
     draw = r.json()
     assert draw["total_steps"] == 6 and draw["plan"]["unpaired_pids"] == []
-    assert draw["plan"]["phases"] == [{"index": 0, "rank1": None, "rank2": None, "team_count": 3}]
+    assert draw["rules"] == []
+    assert draw["plan"]["phases"] == [{"index": 0, "ranks1": [], "ranks2": [], "team_max": 3, "team_cap": 3, "overlap": True}]
     assert len(draw["next_step"]["eligible_pids"]) == 6
     draw = _spin_all(client, world, tid, draw)
     assert all(len(s["eligible_pids"]) == 6 - s["step_index"] for s in draw["steps"])
@@ -342,7 +371,7 @@ def test_flow_same_rank_uses_tournament_rules_when_body_omits(client, world, db)
     r = _open(client, world, tid)      # rules None → dùng t.partner_rules
     assert r.status_code == 201, r.text
     draw = r.json()
-    assert draw["rules"] == [{"rank1": "A", "rank2": "A"}] and draw["total_steps"] == 2
+    assert draw["rules"] == [{"ranks1": ["A"], "ranks2": ["A"]}] and draw["total_steps"] == 2
     assert len(draw["plan"]["unpaired_pids"]) == 3     # 2 B + khách mời không có quy tắc nào
     draw = _spin_all(client, world, tid, draw)
     assert len(draw["steps"][0]["eligible_pids"]) == 3 and len(draw["steps"][1]["eligible_pids"]) == 2
@@ -368,9 +397,9 @@ def test_open_guards(client, world, db):
     t = _create_doubles(client, world)
     r = _open(client, world, t["id"], rules=[{"rank1": "D", "rank2": "D"}])
     assert r.status_code == 400 and "Không có quy tắc" in r.json()["detail"]
-    # Quy tắc thiếu hạng → 400 (pydantic chặn thiếu trường; chuỗi rỗng do server chặn)
-    assert _open(client, world, t["id"], rules=[{"rank1": "A", "rank2": ""}]).status_code == 400
-    assert _open(client, world, t["id"], rules=[{"rank1": "A"}]).status_code == 422
+    # Quy tắc sai kiểu → 422 (v2: ranks1/ranks2 phải là danh sách; bên rỗng = bất kỳ hạng nên KHÔNG còn lỗi "thiếu hạng")
+    assert _open(client, world, t["id"], rules=[{"ranks1": "A", "ranks2": ["B"]}]).status_code == 422
+    assert _open(client, world, t["id"], rules=[{"ranks1": ["A"], "ranks2": 5}]).status_code == 422
     assert _open(client, world, t["id"], rules=[], reveal_ms=100).status_code == 422
     # Giải active → 400
     tid = t["id"]
@@ -390,7 +419,7 @@ def test_open_twice_spin_commit_and_list_guards(client, world, db):
     assert r.status_code == 409
     assert _spin(client, world, tid, 1).status_code == 409           # sai lượt
     r = _commit(client, world, tid)
-    assert r.status_code == 409 and "0/6" in r.json()["detail"]      # chưa đủ
+    assert r.status_code == 409 and "Chưa hết lượt" in r.json()["detail"]      # còn người đủ điều kiện để quay
     # Đang có phiên → không được thêm/xoá/ghép tay
     r = client.post(f"/api/tournaments/{tid}/participants", json={"member_id": world.members1[6].id}, headers=_h(world))
     assert r.status_code == 400 and "phiên ghép đội" in r.json()["detail"]
