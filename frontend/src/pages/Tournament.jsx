@@ -911,6 +911,8 @@ function treeNodeLabels(node) {
     top: isStructuralBye ? teamLabel(m.p1 || m.p2) : topLabel,
     bottom: bottomLabel,
     isBye: isStructuralBye,
+    // Bye hoàn thành mà không có người thắng = đội duy nhất trong ô đã bỏ giải → không ai đi tiếp
+    byeNote: isStructuralBye && m.winner_id == null ? "bỏ giải — không vào vòng sau" : null,
     scored: m.status === "completed" && m.score1 != null,
   };
 }
@@ -1036,7 +1038,7 @@ function BracketTreeDesktop({ matches, onScoreClick }) {
                   display: "flex", alignItems: "center", padding: "0 10px", gap: 6,
                 }}>
                   <Text style={{ fontSize: 12.5, color: "#888" }}>{c.top}</Text>
-                  <Text type="secondary" style={{ fontSize: 10.5 }}>(miễn — vào vòng sau)</Text>
+                  <Text type="secondary" style={{ fontSize: 10.5 }}>({c.byeNote || "miễn — vào vòng sau"})</Text>
                 </div>
               );
             }
@@ -1924,7 +1926,7 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated, autoOpenAdd
   const handleStartKO = async () => {
     const ok = await confirm({
       title: "Lên vòng loại trực tiếp?",
-      content: "Top 2 mỗi bảng sẽ được xếp vào bracket loại trực tiếp. Nhất bảng lẻ vs Nhì bảng chẵn và ngược lại.",
+      content: "Top 2 mỗi bảng vào vòng loại trực tiếp. Ghép cặp: Nhất A gặp Nhì B, Nhất B gặp Nhì A; các bảng C–D, E–F... tương tự. Nếu số suất không đủ luỹ thừa 2: các đội nhất bảng (theo thứ tự A, B, C...) được miễn vòng đầu, thiếu nữa mới đến nhì bảng; đội mất đối thủ vì miễn được ghép chéo bảng với nhau.",
     });
     if (!ok) return;
     setStartingKO(true);

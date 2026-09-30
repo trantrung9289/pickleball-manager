@@ -23,6 +23,7 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
       - run: npm run lint
+      - run: npm test
       - run: npm run build
 
   backend:
@@ -35,5 +36,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      # node cần cho test đối chiếu bản gương JS của luật ghép cặp vòng loại (test_batch15)
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
       - run: pip install -r requirements.txt pytest httpx
       - run: python -m pytest -q

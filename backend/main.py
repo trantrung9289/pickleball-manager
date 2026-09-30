@@ -2860,6 +2860,9 @@ def _advance_byes_and_walkovers(db: Session, tid: int) -> int:
     handled = 0
     while True:
         changed = False
+        # Session autoflush=False: caller (vd _maybe_add_third_place) vừa gán next/loser_next_match_id
+        # trên object chưa flush → truy vấn "feeder" bên dưới sẽ không thấy và tưởng ô trống là bye thật.
+        db.flush()
         pending = db.query(models.TournamentMatch).filter(
             models.TournamentMatch.tournament_id == tid,
             models.TournamentMatch.phase == "knockout",
@@ -2868,18 +2871,19 @@ def _advance_byes_and_walkovers(db: Session, tid: int) -> int:
         for m in pending:
             p1_out = m.p1_id is None or (m.p1 is not None and m.p1.status == models.ParticipantStatus.withdrawn)
             p2_out = m.p2_id is None or (m.p2 is not None and m.p2.status == models.ParticipantStatus.withdrawn)
-            if p1_out == p2_out:
-                continue  # cả 2 hợp lệ (trận thật) hoặc cả 2 out (chưa xử được) — bỏ qua
-            # Nếu là bye cấu trúc (1 bên chưa có ai, không phải do bỏ giải), chỉ xử khi
-            # chắc chắn không còn trận nào khác sắp cấp người vào ô trống đó — kể cả định
-            # tuyến qua đường THUA (loser_next_match_id, dùng cho trận tranh giải 3), không
-            # chỉ đường THẮNG (next_match_id), nếu không sẽ tưởng nhầm slot 2 của tranh giải 3
-            # là bye trong lúc bán kết còn lại chưa đấu xong.
-            if (m.p1_id is None) != (m.p2_id is None):
-                empty_slot = 1 if m.p1_id is None else 2
-                # Chỉ tính feeder CHƯA hoàn thành: trận đã completed thì winner/loser đã được đẩy
-                # sang ngay lúc có kết quả — nếu ô vẫn trống nghĩa là không có ai để đẩy (bán kết bye
-                # không có người thua) → phải xử như bye, nếu không trận tranh giải 3 treo pending mãi.
+            if not p1_out and not p2_out:
+                continue  # trận thật, chờ nhập điểm
+            # Ô trống (bye cấu trúc, không phải do bỏ giải) chỉ xử khi chắc chắn không còn trận nào
+            # khác sắp cấp người vào ô đó — kể cả định tuyến qua đường THUA (loser_next_match_id,
+            # dùng cho trận tranh giải 3), không chỉ đường THẮNG (next_match_id), nếu không sẽ tưởng
+            # nhầm slot 2 của tranh giải 3 là bye trong lúc bán kết còn lại chưa đấu xong.
+            # Chỉ tính feeder CHƯA hoàn thành: trận đã completed thì winner/loser đã được đẩy sang
+            # ngay lúc có kết quả — nếu ô vẫn trống nghĩa là không có ai để đẩy (bán kết bye không có
+            # người thua) → phải xử như bye, nếu không trận tranh giải 3 treo pending mãi.
+            waiting = False
+            for empty_slot, pid in ((1, m.p1_id), (2, m.p2_id)):
+                if pid is not None:
+                    continue
                 feeder = db.query(models.TournamentMatch).filter(
                     models.TournamentMatch.status != models.MatchStatus.completed,
                     or_(
@@ -2890,15 +2894,27 @@ def _advance_byes_and_walkovers(db: Session, tid: int) -> int:
                     )
                 ).first()
                 if feeder is not None:
-                    continue
-            winner_id = m.p2_id if p1_out else m.p1_id
-            loser_id = m.p1_id if winner_id == m.p2_id else m.p2_id
+                    waiting = True
+                    break
+            if waiting:
+                continue
+            if p1_out and p2_out:
+                # Cả 2 bên đều out — (bỏ giải, trống), (bỏ giải, bỏ giải) hoặc (trống, trống) do lan truyền.
+                # Trước đây bỏ qua → trận treo pending mãi, giải không thể kết thúc (vd nhất bảng được bye
+                # rồi bỏ giải trước khi lên vòng loại; hoặc 2 đội cùng trận đều bỏ giải). Xử: hoàn thành
+                # KHÔNG có người thắng, ô vòng sau để trống → đối thủ ở vòng sau được bye ở vòng lặp kế.
+                # Đội bỏ giải (nếu có) vẫn được đưa sang tranh giải 3 để bên kia thắng walkover ở đó.
+                winner_id = None
+                loser_id = m.p1_id if m.p1_id is not None else m.p2_id
+            else:
+                winner_id = m.p2_id if p1_out else m.p1_id
+                loser_id = m.p1_id if winner_id == m.p2_id else m.p2_id
+                if m.p1_id is not None and m.p2_id is not None:
+                    m.is_walkover = True  # đủ 2 bên thật nhưng 1 bên bỏ giải — không phải bye
             m.winner_id = winner_id
             m.status = models.MatchStatus.completed
-            if m.p1_id is not None and m.p2_id is not None:
-                m.is_walkover = True  # đủ 2 bên thật nhưng 1 bên bỏ giải — không phải bye
             nxt = db.get(models.TournamentMatch, m.next_match_id) if m.next_match_id else None
-            if nxt is not None:
+            if nxt is not None and winner_id is not None:
                 if m.next_match_slot == 1: nxt.p1_id = winner_id
                 else: nxt.p2_id = winner_id
             if loser_id is not None and m.loser_next_match_id:

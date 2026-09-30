@@ -7,8 +7,9 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
+    "test": "node --test src/utils/",
     "preview": "vite preview",
-    "check": "npm run lint && npm run build"
+    "check": "npm run lint && npm run test && npm run build"
   },
   "dependencies": {
     "@ant-design/icons": "^6.2.5",

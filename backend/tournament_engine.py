@@ -2,7 +2,7 @@
 import hashlib
 import random
 import math
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 
 
 def _round_robin_pairs(players: List) -> List[List[tuple]]:
@@ -459,13 +459,183 @@ def generate_group_schedule(
     return matches
 
 
+def knockout_layout_from_groups(
+    group_letters: List[str],
+    firsts: Dict[str, Optional[int]],
+    seconds: Dict[str, Optional[int]],
+) -> List[Optional[int]]:
+    """Xếp các suất từ vòng bảng vào Ô sơ đồ loại trực tiếp (hàm thuần, không DB).
+
+    Trả về danh sách độ dài luỹ thừa 2 theo THỨ TỰ HIỂN THỊ (trên→dưới); ô 2i và 2i+1 là một trận
+    vòng đầu, None = bye. Luật ghép cặp (theo yêu cầu BTC):
+      * Bảng ghép thành KHỐI 2 bảng theo thứ tự chữ cái: (A,B), (C,D), (E,F)...
+        Trong khối (X,Y): Nhất X gặp Nhì Y, Nhất Y gặp Nhì X; 2 trận này kề nhau (thắng gặp nhau ở vòng sau).
+      * Số suất không phải luỹ thừa 2 → có bye. Bye ưu tiên NHẤT BẢNG theo thứ tự chữ cái (A, B, C...),
+        hết nhất bảng mới đến nhì bảng (thứ tự ngược). Đội bị "mất" đối thủ vì bye thành đội TỰ DO,
+        ghép chéo bảng với nhau (không gặp đội cùng bảng ở vòng đầu); khối còn đủ 2 trận vẫn giữ nguyên luật.
+      * Đội được bye được xếp cạnh trận không có đội cùng bảng mình để vòng 2 không gặp lại đội cùng bảng
+        (khi còn sắp xếp được).
+      * Khối mà cả 4 suất đều được bye (nhiều bảng, vd 9–10 bảng): trận đầu thật của họ là vòng 2 → vẫn
+        áp luật bằng cách đặt 4 ô bye liền nhau theo thứ tự 1X, 2Y, 1Y, 2X.
+    Tiền đề: tên bảng là chữ cái A–P do hệ thống gán (so sánh chuỗi Python/JS giống nhau); một suất chỉ
+    thuộc một bảng (trùng → ValueError). Các đảm bảo "không gặp cùng bảng" chỉ chắc chắn khi mọi bảng có
+    đủ 2 suất (đường đi thật của ứng dụng: generate chia đều nên bảng luôn ≥ 2 đội); bảng 1 đội vẫn ra
+    bracket hợp lệ nhưng heuristic tham lam có thể để đội bye kề đội cùng bảng ở vòng 2.
+    Bản gương JS: frontend/src/utils/bracketLayout.js:knockoutLayoutFromGroups — sửa một bên phải sửa cả hai
+    (có test đối chiếu trong backend/tests/test_batch15_knockout_pairing_rule.py).
+    """
+    letters = sorted(group_letters)
+    group_of: Dict[int, str] = {}
+    is_first: Dict[int, bool] = {}
+    teams: List[int] = []
+    for g in letters:
+        for pid, first in ((firsts.get(g), True), (seconds.get(g), False)):
+            if pid is None:
+                continue
+            if pid in group_of:
+                raise ValueError(f"Suất {pid} xuất hiện ở 2 vị trí (bảng {group_of[pid]} và {g})")
+            group_of[pid] = g
+            is_first[pid] = first
+            teams.append(pid)
+    n = len(teams)
+    if n < 2:
+        return list(teams)
+    size = 1
+    while size < n:
+        size *= 2
+    byes_needed = size - n
+
+    # 1) Bye: nhất bảng theo thứ tự chữ cái, rồi nhì bảng theo thứ tự ngược
+    bye_order = [firsts[g] for g in letters if firsts.get(g) is not None]
+    bye_order += [seconds[g] for g in reversed(letters) if seconds.get(g) is not None]
+    byes = bye_order[:byes_needed]
+
+    def build(byes: List[int]) -> List[Optional[int]]:
+        bye_set = set(byes)
+
+        def playable(pid: Optional[int]) -> bool:
+            return pid is not None and pid not in bye_set
+
+        # 2) Khối 2 bảng (X,Y): Nhất X–Nhì Y, Nhất Y–Nhì X. Đội lẻ ra → tự do.
+        intact_matches: List[Tuple[int, int]] = []   # khối còn đủ 2 trận (giữ kề nhau)
+        partial_matches: List[Tuple[int, int]] = []  # khối chỉ còn 1 trận
+        free: List[int] = []
+        for i in range(0, len(letters), 2):
+            block = letters[i:i + 2]
+            if len(block) == 2:
+                x, y = block
+                made: List[Tuple[int, int]] = []
+                for a, b in ((firsts.get(x), seconds.get(y)), (firsts.get(y), seconds.get(x))):
+                    if playable(a) and playable(b):
+                        made.append((a, b))
+                    else:
+                        if playable(a):
+                            free.append(a)
+                        if playable(b):
+                            free.append(b)
+                (intact_matches if len(made) == 2 else partial_matches).extend(made)
+            else:
+                z = block[0]
+                for pid in (firsts.get(z), seconds.get(z)):
+                    if playable(pid):
+                        free.append(pid)
+
+        # 3) Đội tự do: sắp theo bảng (nhất trước nhì), ghép i với i + len/2 → luôn khác bảng khi ≥ 4 đội
+        free.sort(key=lambda pid: (group_of[pid], 0 if is_first[pid] else 1))
+        half = len(free) // 2
+        free_matches: List[Tuple[int, int]] = [(free[i], free[i + half]) for i in range(half)]
+
+        # 4) Xếp ô: mỗi bye đi kèm 1 trận/bye KHÁC BẢNG ngay cạnh (gặp nhau ở vòng 2), rồi trận tự do,
+        #    trận khối lẻ, cuối cùng các khối nguyên (số trận trước khối nguyên luôn chẵn → khối thẳng hàng).
+        def other_group(pid: int, match: Tuple[int, int]) -> bool:
+            return all(group_of[q] != group_of[pid] for q in match)
+
+        slots: List[Optional[int]] = []
+        rem_byes = list(byes)
+        rem_free = list(free_matches)
+        rem_partial = list(partial_matches)
+
+        # 4a) Khối (X,Y) mà cả 4 suất đều bye: đặt trước [1X,—,2Y,—,1Y,—,2X,—] (8 ô, thẳng hàng vì đặt
+        #     đầu tiên) → vòng 2: 1X gặp 2Y, 1Y gặp 2X; vòng 3 hai người thắng gặp nhau — đúng luật khối.
+        for i in range(0, len(letters) - 1, 2):
+            x, y = letters[i], letters[i + 1]
+            quad = (firsts.get(x), seconds.get(y), firsts.get(y), seconds.get(x))
+            if all(q is not None and q in bye_set for q in quad):
+                for q in quad:
+                    rem_byes.remove(q)
+                    slots += [q, None]
+
+        def pick_bye(exclude_group: Optional[str]) -> Optional[int]:
+            """Bye cần xử lý tiếp: ưu tiên bảng còn NHIỀU bye nhất (1X và 2X cùng bye) để không bị kẹt
+            2 đội cùng bảng cạnh nhau ở cuối; hoà thì lấy bye đứng trước trong thứ tự ưu tiên."""
+            best = None
+            best_key = None
+            for k, o in enumerate(rem_byes):
+                g = group_of[o]
+                if g == exclude_group:
+                    continue
+                key = (sum(1 for q in rem_byes if group_of[q] == g), -k)
+                if best_key is None or key > best_key:
+                    best, best_key = o, key
+            return best
+
+        while rem_byes:
+            b = pick_bye(None)
+            rem_byes.remove(b)
+            idx = next((k for k, m in enumerate(rem_free) if other_group(b, m)), None)
+            if idx is not None:
+                slots += [b, None, *rem_free.pop(idx)]
+                continue
+            o = pick_bye(group_of[b])
+            if o is not None:
+                rem_byes.remove(o)
+                slots += [b, None, o, None]
+                continue
+            idx = next((k for k, m in enumerate(rem_partial) if other_group(b, m)), None)
+            if idx is not None:
+                slots += [b, None, *rem_partial.pop(idx)]
+                continue
+            slots += [b, None]  # bí: ô kế tiếp là gì cũng được
+        for m in rem_free:
+            slots += list(m)
+        for m in rem_partial:
+            slots += list(m)
+        for m in intact_matches:
+            slots += list(m)
+        if len(slots) != size:  # không xảy ra về mặt toán học; giữ để lộ lỗi sớm thay vì sinh bracket hỏng
+            raise ValueError(f"Xếp nhánh lỗi: {len(slots)} ô ≠ {size}")
+        return slots
+
+    def same_group_r1(slots: List[Optional[int]]) -> List[int]:
+        clash: List[int] = []
+        for i in range(0, len(slots), 2):
+            a, b = slots[i], slots[i + 1]
+            if a is not None and b is not None and group_of[a] == group_of[b]:
+                clash += [a, b]
+        return clash
+
+    slots = build(byes)
+    # Bảng thiếu đội (vd A chỉ 1 đội, B đủ 2): 1A bye → 1B và 2B lẻ ra buộc gặp nhau. Thử đổi suất bye cho
+    # một đội trong cặp cùng bảng đó (ưu tiên nhất bảng) để tránh cùng bảng gặp nhau ngay vòng đầu.
+    clash = same_group_r1(slots) if n > 2 else []
+    if clash:
+        candidates = sorted(set(clash), key=lambda pid: (0 if is_first[pid] else 1, group_of[pid]))
+        for bi in range(len(byes)):
+            for f in candidates:
+                alt = byes[:bi] + [f] + byes[bi + 1:]
+                alt_slots = build(alt)
+                if not same_group_r1(alt_slots):
+                    return alt_slots
+    return slots
+
+
 def generate_knockout_from_groups(
     group_standings: Dict[str, List[Dict]],
     existing_match_count: int = 0,
 ) -> List[Dict]:
     """
     Sinh vòng loại từ kết quả đấu bảng (top 2 mỗi bảng).
-    Luật ghép: nhất bảng lẻ (A,C,E...) vs nhì bảng chẵn (B,D,F...) và ngược lại.
+    Luật ghép: khối 2 bảng (A,B), (C,D), (E,F)... — Nhất A gặp Nhì B, Nhất B gặp Nhì A (xem knockout_layout_from_groups).
     group_standings: { "A": [ranked_rows (rank=1 là nhất)...], ... }
     """
     group_letters = sorted(group_standings.keys())
@@ -480,40 +650,9 @@ def generate_knockout_from_groups(
             elif row.get("rank") == 2:
                 seconds[gname] = row["participant_id"]
 
-    # A,C,E... index chẵn (bảng lẻ); B,D,F... index lẻ (bảng chẵn)
-    odd_groups  = [g for i, g in enumerate(group_letters) if i % 2 == 0]  # A, C, E
-    even_groups = [g for i, g in enumerate(group_letters) if i % 2 == 1]  # B, D, F
-
-    ko_players: List[Optional[int]] = []
-    pair_count = min(len(odd_groups), len(even_groups))
-    for i in range(pair_count):
-        og, eg = odd_groups[i], even_groups[i]
-        ko_players.append(firsts.get(og))
-        ko_players.append(seconds.get(eg))
-        ko_players.append(firsts.get(eg))
-        ko_players.append(seconds.get(og))
-
-    # Bảng dư (số bảng lẻ)
-    for i in range(pair_count, len(odd_groups)):
-        og = odd_groups[i]
-        ko_players.append(firsts.get(og))
-        ko_players.append(seconds.get(og))
-    for i in range(pair_count, len(even_groups)):
-        eg = even_groups[i]
-        ko_players.append(firsts.get(eg))
-        ko_players.append(seconds.get(eg))
-
-    ko_players = [p for p in ko_players if p is not None]
-    n_ko = len(ko_players)
-    if n_ko >= 2 and (n_ko & (n_ko - 1)) == 0:
-        # Đủ luỹ thừa 2: giữ nguyên luật ghép nhất bảng lẻ vs nhì bảng chẵn
-        raw = _knockout_bracket(ko_players, seeded=False)
-    else:
-        # Số đội lẻ (vd 3 bảng = 6 đội): seeding nhất bảng trước, nhì bảng theo thứ tự ngược
-        # để bye rơi vào các đội nhất bảng và tránh cùng bảng gặp nhau ngay vòng 1
-        seeds = [firsts[g] for g in group_letters if firsts.get(g) is not None]
-        seeds += [seconds[g] for g in reversed(group_letters) if seconds.get(g) is not None]
-        raw = _knockout_bracket(seeds, seeded=True)
+    slots = knockout_layout_from_groups(group_letters, firsts, seconds)
+    # slots đã đúng độ dài luỹ thừa 2 và thứ tự hiển thị → dùng nguyên (seeded=False), None = bye
+    raw = _knockout_bracket(slots, seeded=False)
     match_num = existing_match_count
     matches = []
     for m in raw:

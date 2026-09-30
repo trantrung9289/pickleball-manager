@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { tournamentsApi } from "../api";
 import { useAuth } from "../context/AuthContext";
 import {
-  projectedQualifierLabels, buildProjectedBracketNodes, buildRealBracketNodes, computeBracketGeometry,
+  projectedKnockoutSlots, buildProjectedBracketNodes, buildRealBracketNodes, computeBracketGeometry,
   findThirdPlaceMatch,
 } from "../utils/bracketLayout";
 
@@ -24,6 +24,10 @@ const COL_GAP = 70;
 // Chiều rộng in được thực tế của trang ngang A4 (297mm) trừ padding .print-page (14mm x 2),
 // quy đổi ra px theo chuẩn 96px/inch mà trình duyệt dùng để bố cục các phần tử CSS px khi in.
 const LANDSCAPE_PRINTABLE_PX = ((297 - 28) / 25.4) * 96;
+// Chiều cao in được của trang ngang (210mm − 2×14mm lề) — sơ đồ 16 ô (5–8 bảng) cao hơn mức này nên
+// phải thu nhỏ theo CẢ chiều cao, nếu không trình duyệt ngắt trang giữa các ô.
+const LANDSCAPE_PRINTABLE_H_PX = ((210 - 28) / 25.4) * 96;
+const BRACKET_MIN_SCALE = 0.5; // dưới mức này chữ quá nhỏ để ghi tay — chấp nhận tràn trang
 
 // ── Khối tiêu đề dùng chung mọi trang in ─────────────────────────────────────
 function SheetHeader({ tournament, subtitle }) {
@@ -165,13 +169,10 @@ const cellStyle = (align) => ({ fontSize: 12.5, padding: "5px 6px", borderBottom
 
 // ── Sơ đồ nhánh (dùng chung cho vòng loại thật và sơ đồ dự kiến) ─────────────
 // roundsNodes: [{id, feederIds, ...}], mỗi node cần content(node) -> {top, bottom, isBye, matchNumber}
-function BracketDiagram({ roundsNodes, content, roundTitles, thirdPlace }) {
+function BracketDiagram({ roundsNodes, content, roundTitles, thirdPlace, reservedHeight = 170 }) {
   if (!roundsNodes.length) return null;
   const { centers, totalHeight } = computeBracketGeometry(roundsNodes, { boxHeight: BOX_H, minGap: 26 });
   const width = roundsNodes.length * (BOX_W + COL_GAP) + 160; // +160 cho hộp "Vô địch"
-  // Bracket nhiều vòng (>4 vòng, ~16+ đội) có thể rộng hơn khổ giấy ngang thật — thu nhỏ vừa
-  // trang thay vì để trình duyệt cắt mất các cột bên phải khi in.
-  const scale = width > LANDSCAPE_PRINTABLE_PX ? LANDSCAPE_PRINTABLE_PX / width : 1;
 
   const lines = [];
   roundsNodes.forEach((round, r) => {
@@ -201,6 +202,10 @@ function BracketDiagram({ roundsNodes, content, roundTitles, thirdPlace }) {
   const finalX = (roundsNodes.length - 1) * (BOX_W + COL_GAP);
   const thirdTop = finalY + BOX_H / 2 + 24 + 46;
   const innerHeight = Math.max(totalHeight + 30, thirdPlace ? thirdTop + BOX_H + 12 : 0);
+  // Thu nhỏ vừa trang theo cả 2 chiều: bracket nhiều vòng rộng hơn khổ ngang (cắt cột phải), bracket
+  // 16 ô cao hơn phần còn lại của trang sau header/tiêu đề vòng/ghi chú (reservedHeight) → ngắt trang giữa ô.
+  const availH = LANDSCAPE_PRINTABLE_H_PX - reservedHeight;
+  const scale = Math.max(BRACKET_MIN_SCALE, Math.min(1, LANDSCAPE_PRINTABLE_PX / width, availH / innerHeight));
 
   return (
     <div style={{ width: width * scale, height: innerHeight * scale }}>
@@ -232,7 +237,7 @@ function BracketDiagram({ roundsNodes, content, roundTitles, thirdPlace }) {
                   border: "1.5px solid #ddd", borderRadius: 4, background: "#fafafa",
                   display: "flex", alignItems: "center", padding: "0 10px", fontSize: 12.5, color: "#888",
                 }}>
-                  {c.top || c.bottom} <span style={{ marginLeft: 6, fontSize: 10.5 }}>(miễn — vào thẳng vòng sau)</span>
+                  {c.top || c.bottom} <span style={{ marginLeft: 6, fontSize: 10.5 }}>{c.byeNote || "(miễn — vào thẳng vòng sau)"}</span>
                 </div>
               );
             }
@@ -337,10 +342,13 @@ function realBracketContent(node) {
   // người thật, 1 bên bỏ giải) — trước đây gộp chung theo "hoàn thành mà không có tỉ số" nên
   // walkover bị hiển thị nhầm thành bye và ẩn mất tên đối thủ còn lại.
   const isBye = m.status === "completed" && (!m.p1_id || !m.p2_id);
+  // Bye hoàn thành mà không có người thắng = đội duy nhất trong ô đã bỏ giải → không ai đi tiếp
+  const byeNote = isBye && m.winner_id == null ? "(bỏ giải — không vào vòng sau)" : null;
   return {
     top: isBye ? teamLabel(m.p1 || m.p2) : topLabel,
     bottom: bottomLabel,
     isBye,
+    byeNote,
     matchNumber: m.match_number,
     scored: m.status === "completed" && m.score1 != null,
     score1: m.score1, score2: m.score2,
@@ -414,15 +422,19 @@ function CombinedSheet({ tournament, standingsByGroup }) {
       <BracketDiagram roundsNodes={roundsNodes} content={realBracketContent} roundTitles={roundTitles} thirdPlace={thirdPlace} />
     );
   } else {
-    const labels = projectedQualifierLabels(groups);
-    const roundsNodes = buildProjectedBracketNodes(labels);
+    // Sĩ số từng bảng: bảng chỉ có 1 đội thì không có "Nhì bảng" (gương với standings backend)
+    const groupSizes = groups.map((name) => ({
+      name, size: tournament.participants.filter((p) => p.group_name === name).length,
+    }));
+    const roundsNodes = buildProjectedBracketNodes(projectedKnockoutSlots(groupSizes));
+    // Tên vòng khớp backend _round_name (Tứ kết / Vòng N) để bản dự kiến và bản thật đọc giống nhau
     const roundTitles = roundsNodes.map((_, i) => {
       const fromEnd = roundsNodes.length - 1 - i;
-      return fromEnd === 0 ? "Chung kết" : fromEnd === 1 ? "Bán kết" : `Vòng loại ${i + 1}`;
+      return fromEnd === 0 ? "Chung kết" : fromEnd === 1 ? "Bán kết" : fromEnd === 2 ? "Tứ kết" : `Vòng ${i + 1}`;
     });
     bracketEl = (
       <BracketDiagram roundsNodes={roundsNodes} content={projectedBracketContent} roundTitles={roundTitles}
-        thirdPlace={projectedThirdPlaceContent(tournament, roundsNodes)} />
+        thirdPlace={projectedThirdPlaceContent(tournament, roundsNodes)} reservedHeight={230} />
     );
   }
 
@@ -452,8 +464,10 @@ function CombinedSheet({ tournament, standingsByGroup }) {
         {!hasRealKO && (
           <div style={{ marginTop: 12, padding: "10px 12px", border: "1.3px dashed #bbb", borderRadius: 6, fontSize: 11, color: "#666", lineHeight: 1.6 }}>
             <b style={{ color: "#141413" }}>Ghi chú</b><br />
-            Sơ đồ trên là DỰ KIẾN theo luật ghép cặp của hệ thống — tên thật chỉ chốt sau khi vòng bảng
-            đấu xong và bấm "Bắt đầu vòng loại trực tiếp". In lại trang này khi đó để có tên thật.
+            Sơ đồ trên là DỰ KIẾN theo luật ghép cặp: Nhất A gặp Nhì B, Nhất B gặp Nhì A; các bảng C–D, E–F...
+            tương tự. Nếu số suất không đủ luỹ thừa 2: các đội nhất bảng (theo thứ tự A, B, C...) được miễn vòng đầu,
+            thiếu nữa mới đến nhì bảng; đội mất đối thủ vì miễn được ghép chéo bảng với nhau (không gặp đội cùng bảng).
+            Tên thật chỉ chốt sau khi vòng bảng đấu xong và bấm "Bắt đầu vòng loại trực tiếp" — in lại trang này khi đó.
           </div>
         )}
       </div>
