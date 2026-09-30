@@ -165,7 +165,7 @@ const cellStyle = (align) => ({ fontSize: 12.5, padding: "5px 6px", borderBottom
 
 // ── Sơ đồ nhánh (dùng chung cho vòng loại thật và sơ đồ dự kiến) ─────────────
 // roundsNodes: [{id, feederIds, ...}], mỗi node cần content(node) -> {top, bottom, isBye, matchNumber}
-function BracketDiagram({ roundsNodes, content, roundTitles }) {
+function BracketDiagram({ roundsNodes, content, roundTitles, thirdPlace }) {
   if (!roundsNodes.length) return null;
   const { centers, totalHeight } = computeBracketGeometry(roundsNodes, { boxHeight: BOX_H, minGap: 26 });
   const width = roundsNodes.length * (BOX_W + COL_GAP) + 160; // +160 cho hộp "Vô địch"
@@ -195,11 +195,17 @@ function BracketDiagram({ roundsNodes, content, roundTitles }) {
   if (finalId != null) {
     lines.push(<path key="champ-line" d={`M${championX - COL_GAP},${finalY} H${championX}`} />);
   }
+  // Ô "Tranh giải 3" đặt NGAY DƯỚI ô Chung kết, cùng cột — trước đây là khối rời ở cuối trang (dưới
+  // toàn bộ sơ đồ) nên bị đẩy sang trang sau hoặc người ghi không tìm thấy; với sơ đồ DỰ KIẾN
+  // (kết hợp chưa lên vòng loại) thì trước đây hoàn toàn không có ô này dù đã bật.
+  const finalX = (roundsNodes.length - 1) * (BOX_W + COL_GAP);
+  const thirdTop = finalY + BOX_H / 2 + 24 + 46;
+  const innerHeight = Math.max(totalHeight + 30, thirdPlace ? thirdTop + BOX_H + 12 : 0);
 
   return (
-    <div style={{ width: width * scale, height: (totalHeight + 30) * scale }}>
+    <div style={{ width: width * scale, height: innerHeight * scale }}>
       <div style={{
-        position: "relative", width, height: totalHeight + 30,
+        position: "relative", width, height: innerHeight,
         transform: scale !== 1 ? `scale(${scale})` : undefined, transformOrigin: "top left",
       }}>
         {(roundTitles || roundsNodes.map((_, i) => `Vòng ${i + 1}`)).map((t, i) => (
@@ -247,13 +253,30 @@ function BracketDiagram({ roundsNodes, content, roundTitles }) {
         }}>
           <span style={{ fontSize: 12.5, fontWeight: 700, color: "#8a6d00" }}>🏆 Vô địch</span>
         </div>
+        {thirdPlace && (
+          <>
+            <div style={{
+              position: "absolute", left: finalX, top: thirdTop - 17,
+              fontSize: 11, fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase", color: "#8a6d00",
+            }}>
+              Tranh giải 3{thirdPlace.projected ? " (dự kiến)" : ""}
+            </div>
+            <div style={{ position: "absolute", left: finalX, top: thirdTop, width: BOX_W, border: "1.5px solid #b8860b", borderRadius: 4, background: "#fffdf5" }}>
+              {thirdPlace.matchNumber != null && (
+                <div style={{ position: "absolute", right: 6, top: -13, fontSize: 9.5, color: "#aaa" }}>#{thirdPlace.matchNumber}</div>
+              )}
+              <Slot label={thirdPlace.top} score={thirdPlace.score1} scored={thirdPlace.scored} isWalkover={thirdPlace.isWalkover} isWinner={thirdPlace.winnerIsP1} />
+              <Slot label={thirdPlace.bottom} score={thirdPlace.score2} scored={thirdPlace.scored} isWalkover={thirdPlace.isWalkover} isWinner={thirdPlace.winnerIsP2} last />
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
 }
 
-// Ô "Hạng 3" hiển thị riêng cạnh sơ đồ chính (trận này không nằm trong cây next_match_id)
-function ThirdPlaceBox({ thirdPlaceInfo }) {
+// Nội dung ô "Tranh giải 3" (trận thật — không nằm trong cây next_match_id, đi theo đường thua của 2 bán kết)
+function thirdPlaceContent(thirdPlaceInfo) {
   if (!thirdPlaceInfo) return null;
   const { match: m, feeders } = thirdPlaceInfo;
   const nameFor = (side) => {
@@ -263,17 +286,20 @@ function ThirdPlaceBox({ thirdPlaceInfo }) {
     return feeder ? `Thua ${feeder.round_name} #${feeder.match_number}` : null;
   };
   const scored = m.status === "completed" && m.score1 != null;
-  return (
-    <div style={{ marginTop: 16 }}>
-      <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase", color: "#555", marginBottom: 4 }}>
-        Tranh giải 3
-      </div>
-      <div style={{ width: BOX_W, border: "1.5px solid #333", borderRadius: 4, background: "#fff" }}>
-        <Slot label={nameFor(1)} score={m.score1} scored={scored} isWalkover={m.is_walkover} isWinner={scored && m.winner_id === m.p1_id} />
-        <Slot label={nameFor(2)} score={m.score2} scored={scored} isWalkover={m.is_walkover} isWinner={scored && m.winner_id === m.p2_id} last />
-      </div>
-    </div>
-  );
+  return {
+    top: nameFor(1), bottom: nameFor(2), matchNumber: m.match_number,
+    scored, score1: m.score1, score2: m.score2, isWalkover: m.is_walkover,
+    winnerIsP1: scored && m.winner_id === m.p1_id, winnerIsP2: scored && m.winner_id === m.p2_id,
+  };
+}
+
+// Ô "Tranh giải 3" DỰ KIẾN cho sơ đồ chưa có trận thật (kết hợp đang đấu vòng bảng): chỉ khi đã bật
+// và sơ đồ dự kiến có đúng 2 bán kết (≥4 suất) — cùng điều kiện backend tạo trận lúc lên vòng loại.
+function projectedThirdPlaceContent(tournament, roundsNodes) {
+  if (!tournament.third_place_enabled || roundsNodes.length < 2) return null;
+  if (roundsNodes[roundsNodes.length - 2].length !== 2) return null;
+  return { top: "Thua bán kết (trận trên)", bottom: "Thua bán kết (trận dưới)", projected: true, matchNumber: null,
+    scored: false, score1: null, score2: null, isWalkover: false, winnerIsP1: false, winnerIsP2: false };
 }
 
 function Slot({ label, score, scored, last, isWalkover, isWinner }) {
@@ -360,14 +386,14 @@ function RoundRobinSheet({ tournament, standings }) {
 function KnockoutSheet({ tournament }) {
   const roundsNodes = buildRealBracketNodes(tournament.matches);
   const roundTitles = roundsNodes.map((r) => r[0]?.match?.round_name || `Vòng`);
-  const thirdPlaceInfo = findThirdPlaceMatch(tournament.matches);
+  const thirdPlace = thirdPlaceContent(findThirdPlaceMatch(tournament.matches));
   return (
     <div className="print-page print-landscape">
       <SheetHeader tournament={tournament} subtitle="SƠ ĐỒ ĐẤU LOẠI TRỰC TIẾP" />
-      <BracketDiagram roundsNodes={roundsNodes} content={realBracketContent} roundTitles={roundTitles} />
-      <ThirdPlaceBox thirdPlaceInfo={thirdPlaceInfo} />
+      <BracketDiagram roundsNodes={roundsNodes} content={realBracketContent} roundTitles={roundTitles} thirdPlace={thirdPlace} />
       <div className="print-footnote">
         Trận có 1 đội trống ("bye") tự động miễn vào vòng sau, không cần ghi điểm.
+        {thirdPlace && " Trận tranh giải 3 nằm ngay dưới ô Chung kết."}
       </div>
     </div>
   );
@@ -383,12 +409,9 @@ function CombinedSheet({ tournament, standingsByGroup }) {
   if (hasRealKO) {
     const roundsNodes = buildRealBracketNodes(koMatches);
     const roundTitles = roundsNodes.map((r) => r[0]?.match?.round_name || "Vòng");
-    const thirdPlaceInfo = findThirdPlaceMatch(koMatches);
+    const thirdPlace = thirdPlaceContent(findThirdPlaceMatch(koMatches));
     bracketEl = (
-      <>
-        <BracketDiagram roundsNodes={roundsNodes} content={realBracketContent} roundTitles={roundTitles} />
-        <ThirdPlaceBox thirdPlaceInfo={thirdPlaceInfo} />
-      </>
+      <BracketDiagram roundsNodes={roundsNodes} content={realBracketContent} roundTitles={roundTitles} thirdPlace={thirdPlace} />
     );
   } else {
     const labels = projectedQualifierLabels(groups);
@@ -397,7 +420,10 @@ function CombinedSheet({ tournament, standingsByGroup }) {
       const fromEnd = roundsNodes.length - 1 - i;
       return fromEnd === 0 ? "Chung kết" : fromEnd === 1 ? "Bán kết" : `Vòng loại ${i + 1}`;
     });
-    bracketEl = <BracketDiagram roundsNodes={roundsNodes} content={projectedBracketContent} roundTitles={roundTitles} />;
+    bracketEl = (
+      <BracketDiagram roundsNodes={roundsNodes} content={projectedBracketContent} roundTitles={roundTitles}
+        thirdPlace={projectedThirdPlaceContent(tournament, roundsNodes)} />
+    );
   }
 
   // 2 trang khổ giấy khác nhau thay vì gộp 1 trang ngang: vòng bảng đọc như danh sách nên hợp
