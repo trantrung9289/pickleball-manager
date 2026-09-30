@@ -130,6 +130,7 @@ export const tournamentsApi = {
   startKnockout: (id) => api.post(`/api/tournaments/${id}/start-knockout`),
   score: (tid, mid, data) => api.post(`/api/tournaments/${tid}/matches/${mid}/score`, data),
   updateScorePin: (tid, data) => api.patch(`/api/tournaments/${tid}/score-pin`, data),
+  updateThirdPlace: (tid, enabled) => api.patch(`/api/tournaments/${tid}/third-place`, { enabled }),
   standings: (tid, group) => api.get(`/api/tournaments/${tid}/standings`, { params: group ? { group } : {} }),
   replaceParticipant: (tid, pid, data) => api.patch(`/api/tournaments/${tid}/participants/${pid}`, data),
   addParticipant: (tid, data) => api.post(`/api/tournaments/${tid}/participants`, data),

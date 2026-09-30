@@ -382,6 +382,7 @@ class MatchOut(BaseModel):
     next_match_id: Optional[int] = None
     next_match_slot: Optional[int] = None
     loser_next_match_id: Optional[int] = None
+    loser_next_match_slot: Optional[int] = None
     p1: Optional[ParticipantOut] = None
     p2: Optional[ParticipantOut] = None
     winner: Optional[ParticipantOut] = None
@@ -676,6 +677,11 @@ class ScoreUpdate(BaseModel):
 class ScorePinUpdate(BaseModel):
     enabled: bool
     pin: Optional[str] = None    # 4 chữ số — bỏ trống nếu chỉ đổi enabled, giữ nguyên PIN cũ
+
+
+class ThirdPlaceUpdate(BaseModel):
+    """Bật/tắt trận tranh giải 3 — được phép cả khi giải đang diễn ra (khác SETUP_FIELDS chỉ sửa khi Nháp)."""
+    enabled: bool
 
 
 class PublicScoreUpdate(BaseModel):

@@ -11,6 +11,7 @@ import {
   EditOutlined, DeleteOutlined, ReloadOutlined,
   CheckCircleOutlined, SaveOutlined, ArrowRightOutlined,
   UserOutlined, TeamOutlined, UserAddOutlined, PrinterOutlined, GiftOutlined, WarningOutlined,
+  SettingOutlined,
 } from "@ant-design/icons";
 import { tournamentsApi, membersApi, playersApi } from "../api";
 import ResponsiveTable from "../components/ResponsiveTable";
@@ -1407,6 +1408,70 @@ function EditSetupModal({ tournament, onSaved, onClose }) {
 }
 
 // ── Đặt/Đổi mã PIN nhập điểm public ───────────────────────
+// ── Cài đặt khi giải ĐANG DIỄN RA: hiện chỉ có bật/tắt tranh giải 3 (ScorePinModal ở ngay dưới) ──
+// Thể thức/số bảng vẫn bị khoá sau khi bắt đầu (SETUP_FIELDS); tranh giải 3 có đường riêng
+// PATCH /third-place vì bật/tắt giữa giải không đổi cấu trúc bracket chính.
+function ActiveSettingsModal({ tournament, onSaved, onClose }) {
+  const [enabled, setEnabled] = useState(!!tournament.third_place_enabled);
+  const [saving, setSaving] = useState(false);
+  const matches = tournament.matches || [];
+  const thirdMatch = matches.find((m) => m.round_name === "Tranh giải 3");
+  const koMatches = matches.filter((m) => m.phase === "knockout" && m.round_name !== "Tranh giải 3");
+  const koStarted = koMatches.length > 0;
+  // Có đúng 2 trận ở vòng kế chung kết mới có "bán kết" (≥4 đội) — backend chỉ tạo trận khi đủ điều kiện này
+  const koMaxRound = koStarted ? Math.max(...koMatches.map((m) => m.round_number)) : 0;
+  const hasSemis = koStarted && koMatches.filter((m) => m.round_number === koMaxRound - 1).length === 2;
+  const thirdHasScore = !!thirdMatch && thirdMatch.score1 != null;
+  const thirdDoneByWalkover = !!thirdMatch && !thirdHasScore && thirdMatch.status === "completed";
+  const changed = enabled !== !!tournament.third_place_enabled;
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const res = await tournamentsApi.updateThirdPlace(tournament.id, enabled);
+      message.success(enabled ? "Đã bật tranh giải 3" : "Đã tắt tranh giải 3");
+      onSaved(res.data);
+    } catch (err) {
+      message.error(err?.response?.data?.detail || "Không thể cập nhật cài đặt");
+    } finally { setSaving(false); }
+  };
+
+  let hint;
+  if (enabled && thirdMatch) hint = "Đã có trận tranh giải 3 trong lịch.";
+  else if (enabled && koStarted && !hasSemis) hint = "Vòng loại trực tiếp chưa đủ 4 đội (không có bán kết) — chỉ lưu cài đặt, không có trận tranh giải 3.";
+  else if (enabled && koStarted) hint = "Trận tranh giải 3 sẽ được tạo ngay, song song với chung kết. Người thua của các trận bán kết đã đấu được xếp vào luôn.";
+  else if (enabled) hint = tournament.format === "combined"
+    ? "Trận tranh giải 3 sẽ được tạo khi lên vòng loại trực tiếp (cần ít nhất 4 đội vào vòng loại)."
+    : "Trận tranh giải 3 sẽ được tạo khi sinh lịch (cần ít nhất 4 đội).";
+  else if (thirdMatch) hint = thirdHasScore
+    ? "Trận tranh giải 3 đã có kết quả — không thể tắt."
+    : thirdDoneByWalkover
+      ? "Trận tranh giải 3 đã được xử thắng do bỏ giải (không có tỉ số) — tắt sẽ XOÁ kết quả xử thắng này."
+      : "Trận tranh giải 3 hiện có (chưa có kết quả) sẽ bị xoá khỏi lịch.";
+  else hint = "Không có trận tranh giải 3.";
+
+  return (
+    <Modal title="Cài đặt giải đấu" open onCancel={onClose}
+      footer={
+        <Space>
+          <Button onClick={onClose}>Đóng</Button>
+          <Button type="primary" loading={saving} disabled={!changed || (!enabled && thirdHasScore)} onClick={handleSave}>Lưu</Button>
+        </Space>
+      }>
+      <Alert type="info" showIcon style={{ marginBottom: 16 }}
+        message="Giải đang diễn ra: thể thức, số bảng và danh sách đội đã khoá. Chỉ còn đổi được trận tranh giải 3." />
+      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <Switch checked={enabled} onChange={setEnabled} />
+        <div>
+          <div style={{ fontWeight: 600 }}>Có trận tranh giải 3</div>
+          <Text type="secondary" style={{ fontSize: 12 }}>2 người thua bán kết đấu với nhau, song song với chung kết.</Text>
+        </div>
+      </div>
+      <Text type={(!enabled && thirdHasScore) ? "danger" : "secondary"} style={{ display: "block", marginTop: 12, fontSize: 13 }}>{hint}</Text>
+    </Modal>
+  );
+}
+
 function ScorePinModal({ tournament, onSaved, onClose }) {
   const [enabled, setEnabled] = useState(tournament.public_scoring_enabled);
   const [pin, setPin] = useState("");
@@ -1473,6 +1538,7 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated, autoOpenAdd
   const [replaceTarget, setReplaceTarget] = useState(null); // { participant, slot: "main"|"partner" }
   const [editSetupModal, setEditSetupModal] = useState(false);
   const [scorePinModal, setScorePinModal] = useState(false);
+  const [activeSettingsOpen, setActiveSettingsOpen] = useState(false);   // cài đặt khi giải đang diễn ra (tranh giải 3)
   const [printing, setPrinting] = useState(false);
 
   // Bốc thăm bằng vòng quay: phiên hiện tại (DrawOut), overlay đang mở, đang gọi API, lệch giờ server
@@ -2186,9 +2252,14 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated, autoOpenAdd
             </>
           )}
           {tournament.status === "active" && (
-            <Button icon={<CheckCircleOutlined />} onClick={() => handleStatusChange("completed")}>
-              Kết thúc giải
-            </Button>
+            <>
+              {(fmt === "knockout" || fmt === "combined") && (
+                <Button icon={<SettingOutlined />} onClick={() => setActiveSettingsOpen(true)}>Cài đặt</Button>
+              )}
+              <Button icon={<CheckCircleOutlined />} onClick={() => handleStatusChange("completed")}>
+                Kết thúc giải
+              </Button>
+            </>
           )}
           <Button icon={<ReloadOutlined />} onClick={reload}>Làm mới</Button>
           {matches.length > 0 && (
@@ -2364,6 +2435,14 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated, autoOpenAdd
           tournament={tournament}
           onSaved={reload}
           onClose={() => setEditSetupModal(false)}
+        />
+      )}
+
+      {activeSettingsOpen && (
+        <ActiveSettingsModal
+          tournament={tournament}
+          onSaved={(t) => { setActiveSettingsOpen(false); setTournament(t); onUpdated && onUpdated(t); }}
+          onClose={() => setActiveSettingsOpen(false)}
         />
       )}
 

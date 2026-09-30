@@ -2562,6 +2562,48 @@ def update_score_pin(
     return t
 
 
+@app.patch("/api/tournaments/{tid}/third-place", response_model=schemas.TournamentOut)
+def update_third_place(
+    tid: int,
+    data: schemas.ThirdPlaceUpdate,
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    """Bật/tắt trận tranh giải 3 ở Nháp HOẶC khi giải đang diễn ra (third_place_enabled nằm trong
+    SETUP_FIELDS nên PUT /tournaments chỉ sửa được khi Nháp — endpoint này là đường riêng cho lúc
+    đã bắt đầu). Bật: nếu đã có bracket knockout với 2 bán kết thì tạo trận ngay và điền người thua
+    của các bán kết ĐÃ đấu; thể thức kết hợp chưa lên vòng loại thì chỉ lưu cờ (start_knockout tự
+    tạo). Tắt: xoá trận tranh giải 3 nếu chưa có tỉ số thật và gỡ liên kết đường thua trên bán kết."""
+    perms.require_edit()
+    t = _get_club_tournament(db, tid, perms)
+    if t.status == models.TournamentStatus.completed:
+        raise HTTPException(400, "Giải đấu đã kết thúc — không thể đổi cài đặt tranh giải 3")
+    if t.format.value not in ("knockout", "combined"):
+        raise HTTPException(400, "Tranh giải 3 chỉ áp dụng cho thể thức loại trực tiếp hoặc kết hợp")
+    third = db.query(models.TournamentMatch).filter(
+        models.TournamentMatch.tournament_id == tid,
+        models.TournamentMatch.phase == "knockout",
+        models.TournamentMatch.round_name == "Tranh giải 3",
+    ).first()
+    if data.enabled:
+        t.third_place_enabled = True
+        if third is None:
+            db.flush()
+            _maybe_add_third_place(db, tid, t)
+            _backfill_third_place_losers(db, tid)
+    else:
+        if third is not None:
+            if third.score1 is not None:
+                raise HTTPException(400, "Trận tranh giải 3 đã có kết quả — không thể tắt. Sửa/xoá kết quả trước nếu thật sự cần.")
+            for m in db.query(models.TournamentMatch).filter(models.TournamentMatch.loser_next_match_id == third.id).all():
+                m.loser_next_match_id = None
+                m.loser_next_match_slot = None
+            db.delete(third)
+        t.third_place_enabled = False
+    db.commit(); db.refresh(t)
+    return t
+
+
 @app.post("/api/tournaments/{tid}/participants", response_model=schemas.ParticipantOut, status_code=201)
 def add_participant(
     tid: int,
@@ -2835,7 +2877,11 @@ def _advance_byes_and_walkovers(db: Session, tid: int) -> int:
             # là bye trong lúc bán kết còn lại chưa đấu xong.
             if (m.p1_id is None) != (m.p2_id is None):
                 empty_slot = 1 if m.p1_id is None else 2
+                # Chỉ tính feeder CHƯA hoàn thành: trận đã completed thì winner/loser đã được đẩy
+                # sang ngay lúc có kết quả — nếu ô vẫn trống nghĩa là không có ai để đẩy (bán kết bye
+                # không có người thua) → phải xử như bye, nếu không trận tranh giải 3 treo pending mãi.
                 feeder = db.query(models.TournamentMatch).filter(
+                    models.TournamentMatch.status != models.MatchStatus.completed,
                     or_(
                         (models.TournamentMatch.next_match_id == m.id)
                         & (models.TournamentMatch.next_match_slot == empty_slot),
@@ -2895,6 +2941,35 @@ def _maybe_add_third_place(db: Session, tid: int, t: "models.Tournament") -> Non
     db.add(third); db.flush()
     semis[0].loser_next_match_id = third.id; semis[0].loser_next_match_slot = 1
     semis[1].loser_next_match_id = third.id; semis[1].loser_next_match_slot = 2
+
+
+def _backfill_third_place_losers(db: Session, tid: int) -> None:
+    """Bật tranh giải 3 GIỮA giải: bán kết nào đã có kết quả (kể cả walkover) thì đưa người thua
+    vào đúng ô của trận tranh giải 3 ngay (bình thường việc này xảy ra lúc nhập điểm bán kết qua
+    _apply_match_score / _advance_byes_and_walkovers — nhưng khi bật muộn thì đã lỡ thời điểm đó).
+    Sau đó chạy _advance_byes_and_walkovers để xử tiếp nếu người thua đã bỏ giải."""
+    db.flush()  # Session autoflush=False: liên kết loser_next_match_id vừa gán trong _maybe_add_third_place phải xuống DB trước khi query
+    third = db.query(models.TournamentMatch).filter(
+        models.TournamentMatch.tournament_id == tid,
+        models.TournamentMatch.phase == "knockout",
+        models.TournamentMatch.round_name == "Tranh giải 3",
+    ).first()
+    if third is None:
+        return
+    semis = db.query(models.TournamentMatch).filter(
+        models.TournamentMatch.tournament_id == tid,
+        models.TournamentMatch.loser_next_match_id == third.id,
+    ).all()
+    for m in semis:
+        if m.status != models.MatchStatus.completed or not m.winner_id or m.p1_id is None or m.p2_id is None:
+            continue  # chưa đấu, hoặc bye cấu trúc (không có người thua thật)
+        loser_id = m.p2_id if m.winner_id == m.p1_id else m.p1_id
+        if m.loser_next_match_slot == 1:
+            third.p1_id = loser_id
+        else:
+            third.p2_id = loser_id
+    db.flush()
+    _advance_byes_and_walkovers(db, tid)
 
 
 def _check_generate_preconditions(db: Session, t: "models.Tournament", force: bool) -> list:
