@@ -707,3 +707,93 @@ class Token(BaseModel):
 class LoginRequest(BaseModel):
     username: str
     password: str
+
+
+# ── SỰ KIỆN THÀNH TÍCH CÁ NHÂN (Mini game) ────────────────
+class PointEventCreate(BaseModel):
+    name: Optional[str] = None           # rỗng/khoảng trắng → "Mini game dd/mm/yyyy" (giờ VN)
+    description: Optional[str] = None
+    member_ids: List[int] = []
+    player_ids: List[int] = []
+
+
+class PointEventUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    status: Optional[TournamentStatus] = None
+
+
+class PointEventBulkIn(BaseModel):
+    member_ids: List[int] = []
+    player_ids: List[int] = []
+
+
+class PointDeltaIn(BaseModel):
+    delta: int
+    client_op_id: str = Field(min_length=1, max_length=40)   # chống ghi trùng khi client retry
+
+
+class PointParticipantOut(BaseModel):
+    id: int
+    member_id: Optional[int] = None
+    player_id: Optional[int] = None
+    display_name: str
+    rank_snapshot: Optional[str] = None
+    seq: int
+    points: int = 0
+    status: str = "active"          # active | removed
+
+    class Config:
+        from_attributes = True
+
+
+class PointEventListOut(BaseModel):
+    """Bản nhẹ cho danh sách: KHÔNG nhúng participants. Dựng bằng helper _point_event_out(ev) trong main.py."""
+    id: int
+    kind: str = "mini_game"
+    name: str
+    description: Optional[str] = None
+    status: TournamentStatus
+    version: int = 0
+    created_by: Optional[str] = None
+    created_at: Optional[datetime] = None
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    participant_count: int = 0      # số participant status == "active"
+    log_count: int = 0              # số log kind == "score"
+
+
+class PointEventOut(PointEventListOut):
+    participants: List[PointParticipantOut] = []
+
+
+class PointStateParticipantOut(BaseModel):
+    id: int
+    points: int
+    status: str
+
+
+class PointEventStateOut(BaseModel):
+    """Trạng thái gọn để poll: chỉ version + status + điểm từng người."""
+    version: int
+    status: TournamentStatus
+    log_count: int = 0          # số lượt chấm (kind=score) — để máy quan sát cập nhật "N lượt chấm" khi poll
+    participants: List[PointStateParticipantOut] = []
+
+
+class PointLogOut(BaseModel):
+    id: int
+    kind: str
+    participant_id: Optional[int] = None
+    display_name: Optional[str] = None   # lấy từ participant (None với log trạng thái)
+    delta: int = 0
+    points_after: int = 0
+    note: Optional[str] = None
+    actor_name: Optional[str] = None     # KHÔNG đưa ra public
+    created_at: Optional[datetime] = None
+
+
+class PointEventBulkOut(BaseModel):
+    added: int
+    skipped: List[str] = []
+    event: PointEventOut

@@ -160,6 +160,26 @@ export const tournamentsApi = {
   pairParticipants: (tid, p1Id, p2Id) => api.post(`/api/tournaments/${tid}/participants/pair`, { p1_id: p1Id, p2_id: p2Id }),
 };
 
+// Sự kiện thành tích cá nhân (Mini game): cộng/trừ điểm từng người bằng nút +/−, không có trận đấu.
+// `state` là bản rút gọn {version, status, participants:[{id, points, status}]} để poll rẻ (3s);
+// `logs` tải tăng dần theo after_id (nhật ký chỉ-ghi-thêm). `addPoint` gửi client_op_id để backend
+// bỏ qua request trùng khi client retry (idempotent).
+// Các request poll/chấm điểm có `timeout` riêng (không đổi instance axios toàn cục): request treo quá 10s bị huỷ
+// với err.code === "ECONNABORTED" để vòng poll / hàng đợi chấm điểm không bị kẹt vĩnh viễn.
+const POINT_EVENT_TIMEOUT_MS = 10000;
+export const pointEventsApi = {
+  list: () => api.get("/api/point-events", { timeout: POINT_EVENT_TIMEOUT_MS }),
+  create: (data) => api.post("/api/point-events", data),
+  get: (id) => api.get(`/api/point-events/${id}`, { timeout: POINT_EVENT_TIMEOUT_MS }),
+  state: (id) => api.get(`/api/point-events/${id}/state`, { timeout: POINT_EVENT_TIMEOUT_MS }),
+  logs: (id, afterId = 0, limit = 200) => api.get(`/api/point-events/${id}/logs`, { params: { after_id: afterId, limit }, timeout: POINT_EVENT_TIMEOUT_MS }),
+  update: (id, data) => api.put(`/api/point-events/${id}`, data),
+  addParticipantsBulk: (id, data) => api.post(`/api/point-events/${id}/participants/bulk`, data),
+  removeParticipant: (id, pid) => api.delete(`/api/point-events/${id}/participants/${pid}`),
+  addPoint: (id, pid, delta, clientOpId) => api.post(`/api/point-events/${id}/participants/${pid}/points`, { delta, client_op_id: clientOpId }, { timeout: POINT_EVENT_TIMEOUT_MS }),
+  delete: (id) => api.delete(`/api/point-events/${id}`),
+};
+
 export const reportLinksApi = {
   list: () => api.get("/api/report-links"),
   create: (data) => api.post("/api/report-links", data),
@@ -196,6 +216,14 @@ export const createPublicReportApi = (slug) => {
       // Ghép đội đôi: public theo dõi trực tiếp (poll 2s) + biên bản các phiên đã kết thúc
       partnerDraw: (tid) => pub.get(`${base}/tournaments/${tid}/partner-draw`),
       partnerDrawHistory: (tid) => pub.get(`${base}/tournaments/${tid}/partner-draws`),
+    },
+    // Sự kiện thành tích cá nhân: chỉ hiện khi status != draft; `state` poll 3s (bucket rate-limit riêng)
+    // Mỗi request có timeout 10s để vòng poll public không kẹt khi mạng treo
+    pointEvents: {
+      list: () => pub.get(`${base}/point-events`, { timeout: POINT_EVENT_TIMEOUT_MS }),
+      detail: (eid) => pub.get(`${base}/point-events/${eid}`, { timeout: POINT_EVENT_TIMEOUT_MS }),
+      state: (eid) => pub.get(`${base}/point-events/${eid}/state`, { timeout: POINT_EVENT_TIMEOUT_MS }),
+      logs: (eid, afterId = 0, limit = 200) => pub.get(`${base}/point-events/${eid}/logs`, { params: { after_id: afterId, limit }, timeout: POINT_EVENT_TIMEOUT_MS }),
     },
   };
 };

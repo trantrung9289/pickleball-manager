@@ -483,3 +483,78 @@ class ReminderLog(Base):
     __table_args__ = (
         _UC("club_id", "fee_type_id", "month", "year", "send_date", "chat_id", name="uq_reminder_per_day_per_admin"),
     )
+
+
+# ── SỰ KIỆN THÀNH TÍCH CÁ NHÂN (Mini game) ────────────────
+# Bảng mới tự tạo bởi Base.metadata.create_all ở main.py — không cần _run_migration.
+
+class PointEvent(Base):
+    """Sự kiện thành tích cá nhân (Mini game): cộng/trừ điểm từng người bằng nút +/−, không có trận đấu."""
+    __tablename__ = "point_events"
+    __table_args__ = ({"sqlite_autoincrement": True},)
+
+    id = Column(Integer, primary_key=True, index=True)
+    club_id = Column(Integer, ForeignKey("clubs.id", ondelete="CASCADE"), nullable=False, index=True)
+    kind = Column(String(30), default="mini_game", nullable=False)
+    name = Column(String(200), nullable=False)
+    description = Column(Text, nullable=True)
+    status = Column(Enum(TournamentStatus), default=TournamentStatus.draft, nullable=False)  # dùng lại enum giải
+    version = Column(Integer, default=0, nullable=False)          # +1 mỗi lần đổi điểm/người/trạng thái → poll rẻ
+    created_by = Column(String(50), nullable=True)                # username admin
+    created_at = Column(DateTime, nullable=True)                  # _now_vn() (mẫu TournamentDraw.created_at)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+
+    participants = relationship("PointEventParticipant", back_populates="event", cascade="all, delete-orphan",
+                                order_by="PointEventParticipant.seq", lazy="selectin")
+    logs = relationship("PointLog", back_populates="event", cascade="all, delete-orphan", order_by="PointLog.id")
+
+
+class PointEventParticipant(Base):
+    """Một người trong sự kiện. Thành viên (member_id) HOẶC khách mời (player_id, Player.member_id IS NULL).
+    Người đã có điểm rời đi → status="removed", giữ nguyên điểm và lịch sử."""
+    __tablename__ = "point_event_participants"
+
+    id = Column(Integer, primary_key=True, index=True)
+    event_id = Column(Integer, ForeignKey("point_events.id", ondelete="CASCADE"), nullable=False, index=True)
+    member_id = Column(Integer, ForeignKey("members.id"), nullable=True, index=True)   # thành viên
+    player_id = Column(Integer, ForeignKey("players.id"), nullable=True, index=True)   # khách mời (Player.member_id IS NULL)
+    display_name = Column(String(200), nullable=False)   # snapshot tên lúc thêm
+    rank_snapshot = Column(String(50), nullable=True)    # member.rank / player.rank lúc thêm
+    seq = Column(Integer, nullable=False)                # thứ tự thêm, từ 1
+    points = Column(Integer, default=0, nullable=False)
+    status = Column(String(20), default="active", nullable=False)   # active | removed
+
+    # sqlite_autoincrement: id KHÔNG được tái dùng sau khi xoá cứng (client theo dõi người/log theo id —
+    # tái dùng id làm máy khác hiển thị nhầm người hoặc bỏ sót log khi tải theo after_id).
+    # UNIQUE(event_id, seq): 2 request thêm người song song không được cấp trùng seq (retry ở endpoint).
+    __table_args__ = (UniqueConstraint("event_id", "member_id", name="uq_pep_event_member"),
+                      UniqueConstraint("event_id", "player_id", name="uq_pep_event_player"),
+                      UniqueConstraint("event_id", "seq", name="uq_pep_event_seq"),
+                      {"sqlite_autoincrement": True})
+
+    event = relationship("PointEvent", back_populates="participants")
+    member = relationship("Member")
+    player = relationship("Player")
+
+
+class PointLog(Base):
+    """Nhật ký chỉ-ghi-thêm: từng lần bấm điểm, đổi trạng thái sự kiện, thêm/rời người."""
+    __tablename__ = "point_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    event_id = Column(Integer, ForeignKey("point_events.id", ondelete="CASCADE"), nullable=False, index=True)
+    participant_id = Column(Integer, ForeignKey("point_event_participants.id", ondelete="CASCADE"), nullable=True, index=True)  # None với log trạng thái
+    kind = Column(String(20), default="score", nullable=False)   # score | status | participant
+    delta = Column(Integer, default=0, nullable=False)           # ±1 với score, 0 với loại khác
+    points_after = Column(Integer, default=0, nullable=False)
+    note = Column(String(200), nullable=True)                    # status: "Bắt đầu" | "Kết thúc" | "Mở lại"; participant: "Thêm" | "Rời" | "Thêm lại"
+    client_op_id = Column(String(40), nullable=True)             # chống ghi trùng khi client retry
+    actor_name = Column(String(100), nullable=True)              # username admin — KHÔNG đưa ra public
+    created_at = Column(DateTime, nullable=True)                 # _now_vn()
+
+    __table_args__ = (UniqueConstraint("event_id", "client_op_id", name="uq_plog_event_op"),
+                      {"sqlite_autoincrement": True})   # id không tái dùng: client tải log tăng dần theo after_id
+
+    event = relationship("PointEvent", back_populates="logs")
+    participant = relationship("PointEventParticipant")

@@ -11,10 +11,13 @@ import {
   EditOutlined, DeleteOutlined, ReloadOutlined,
   CheckCircleOutlined, SaveOutlined, ArrowRightOutlined,
   UserOutlined, TeamOutlined, UserAddOutlined, PrinterOutlined, GiftOutlined, WarningOutlined,
-  SettingOutlined,
+  SettingOutlined, StarOutlined,
 } from "@ant-design/icons";
-import { tournamentsApi, membersApi, playersApi } from "../api";
+import dayjs from "dayjs";
+import { tournamentsApi, pointEventsApi, membersApi, playersApi } from "../api";
 import ResponsiveTable from "../components/ResponsiveTable";
+import { AddParticipantsModal, QuickGuestForm } from "../components/AddParticipantsModal";
+import PointEventDetail, { CreatePointEventModal } from "./PointEventDetail";
 import TournamentPrintSheet from "../components/TournamentPrintSheet";
 import DrawCeremony from "../components/draw/DrawCeremony";
 import PartnerDrawCeremony from "../components/draw/PartnerDrawCeremony";
@@ -346,8 +349,9 @@ function CreateWizard({ onCreated, onClose }) {
       {/* ── Bước 0: Thông tin giải ── */}
       <div style={{ display: step === 0 ? "block" : "none" }}>
         <Form form={form} layout="vertical">
-          <Form.Item name="name" label="Tên giải đấu" rules={[{ required: true, message: "Nhập tên giải đấu" }]}>
-            <Input placeholder="VD: Giải Pickleball CLB Tháng 7/2026" autoFocus />
+          <Form.Item name="name" label="Tên giải đấu" initialValue={`GIẢI ĐẤU - THÁNG ${dayjs().format("MM-YYYY")}`}
+            rules={[{ required: true, message: "Nhập tên giải đấu" }]}>
+            <Input placeholder="VD: GIẢI ĐẤU - THÁNG 10-2026" autoFocus />
           </Form.Item>
           <Form.Item name="format" label="Thể thức thi đấu" rules={[{ required: true, message: "Chọn thể thức" }]}>
             <Select placeholder="Chọn thể thức" onChange={setFormat}>
@@ -438,250 +442,6 @@ function CreateWizard({ onCreated, onClose }) {
         </Space>
       </Row>
     </div>
-  );
-}
-
-const MEMBER_STATUS_MAP = {
-  active: { label: "Hoạt động", color: "success" },
-  inactive: { label: "Tạm nghỉ", color: "warning" },
-  suspended: { label: "Đình chỉ", color: "error" },
-};
-
-/** Form nhỏ tạo khách mời nhanh (dùng trong AddParticipantsModal & ReplaceParticipantModal) — hạng từ cấu hình CLB. */
-function QuickGuestForm({ form, loading, onAdd, title = "Tạo khách mời mới" }) {
-  const { options: rankOptions, unranked } = useRankLevels();
-  return (
-    <Card size="small" style={{ marginBottom: 12, background: "#fafafa" }}
-      title={<span style={{ fontSize: 13 }}>{title}</span>}>
-      <Form form={form} layout="inline" style={{ flexWrap: "wrap", gap: 8 }}>
-        <Form.Item name="name" rules={[{ required: true, message: "Nhập tên" }]} style={{ marginBottom: 8 }}>
-          <Input placeholder="Họ và tên *" style={{ width: 160 }} />
-        </Form.Item>
-        <Form.Item name="phone" style={{ marginBottom: 8 }}>
-          <Input placeholder="Số điện thoại" style={{ width: 130 }} />
-        </Form.Item>
-        <Form.Item name="rank" initialValue={unranked} style={{ marginBottom: 8 }}>
-          <Select style={{ width: 150 }} placeholder="Chọn hạng" showSearch
-            options={rankOptions.map((r) => ({ value: r, label: r }))} />
-        </Form.Item>
-        <Form.Item style={{ marginBottom: 8 }}>
-          <Button type="primary" icon={<PlusOutlined />} loading={loading} onClick={onAdd}>Thêm</Button>
-        </Form.Item>
-      </Form>
-    </Card>
-  );
-}
-
-// ── Thêm người chơi hàng loạt vào giải Nháp (thành viên + khách mời) ──
-// Chuyển từ bước "Chọn người chơi" của wizard cũ: tabs, checkbox list, tìm kiếm, chọn tất cả, tạo khách mời nhanh.
-function AddParticipantsModal({ tournament, onAdded, onClose }) {
-  const [allMembers, setAllMembers] = useState([]);
-  const [allGuests, setAllGuests] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [selectedIds, setSelectedIds] = useState([]);           // member IDs
-  const [selectedGuestIds, setSelectedGuestIds] = useState([]); // player IDs (khách mời)
-  const [memberSearch, setMemberSearch] = useState("");
-  const [guestSearch, setGuestSearch] = useState("");
-  const [guestForm] = Form.useForm();
-  const [addingGuest, setAddingGuest] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const { unranked } = useRankLevels();
-
-  useEffect(() => {
-    let cancelled = false;
-    Promise.all([membersApi.list(), playersApi.list("guest")])
-      .then(([m, g]) => { if (!cancelled) { setAllMembers(m.data); setAllGuests(g.data); } })
-      .catch(() => { if (!cancelled) message.error("Không tải được danh sách người chơi"); })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
-  }, []);
-
-  // Người đã có trong giải (ở bất kỳ vị trí, kể cả người 2 của một đội) → disabled + "Đã trong giải"
-  const { usedMemberIds, usedPlayerIds } = useMemo(() => {
-    const m = new Set(), p = new Set();
-    (tournament.participants || []).forEach((x) => {
-      if (x.member_id) m.add(x.member_id);
-      if (x.partner_member_id) m.add(x.partner_member_id);
-      if (x.player_id) p.add(x.player_id);
-      if (x.partner_player_id) p.add(x.partner_player_id);
-    });
-    return { usedMemberIds: m, usedPlayerIds: p };
-  }, [tournament.participants]);
-
-  const norm = (s) => (s || "").toString().toLowerCase();
-  const visibleMembers = allMembers.filter((m) => !memberSearch
-    || norm(m.full_name).includes(norm(memberSearch)) || norm(m.phone).includes(norm(memberSearch)) || norm(m.member_code).includes(norm(memberSearch)));
-  const visibleGuests = allGuests.filter((g) => !guestSearch
-    || norm(g.name).includes(norm(guestSearch)) || norm(g.phone).includes(norm(guestSearch)));
-  const selectableMembers = visibleMembers.filter((m) => !usedMemberIds.has(m.id));
-  const selectableGuests = visibleGuests.filter((g) => !usedPlayerIds.has(g.id));
-  const totalSelected = selectedIds.length + selectedGuestIds.length;
-
-  // ResponsiveTable (mobile) không hỗ trợ getCheckboxProps → lọc bỏ người đã trong giải ngay tại onChange
-  const onMemberKeys = (keys) => setSelectedIds(keys.filter((id) => !usedMemberIds.has(id)));
-  const onGuestKeys = (keys) => setSelectedGuestIds(keys.filter((id) => !usedPlayerIds.has(id)));
-  // "Chọn tất cả" áp dụng trên danh sách đang hiển thị (theo ô tìm kiếm), giữ các lựa chọn ngoài bộ lọc
-  const toggleAll = (checked, selectable, selected, setSelected) => {
-    const ids = selectable.map((x) => x.id);
-    setSelected(checked ? [...new Set([...selected, ...ids])] : selected.filter((id) => !ids.includes(id)));
-  };
-  const allChecked = (selectable, selected) => selectable.length > 0 && selectable.every((x) => selected.includes(x.id));
-  const someChecked = (selectable, selected) => selectable.some((x) => selected.includes(x.id));
-
-  const handleAddGuest = async () => {
-    let vals;
-    try { vals = await guestForm.validateFields(); } catch { return; }
-    setAddingGuest(true);
-    try {
-      const res = await playersApi.create({ name: vals.name, phone: vals.phone || null, rank: vals.rank || unranked });
-      setAllGuests((prev) => [res.data, ...prev]);
-      setSelectedGuestIds((prev) => [...prev, res.data.id]);
-      guestForm.resetFields();
-      message.success(`Đã thêm khách mời: ${res.data.name}`);
-    } catch (err) {
-      message.error(err?.response?.data?.detail || "Không thể thêm khách mời");
-    } finally { setAddingGuest(false); }
-  };
-
-  const handleSubmit = async () => {
-    if (totalSelected === 0) { message.error("Chọn ít nhất 1 người"); return; }
-    setSaving(true);
-    try {
-      const res = await tournamentsApi.addParticipantsBulk(tournament.id, { member_ids: selectedIds, player_ids: selectedGuestIds });
-      const { added = 0, skipped = [] } = res.data || {};
-      message.success(`Đã thêm ${added} người${skipped.length ? ` (bỏ qua ${skipped.length} đã có)` : ""}`);
-      await onAdded(res.data?.tournament);
-      onClose();
-    } catch (err) {
-      message.error(err?.response?.data?.detail || "Không thể thêm người chơi");
-    } finally { setSaving(false); }
-  };
-
-  const inTournamentTag = <Tag color="default" style={{ marginLeft: 6 }}>Đã trong giải</Tag>;
-  const rankTag = (v) => (v ? <Tag color="purple">{v}</Tag> : <Text type="secondary">—</Text>);
-
-  const memberCols = [
-    { title: "Họ và tên", dataIndex: "full_name", render: (v, r) => <span>{v}{usedMemberIds.has(r.id) && inTournamentTag}</span> },
-    { title: "Hạng", dataIndex: "rank", width: 110, render: rankTag },
-    { title: "Trạng thái", dataIndex: "status", width: 110, render: (v) => { const s = MEMBER_STATUS_MAP[v] || { label: v, color: "default" }; return <Badge status={s.color} text={s.label} />; } },
-    { title: "SĐT", dataIndex: "phone", width: 120, render: (v) => v || "—" },
-  ];
-  const guestCols = [
-    { title: "Họ và tên", dataIndex: "name",
-      render: (v, r) => <span><Tag color="orange" style={{ marginRight: 6 }}>Khách</Tag>{v}{usedPlayerIds.has(r.id) && inTournamentTag}</span> },
-    { title: "SĐT", dataIndex: "phone", width: 120, render: (v) => v || "—" },
-    { title: "Hạng", dataIndex: "rank", width: 110, render: (v) => rankTag(v || unranked) },
-  ];
-
-  const selectionBar = (selectable, selected, setSelected, label) => (
-    <div style={{ marginBottom: 12, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-      <Checkbox
-        checked={allChecked(selectable, selected)}
-        indeterminate={!allChecked(selectable, selected) && someChecked(selectable, selected)}
-        disabled={selectable.length === 0}
-        onChange={(e) => toggleAll(e.target.checked, selectable, selected, setSelected)}
-      >
-        Chọn tất cả {label} ({selectable.length})
-      </Checkbox>
-      {selected.length > 0 && (
-        <Button size="small" type="link" onClick={() => setSelected([])}>Bỏ chọn ({selected.length})</Button>
-      )}
-    </div>
-  );
-
-  return (
-    <Modal title="Thêm người chơi vào giải" open onCancel={onClose} width={720}
-      footer={
-        <Space>
-          <Button onClick={onClose}>Đóng</Button>
-          <Button type="primary" icon={<PlusOutlined />} loading={saving} disabled={totalSelected === 0} onClick={handleSubmit}>
-            Thêm {totalSelected} người
-          </Button>
-        </Space>
-      }>
-      <Alert type={totalSelected > 0 ? "info" : "warning"} showIcon style={{ marginBottom: 12 }}
-        message={totalSelected > 0
-          ? `Đã chọn ${totalSelected} người (${selectedIds.length} thành viên, ${selectedGuestIds.length} khách mời)`
-          : "Tích chọn người chơi ở hai tab rồi bấm Thêm"}
-        description={tournament.team_type === "doubles"
-          ? "Giải đôi: mỗi người được thêm ở trạng thái chưa có đội — ghép đội bằng vòng quay hoặc ghép tay sau."
-          : undefined} />
-      <Tabs
-        defaultActiveKey="member"
-        items={[
-          {
-            key: "member",
-            label: <span><UserOutlined /> Thành viên CLB ({selectedIds.length})</span>,
-            children: (
-              <>
-                <Input.Search allowClear placeholder="Tìm theo tên / SĐT / mã TV" value={memberSearch}
-                  onChange={(e) => setMemberSearch(e.target.value)} style={{ marginBottom: 12 }} />
-                {selectionBar(selectableMembers, selectedIds, setSelectedIds, "thành viên")}
-                <ResponsiveTable
-                  loading={loading}
-                  rowSelection={{
-                    selectedRowKeys: selectedIds,
-                    onChange: onMemberKeys,
-                    getCheckboxProps: (r) => ({ disabled: usedMemberIds.has(r.id) }),
-                  }}
-                  columns={memberCols}
-                  dataSource={visibleMembers}
-                  rowKey="id" size="small" pagination={{ pageSize: 10 }}
-                  mobileTitle={(r) => {
-                    const s = MEMBER_STATUS_MAP[r.status] || { label: r.status, color: "default" };
-                    return (
-                      <span>
-                        {r.full_name}
-                        {r.rank && <Tag color="purple" style={{ marginLeft: 6 }}>{r.rank}</Tag>}
-                        {r.status !== "active" && <Badge status={s.color} text={s.label} style={{ marginLeft: 8 }} />}
-                        {usedMemberIds.has(r.id) && inTournamentTag}
-                      </span>
-                    );
-                  }}
-                  mobileHideColumns={["Họ và tên", "Hạng", "Trạng thái"]}
-                />
-              </>
-            ),
-          },
-          {
-            key: "guest",
-            label: <span><UserAddOutlined /> Khách mời ({selectedGuestIds.length})</span>,
-            children: (
-              <>
-                <QuickGuestForm form={guestForm} loading={addingGuest} onAdd={handleAddGuest} title="Thêm người chơi ngoài CLB" />
-                {allGuests.length === 0 && !loading ? (
-                  <Empty description="Chưa có khách mời nào — thêm mới ở trên" image={Empty.PRESENTED_IMAGE_SIMPLE} />
-                ) : (
-                  <>
-                    <Input.Search allowClear placeholder="Tìm theo tên / SĐT" value={guestSearch}
-                      onChange={(e) => setGuestSearch(e.target.value)} style={{ marginBottom: 12 }} />
-                    {selectionBar(selectableGuests, selectedGuestIds, setSelectedGuestIds, "khách mời")}
-                    <ResponsiveTable
-                      loading={loading}
-                      rowSelection={{
-                        selectedRowKeys: selectedGuestIds,
-                        onChange: onGuestKeys,
-                        getCheckboxProps: (r) => ({ disabled: usedPlayerIds.has(r.id) }),
-                      }}
-                      columns={guestCols}
-                      dataSource={visibleGuests}
-                      rowKey="id" size="small" pagination={{ pageSize: 10 }}
-                      mobileTitle={(r) => (
-                        <span>
-                          <Tag color="orange" style={{ marginRight: 6 }}>Khách</Tag>{r.name}
-                          {usedPlayerIds.has(r.id) && inTournamentTag}
-                        </span>
-                      )}
-                      mobileHideColumns={["Họ và tên"]}
-                    />
-                  </>
-                )}
-              </>
-            ),
-          },
-        ]}
-      />
-    </Modal>
   );
 }
 
@@ -2531,37 +2291,69 @@ export default function Tournament() {
   const [tournaments, setTournaments] = useState([]);
   const [loading, setLoading] = useState(true); // true ngay từ đầu vì effect mount tự fetch
   const [creating, setCreating] = useState(false);
+  const [creatingEvent, setCreatingEvent] = useState(false); // modal khởi tạo sự kiện thành tích cá nhân
   const [detail, setDetail] = useState(null);
   const [justCreated, setJustCreated] = useState(false); // vừa tạo giải → trang giải tự mở modal thêm người chơi
 
+  // Danh sách gộp 2 nguồn: giải đấu + sự kiện thành tích cá nhân (kind phân biệt vì id có thể trùng giữa 2 bảng)
   const load = async () => {
-    try { const r = await tournamentsApi.list(); setTournaments(r.data); }
-    finally { setLoading(false); }
+    try {
+      const [t, e] = await Promise.all([
+        tournamentsApi.list(),
+        pointEventsApi.list().catch(() => ({ data: [] })), // sự kiện lỗi tải không làm mất danh sách giải
+      ]);
+      const rows = [
+        ...t.data.map((x) => ({ ...x, kind: "tournament" })),
+        ...e.data.map((x) => ({ ...x, kind: "point_event" })),
+      ];
+      // Giải đấu lưu created_at theo UTC (server_default), sự kiện theo giờ VN (_now_vn) — quy về cùng mốc để sắp xếp
+      const ts = (r) => (r.created_at
+        ? Date.parse(`${r.created_at}${r.kind === "point_event" ? "+07:00" : "Z"}`) || 0
+        : 0);
+      rows.sort((a, b) => (ts(b) - ts(a)) || (b.id - a.id));
+      setTournaments(rows);
+    } finally { setLoading(false); }
   };
 
   useEffect(() => { load(); }, []);
 
   const handleDelete = async (t) => {
+    const isEvent = t.kind === "point_event";
     const ok = await confirm({
-      title: "Xác nhận xóa giải đấu?",
-      content: <div>Giải <b>{t.name}</b> và toàn bộ kết quả sẽ bị xóa vĩnh viễn.</div>,
+      title: isEvent ? "Xác nhận xóa sự kiện?" : "Xác nhận xóa giải đấu?",
+      content: isEvent
+        ? <div>Sự kiện <b>{t.name}</b> và toàn bộ lịch sử điểm sẽ bị xóa vĩnh viễn.</div>
+        : <div>Giải <b>{t.name}</b> và toàn bộ kết quả sẽ bị xóa vĩnh viễn.</div>,
       okButtonProps: { danger: true }, okText: "Xóa",
     });
     if (!ok) return;
-    await tournamentsApi.delete(t.id);
-    message.success("Đã xóa giải đấu");
+    try {
+      await (isEvent ? pointEventsApi.delete(t.id) : tournamentsApi.delete(t.id));
+      message.success(isEvent ? "Đã xóa sự kiện" : "Đã xóa giải đấu");
+    } catch (err) {
+      message.error(err?.response?.data?.detail || "Không thể xóa");
+    }
     load();
   };
 
   const columns = [
     { title: "Tên giải đấu", dataIndex: "name", render: (v, r) => <a onClick={() => { setJustCreated(false); setDetail(r); }}>{v}</a> },
-    { title: "Thể thức", dataIndex: "format", render: v => <Tag color={FORMAT_MAP[v]?.color}>{FORMAT_MAP[v]?.label}</Tag> },
+    { title: "Thể thức", dataIndex: "format",
+      render: (v, r) => r.kind === "point_event"
+        ? <Tag color="gold">Thành tích cá nhân</Tag>
+        : <Tag color={FORMAT_MAP[v]?.color}>{FORMAT_MAP[v]?.label}</Tag> },
     { title: "Loại đội", dataIndex: "team_type", width: 90,
-      render: v => <Tag color={v === "doubles" ? "geekblue" : "default"}>{v === "doubles" ? "Đấu đôi" : "Đấu đơn"}</Tag> },
+      // Sự kiện thành tích không có loại đội → trả null để ResponsiveTable (mobile) ẩn hẳn dòng, desktop ô để trống
+      render: (v, r) => r.kind === "point_event"
+        ? null
+        : <Tag color={v === "doubles" ? "geekblue" : "default"}>{v === "doubles" ? "Đấu đôi" : "Đấu đơn"}</Tag> },
     { title: "Trạng thái", dataIndex: "status", render: v => <Badge status={STATUS_MAP[v]?.color} text={STATUS_MAP[v]?.label} /> },
-    { title: "Đội", render: (_, r) => r.participants?.length || 0, align: "center", width: 60 },
+    { title: "Người/Đội", render: (_, r) => (r.kind === "point_event" ? r.participant_count : r.participants?.length) || 0, align: "center", width: 80 },
     {
       title: "Tiến độ", render: (_, r) => {
+        if (r.kind === "point_event") {
+          return r.log_count ? <Text>{r.log_count} lượt chấm</Text> : <Text type="secondary">Chưa chấm</Text>;
+        }
         const total = r.matches?.length || 0;
         const done = r.matches?.filter(m => m.status === "completed").length || 0;
         return total ? <Text>{done}/{total} trận</Text> : <Text type="secondary">Chưa sinh lịch</Text>;
@@ -2578,6 +2370,17 @@ export default function Tournament() {
     },
   ];
 
+  if (detail && detail.kind === "point_event") {
+    return (
+      <PointEventDetail
+        event={detail}
+        autoOpenAdd={justCreated}
+        onBack={() => { setDetail(null); setJustCreated(false); load(); }}
+        onUpdated={(ev) => setDetail({ ...ev, kind: "point_event" })}
+      />
+    );
+  }
+
   if (detail) {
     return (
       <TournamentDetail
@@ -2593,19 +2396,24 @@ export default function Tournament() {
     <div>
       <Row justify="space-between" align="middle" style={{ marginBottom: 16 }}>
         <Title level={3} style={{ margin: 0 }}>Quản lý Giải đấu</Title>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreating(true)}>
-          Tạo giải đấu mới
-        </Button>
+        <Space wrap>
+          <Button icon={<StarOutlined style={{ color: "#faad14" }} />} onClick={() => setCreatingEvent(true)}>
+            Khởi tạo sự kiện thành tích
+          </Button>
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreating(true)}>
+            Tạo giải đấu mới
+          </Button>
+        </Space>
       </Row>
 
       <ResponsiveTable
         columns={columns}
         dataSource={tournaments}
-        rowKey="id"
+        rowKey={(r) => `${r.kind}-${r.id}`}
         loading={loading}
         size="small"
         pagination={{ pageSize: 10 }}
-        locale={{ emptyText: <Empty description="Chưa có giải đấu nào." image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
+        locale={{ emptyText: <Empty description="Chưa có giải đấu hay sự kiện nào." image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
         mobileTitle={(r) => <a onClick={() => { setJustCreated(false); setDetail(r); }}>{r.name}</a>}
         mobileHideColumns={["Tên giải đấu"]}
       />
@@ -2623,6 +2431,13 @@ export default function Tournament() {
           onClose={() => setCreating(false)}
         />
       </Modal>
+
+      {creatingEvent && (
+        <CreatePointEventModal
+          onCreated={(ev) => { setCreatingEvent(false); setJustCreated(true); setDetail({ ...ev, kind: "point_event" }); load(); }}
+          onClose={() => setCreatingEvent(false)}
+        />
+      )}
     </div>
   );
 }

@@ -4,11 +4,12 @@ import {
   Collapse, Divider, Space, Button, Badge, Modal, Form, Input, AutoComplete, message,
 } from "antd";
 import {
-  ReloadOutlined, SyncOutlined, TrophyOutlined, EditOutlined, SafetyCertificateOutlined,
+  ReloadOutlined, SyncOutlined, TrophyOutlined, EditOutlined, SafetyCertificateOutlined, StarOutlined,
 } from "@ant-design/icons";
 import ResponsiveTable from "./ResponsiveTable";
 import DrawCeremony from "./draw/DrawCeremony";
 import PartnerDrawCeremony from "./draw/PartnerDrawCeremony";
+import PublicPointEventBoard from "./PublicPointEventBoard";
 import { useViewMode } from "../contexts/ViewModeContext";
 import { teamLabel, teamRank } from "../utils/tournamentLabels";
 import {
@@ -867,9 +868,23 @@ function pickLatest(local, summary) {
   return local || summary || null;
 }
 
+// Sự kiện thành tích cá nhân dùng chung Select với giải: giải giữ value số, sự kiện dùng chuỗi "pe-<id>"
+const peKey = (e) => (e ? `pe-${e.id}` : undefined);
+const isPeKey = (v) => typeof v === "string" && v.startsWith("pe-");
+const peIdFromKey = (v) => Number(v.slice(3));
+
 export default function PublicTournamentTracker({ api }) {
-  const [list, setList] = useState(null);
-  const [selectedId, setSelectedId] = useState(null);
+  const [list, setList] = useState(null);             // giải đấu
+  const [eventList, setEventList] = useState(null);   // sự kiện thành tích cá nhân (public: status != draft)
+  const [selectedKey, setSelectedKey] = useState(null);   // giá trị Select: số (giải) | "pe-<id>" (sự kiện)
+  const [boardRefreshKey, setBoardRefreshKey] = useState(0);   // tăng → PublicPointEventBoard tải lại toàn bộ
+  const listRef = useRef(null);        // bản mới nhất của 2 danh sách — tính lại lựa chọn khi 1 trong 2 request lỗi
+  const eventListRef = useRef(null);
+  const isEventSelected = isPeKey(selectedKey);
+  const selectedEventId = isEventSelected ? peIdFromKey(selectedKey) : null;
+  // id giải đang xem — null khi đang xem sự kiện, nhờ đó MỌI luồng giải bên dưới (detail 12s, bốc thăm,
+  // ghép đội) tự tạm dừng như lúc chưa chọn giải, không cần sửa từng chỗ.
+  const selectedId = isEventSelected ? null : selectedKey;
   const [tournament, setTournament] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -880,23 +895,33 @@ export default function PublicTournamentTracker({ api }) {
   const lastDrawKeyRef = useRef(null);        // "tid:id:status" lần poll trước — phát hiện open → committed/cancelled
   const lastPartnerKeyRef = useRef(null);     // như trên, cho phiên ghép đội
 
-  // Danh sách giải: tải lúc mount và mỗi tick 12s (bucket rate-limit riêng theo path) để giải vừa
-  // "Bắt đầu" xuất hiện mà không cần F5; tự chọn giải khi chưa chọn gì / giải cũ biến mất:
-  // ưu tiên đang diễn ra → Nháp đang ghép đội trực tiếp → phần tử đầu.
-  const loadList = useCallback(() => (
-    api.tournaments.list()
-      .then(r => {
-        const data = Array.isArray(r.data) ? r.data : [];
-        setList(data);
-        if (data.length > 0) {
-          const preferred = data.find(t => t.status === "active")
-            || data.find(t => t.partner_draw_status === "open")
-            || data[0];
-          setSelectedId(prev => (prev && data.some(t => t.id === prev)) ? prev : preferred.id);
-        }
-      })
-      .catch(() => {})   // lỗi mạng/429: giữ danh sách cũ
-  ), [api]);
+  // Danh sách giải + sự kiện thành tích: tải lúc mount và mỗi tick 12s (bucket rate-limit riêng theo path)
+  // để giải/sự kiện vừa "Bắt đầu" xuất hiện mà không cần F5. Hai request độc lập: request nào lỗi
+  // (mạng/429) thì giữ danh sách cũ của riêng nó. Tự chọn khi chưa chọn gì / mục cũ biến mất:
+  // ưu tiên giải đang diễn ra → giải Nháp đang ghép đội trực tiếp → sự kiện đang diễn ra → giải đầu → sự kiện đầu.
+  const loadList = useCallback(() => {
+    const asList = (r) => (Array.isArray(r.data) ? r.data : []);
+    const pT = api.tournaments.list().then(asList).catch(() => null);
+    // Bọc trong Promise để api.pointEvents thiếu (bản api.js cũ) cũng chỉ là "lỗi tải sự kiện", không vỡ trang
+    const pE = Promise.resolve().then(() => api.pointEvents.list()).then(asList).catch(() => null);
+    return Promise.all([pT, pE]).then(([tData, eData]) => {
+      if (tData) { listRef.current = tData; setList(tData); }
+      if (eData) { eventListRef.current = eData; setEventList(eData); }
+      const ts = listRef.current || [];
+      const es = eventListRef.current || [];
+      if (ts.length === 0 && es.length === 0) return;
+      const preferred = ts.find(t => t.status === "active")?.id
+        ?? ts.find(t => t.partner_draw_status === "open")?.id
+        ?? peKey(es.find(e => e.status === "active"))
+        ?? ts[0]?.id
+        ?? peKey(es[0]);
+      setSelectedKey(prev => {
+        if (prev == null) return preferred;
+        const stillThere = isPeKey(prev) ? es.some(e => peKey(e) === prev) : ts.some(t => t.id === prev);
+        return stillThere ? prev : preferred;
+      });
+    });
+  }, [api]);
 
   useEffect(() => {
     loadList().finally(() => setLoading(false));
@@ -1009,8 +1034,10 @@ export default function PublicTournamentTracker({ api }) {
     return <div style={{ textAlign: "center", padding: 48 }}><Spin size="large" /></div>;
   }
 
-  if (!list || list.length === 0) {
-    return <Empty description="CLB chưa có giải đấu nào để theo dõi" />;
+  const hasTournaments = (list?.length ?? 0) > 0;
+  const hasEvents = (eventList?.length ?? 0) > 0;
+  if (!hasTournaments && !hasEvents) {
+    return <Empty description="CLB chưa có giải đấu hay sự kiện thành tích nào để theo dõi" />;
   }
 
   const matches = tournament?.matches || [];
@@ -1026,36 +1053,56 @@ export default function PublicTournamentTracker({ api }) {
     <div>
       <Space wrap style={{ marginBottom: 16, width: "100%", justifyContent: "space-between" }}>
         <Select
-          value={selectedId}
-          onChange={setSelectedId}
+          value={selectedKey}
+          onChange={setSelectedKey}
           style={{ minWidth: 260 }}
-          options={list.map(t => ({
-            value: t.id,
-            label: (
-              <span>
-                <TrophyOutlined style={{ color: "#faad14", marginRight: 6 }} />
-                {t.name}
-                {t.status === "active" && <Tag color="green" style={{ marginLeft: 6 }}>Đang diễn ra</Tag>}
-                {t.status === "completed" && <Tag color="default" style={{ marginLeft: 6 }}>Đã kết thúc</Tag>}
-                {t.status === "draft" && (
-                  t.partner_draw_status === "open"
-                    ? <Tag color="processing" style={{ marginLeft: 6 }}>Đang ghép đội</Tag>
-                    : <Tag color="orange" style={{ marginLeft: 6 }}>Chuẩn bị</Tag>
-                )}
-              </span>
-            ),
-          }))}
+          options={[
+            ...(list || []).map(t => ({
+              value: t.id,
+              label: (
+                <span>
+                  <TrophyOutlined style={{ color: "#faad14", marginRight: 6 }} />
+                  {t.name}
+                  {t.status === "active" && <Tag color="green" style={{ marginLeft: 6 }}>Đang diễn ra</Tag>}
+                  {t.status === "completed" && <Tag color="default" style={{ marginLeft: 6 }}>Đã kết thúc</Tag>}
+                  {t.status === "draft" && (
+                    t.partner_draw_status === "open"
+                      ? <Tag color="processing" style={{ marginLeft: 6 }}>Đang ghép đội</Tag>
+                      : <Tag color="orange" style={{ marginLeft: 6 }}>Chuẩn bị</Tag>
+                  )}
+                </span>
+              ),
+            })),
+            // Sự kiện thành tích cá nhân (Mini game): public chỉ thấy khi đang diễn ra / đã kết thúc
+            ...(eventList || []).map(e => ({
+              value: peKey(e),
+              label: (
+                <span>
+                  <StarOutlined style={{ color: "#faad14", marginRight: 6 }} />
+                  {e.name}
+                  {e.status === "active" && <Tag color="green" style={{ marginLeft: 6 }}>Đang diễn ra</Tag>}
+                  {e.status === "completed" && <Tag color="default" style={{ marginLeft: 6 }}>Đã kết thúc</Tag>}
+                </span>
+              ),
+            })),
+          ]}
         />
         <Button
           icon={refreshing ? <SyncOutlined spin /> : <ReloadOutlined />}
-          onClick={() => { loadDetail(true); if (isLive) loadDraw(); if (isPartnerLive) loadPartnerDraw(); }}
+          onClick={() => {
+            if (isEventSelected) { setBoardRefreshKey(k => k + 1); return; }
+            loadDetail(true); if (isLive) loadDraw(); if (isPartnerLive) loadPartnerDraw();
+          }}
           loading={false}
         >
           Làm mới
         </Button>
       </Space>
 
-      {tournament && (
+      {isEventSelected ? (
+        // key theo id → đổi sự kiện là remount sạch (state điểm/lịch sử không lẫn giữa 2 sự kiện)
+        <PublicPointEventBoard key={selectedEventId} api={api} eventId={selectedEventId} refreshKey={boardRefreshKey} />
+      ) : tournament && (
         <>
           <Space style={{ marginBottom: 12 }}>
             <Badge status={anyLive || tournament.status === "active" ? "processing" : "default"} />

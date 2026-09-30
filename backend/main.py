@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session, selectinload
-from sqlalchemy import func, extract, text, or_, case
+from sqlalchemy import func, extract, text, or_, case, update as sa_update
 from sqlalchemy.exc import IntegrityError
 from typing import Optional, List
 from datetime import date, datetime
@@ -65,6 +65,29 @@ def _check_people_in_club(db: Session, club_id: int, member_id=None, player_id=N
         _get_member_in_club(db, member_id, club_id)
     if player_id is not None:
         _get_player_in_club(db, player_id, club_id)
+
+
+def _normalize_people_ids(db: Session, club_id: int, member_ids, player_ids):
+    """Chuẩn hoá danh sách người nhận từ body (dùng chung cho giải đấu & sự kiện thành tích):
+    - loại trùng trong chính request (giữ thứ tự);
+    - kiểm tra từng người thuộc CLB hiện tại (404 nếu không);
+    - bản ghi Player gắn thành viên (member_id != NULL) là CÙNG MỘT NGƯỜI với thành viên đó → quy đổi
+      sang member_id để không vào 2 lần (một lần qua member_ids, một lần qua player_ids).
+    Trả về (member_ids, player_ids) — player_ids chỉ còn khách mời thật (Player.member_id IS NULL)."""
+    member_ids = list(dict.fromkeys(member_ids or []))
+    player_ids = list(dict.fromkeys(player_ids or []))
+    for mid in member_ids:
+        _check_people_in_club(db, club_id, member_id=mid)
+    guest_ids = []
+    for plid in player_ids:
+        pl = _get_player_in_club(db, plid, club_id)
+        if pl.member_id is not None:
+            if pl.member_id not in member_ids:
+                _check_people_in_club(db, club_id, member_id=pl.member_id)
+                member_ids.append(pl.member_id)
+        else:
+            guest_ids.append(plid)
+    return member_ids, guest_ids
 
 # ── MIGRATION: tự động thêm cột mới vào các bảng cũ khi deploy ──
 def _run_migration():
@@ -451,6 +474,9 @@ def admin_delete_club(cid: int, db: Session = Depends(get_db), su = Depends(requ
 
     for t in db.query(models.Tournament).filter(models.Tournament.club_id == cid).all():
         db.delete(t)  # cascade participants + matches qua ORM relationship
+    db.flush()
+    for ev in db.query(models.PointEvent).filter(models.PointEvent.club_id == cid).all():
+        db.delete(ev)  # cascade participants + logs của sự kiện thành tích (FK tới members/players không có ON DELETE)
     db.flush()
 
     db.query(models.Transaction).filter(models.Transaction.club_id == cid).delete(synchronize_session=False)
@@ -962,6 +988,11 @@ def delete_member(
     ).first()
     if in_tournament:
         raise HTTPException(400, "Không thể xoá: thành viên đang có tên trong giải đấu")
+    in_event = db.query(models.PointEventParticipant.id).filter(
+        models.PointEventParticipant.member_id == member_id
+    ).first()
+    if in_event:
+        raise HTTPException(400, "Không thể xoá: thành viên đang có tên trong sự kiện thành tích")
     db.delete(m)
     db.commit()
 
@@ -2202,6 +2233,87 @@ def public_tournament_partner_draws(request: Request, slug: str, tid: int, db: S
     return [_public_partner_draw_out(d, t) for d in sorted(t.partner_draws, key=lambda d: d.seq, reverse=True)]
 
 
+# ── PUBLIC: sự kiện thành tích cá nhân (Mini game) — hiển thị khi status != draft ──
+# Không response_model: trả dict đã pop khoá nhạy cảm (created_by / actor_name) để pydantic không điền lại null.
+
+def _is_point_event_public(ev: "models.PointEvent") -> bool:
+    return ev.status != models.TournamentStatus.draft
+
+
+def _public_point_event_or_404(db: Session, slug: str, eid: int) -> "models.PointEvent":
+    rec = _validate_token(slug, db)
+    if eid < 1 or eid > 2 ** 62:
+        raise HTTPException(404, "Không tìm thấy sự kiện")
+    ev = db.query(models.PointEvent).filter(
+        models.PointEvent.id == eid, models.PointEvent.club_id == rec.club_id,
+    ).first()
+    if not ev or not _is_point_event_public(ev):
+        raise HTTPException(404, "Không tìm thấy sự kiện")
+    return ev
+
+
+@app.get("/api/public/report/{slug}/point-events")
+@limiter.limit("60/minute")
+def public_point_events_list(request: Request, slug: str, db: Session = Depends(get_db)):
+    """Danh sách nhẹ, id giảm dần. Không PII, không created_by."""
+    rec = _validate_token(slug, db)
+    evs = [ev for ev in db.query(models.PointEvent).filter(
+        models.PointEvent.club_id == rec.club_id,
+    ).order_by(models.PointEvent.id.desc()).all() if _is_point_event_public(ev)]
+    counts = dict(
+        db.query(models.PointLog.event_id, func.count(models.PointLog.id))
+        .join(models.PointEvent, models.PointEvent.id == models.PointLog.event_id)
+        .filter(models.PointEvent.club_id == rec.club_id, models.PointLog.kind == "score")
+        .group_by(models.PointLog.event_id).all()
+    )
+    return [
+        {
+            "id": ev.id, "kind": ev.kind, "name": ev.name, "status": ev.status,
+            "created_at": ev.created_at, "started_at": ev.started_at, "completed_at": ev.completed_at,
+            "participant_count": sum(1 for p in ev.participants if p.status == "active"),
+            "log_count": counts.get(ev.id, 0), "version": ev.version,
+        }
+        for ev in evs
+    ]
+
+
+@app.get("/api/public/report/{slug}/point-events/{eid}")
+@limiter.limit("600/minute")   # board nạp lại detail khi có người vào/rời — nới bằng bậc /state
+def public_point_event_detail(request: Request, slug: str, eid: int, db: Session = Depends(get_db)):
+    """PublicPointEventOut = PointEventOut bỏ created_by. Nháp / khác CLB → 404."""
+    ev = _public_point_event_or_404(db, slug, eid)
+    out = _point_event_out(ev, db)
+    out.pop("created_by", None)
+    # member_id / player_id là khoá nội bộ (phân biệt thành viên/khách mời) — trang public không cần
+    for row in out.get("participants", []):
+        row.pop("member_id", None)
+        row.pop("player_id", None)
+    return out
+
+
+@app.get("/api/public/report/{slug}/point-events/{eid}/state")
+@limiter.limit("600/minute")
+def public_point_event_state(request: Request, slug: str, eid: int, db: Session = Depends(get_db)):
+    """Khán giả poll 3s (bucket riêng, nới rộng vì nhiều người cùng Wi-Fi sân chung 1 IP)."""
+    ev = _public_point_event_or_404(db, slug, eid)
+    return _point_event_state(ev, db)
+
+
+@app.get("/api/public/report/{slug}/point-events/{eid}/logs")
+@limiter.limit("600/minute")   # board tải log mỗi lần version đổi — nới bằng bậc /state
+def public_point_event_logs(
+    request: Request, slug: str, eid: int,
+    after_id: int = 0, limit: int = 200,
+    db: Session = Depends(get_db),
+):
+    """PublicPointLogOut = PointLogOut bỏ actor_name (username admin không ra trang public)."""
+    ev = _public_point_event_or_404(db, slug, eid)
+    out = _point_logs(db, ev.id, after_id, limit)
+    for row in out:
+        row.pop("actor_name", None)
+    return out
+
+
 # ── TOURNAMENTS ───────────────────────────────────────────
 
 # ── PLAYERS ───────────────────────────────────────────────
@@ -2320,6 +2432,11 @@ def delete_player(
     ).first()
     if used:
         raise HTTPException(400, "Không thể xóa: player đang tham gia giải đấu")
+    in_event = db.query(models.PointEventParticipant.id).filter(
+        models.PointEventParticipant.player_id == pid
+    ).first()
+    if in_event:
+        raise HTTPException(400, "Không thể xoá: khách mời đang có tên trong sự kiện thành tích")
     tx_count = db.query(models.Transaction).filter(models.Transaction.player_id == pid).count()
     if tx_count:
         raise HTTPException(400, f"Không thể xóa: có {tx_count} giao dịch gắn với khách mời này")
@@ -2672,23 +2789,8 @@ def add_participants_bulk(
     if _open_partner_draw(t) is not None:
         raise HTTPException(400, PARTNER_DRAW_OPEN_MSG)
 
-    # Loại trùng trong chính request (giữ thứ tự)
-    member_ids = list(dict.fromkeys(data.member_ids or []))
-    player_ids = list(dict.fromkeys(data.player_ids or []))
-    for mid in member_ids:
-        _check_people_in_club(db, perms.club_id, member_id=mid)
-    # Bản ghi Player gắn thành viên (member_id != NULL) là CÙNG MỘT NGƯỜI với thành viên đó → quy đổi sang
-    # member_id để không vào giải 2 lần (một lần qua member_ids, một lần qua player_ids)
-    guest_ids = []
-    for plid in player_ids:
-        pl = _get_player_in_club(db, plid, perms.club_id)
-        if pl.member_id is not None:
-            if pl.member_id not in member_ids:
-                _check_people_in_club(db, perms.club_id, member_id=pl.member_id)
-                member_ids.append(pl.member_id)
-        else:
-            guest_ids.append(plid)
-    player_ids = guest_ids
+    # Loại trùng, kiểm tra thuộc CLB, Player gắn thành viên → quy về member_id (helper dùng chung)
+    member_ids, player_ids = _normalize_people_ids(db, perms.club_id, data.member_ids, data.player_ids)
 
     existing_members, existing_players = set(), set()
     for o in t.participants:
@@ -2749,6 +2851,462 @@ def delete_tournament(
     t = db.query(models.Tournament).filter(models.Tournament.id == tid, models.Tournament.club_id == perms.club_id).first()
     if not t: raise HTTPException(404, "Không tìm thấy giải đấu")
     db.delete(t); db.commit()
+
+
+# ── POINT EVENTS (sự kiện thành tích cá nhân — Mini game) ─────────────────────
+# Cộng/trừ điểm từng người bằng nút +/−, không có trận đấu. Mọi thay đổi điểm/người/trạng thái đều
+# ghi PointLog (chỉ-ghi-thêm) và tăng PointEvent.version để client poll rẻ (chỉ so version).
+
+_PE_MAX_ID = 2 ** 62   # SQLite INTEGER 64-bit có dấu — id ngoài dải này (path/query) → 404/kẹp, không được 500
+
+
+def _get_club_point_event(db: Session, eid: int, perms: ClubPermissions) -> "models.PointEvent":
+    if eid < 1 or eid > _PE_MAX_ID:
+        raise HTTPException(404, "Không tìm thấy sự kiện")
+    ev = db.query(models.PointEvent).filter(
+        models.PointEvent.id == eid, models.PointEvent.club_id == perms.club_id
+    ).first()
+    if not ev:
+        raise HTTPException(404, "Không tìm thấy sự kiện")
+    return ev
+
+
+def _perm_actor_name(db: Session, perms: ClubPermissions) -> Optional[str]:
+    """Username của người thao tác (cùng cách lấy user như open_draw)."""
+    membership = perms.membership
+    user = getattr(membership, "user", None)
+    if user is None:
+        user = db.query(models.User).filter(models.User.id == membership.user_id).first()
+    return user.username if user is not None else None
+
+
+def _pe_display(person) -> tuple:
+    """(display_name, rank_snapshot) từ Member hoặc Player lúc thêm vào sự kiện."""
+    if isinstance(person, models.Member):
+        return (person.full_name or "", person.rank)
+    return (person.name or "Khách", person.rank)
+
+
+def _pe_log(db: Session, ev: "models.PointEvent", kind: str, participant=None, delta: int = 0,
+            points_after: int = 0, note: Optional[str] = None, client_op_id: Optional[str] = None,
+            actor: Optional[str] = None) -> "models.PointLog":
+    log = models.PointLog(
+        event_id=ev.id,
+        participant_id=participant.id if participant is not None else None,
+        kind=kind, delta=delta, points_after=points_after, note=note,
+        client_op_id=client_op_id, actor_name=actor, created_at=_now_vn(),
+    )
+    db.add(log)
+    return log
+
+
+def _pe_bump_version(db: Session, ev: "models.PointEvent") -> None:
+    """Tăng version NGUYÊN TỬ ở tầng DB (không dùng ev.version += 1): nhiều máy cùng bấm điểm thì
+    read-modify-write qua ORM làm mất lượt tăng hoặc ghi lùi version → client poll bỏ sót cập nhật."""
+    db.execute(text("UPDATE point_events SET version = version + 1 WHERE id = :eid"), {"eid": ev.id})
+    db.expire(ev, ["version"])
+
+
+def _pe_score_log_count(db: Session, ev_id: int) -> int:
+    return db.query(func.count(models.PointLog.id)).filter(
+        models.PointLog.event_id == ev_id, models.PointLog.kind == "score",
+    ).scalar() or 0
+
+
+def _point_event_out(ev: "models.PointEvent", db: Session, with_participants: bool = True,
+                     log_count: Optional[int] = None) -> dict:
+    """Dựng PointEventOut (KHÔNG nhúng logs). participant_count = số người active; log_count = số log score.
+    with_participants=False → PointEventListOut (danh sách nhẹ)."""
+    if log_count is None:
+        log_count = _pe_score_log_count(db, ev.id)
+    out = {
+        "id": ev.id, "kind": ev.kind, "name": ev.name, "description": ev.description,
+        "status": ev.status, "version": ev.version, "created_by": ev.created_by,
+        "created_at": ev.created_at, "started_at": ev.started_at, "completed_at": ev.completed_at,
+        "participant_count": sum(1 for p in ev.participants if p.status == "active"),
+        "log_count": log_count,
+    }
+    if with_participants:
+        out["participants"] = [{
+            "id": p.id, "member_id": p.member_id, "player_id": p.player_id,
+            "display_name": p.display_name, "rank_snapshot": p.rank_snapshot,
+            "seq": p.seq, "points": p.points, "status": p.status,
+        } for p in ev.participants]
+    return out
+
+
+def _point_event_state(ev: "models.PointEvent", db: Session) -> dict:
+    return {
+        "version": ev.version, "status": ev.status, "log_count": _pe_score_log_count(db, ev.id),
+        "participants": [{"id": p.id, "points": p.points, "status": p.status} for p in ev.participants],
+    }
+
+
+def _point_logs(db: Session, ev_id: int, after_id: int, limit: int) -> list:
+    """Log tăng dần theo id, id > after_id, tối đa 500 dòng/lần (client tải tiếp bằng after_id)."""
+    limit = max(1, min(int(200 if limit is None else limit), 500))  # limit=0 → kẹp về 1 (không coi là 'không truyền')
+    after_id = min(max(0, int(after_id or 0)), _PE_MAX_ID)          # after_id khổng lồ → [] (không 500 OverflowError)
+    logs = db.query(models.PointLog).options(selectinload(models.PointLog.participant)).filter(
+        models.PointLog.event_id == ev_id, models.PointLog.id > after_id,
+    ).order_by(models.PointLog.id.asc()).limit(limit).all()
+    return [_point_log_out(l) for l in logs]
+
+
+def _point_log_out(log: "models.PointLog") -> dict:
+    return {
+        "id": log.id, "kind": log.kind, "participant_id": log.participant_id,
+        "display_name": log.participant.display_name if log.participant is not None else None,
+        "delta": log.delta, "points_after": log.points_after, "note": log.note,
+        "actor_name": log.actor_name, "created_at": log.created_at,
+    }
+
+
+def _pe_add_people(db: Session, ev: "models.PointEvent", member_ids, player_ids, actor: Optional[str]):
+    """Thêm người đã chuẩn hoá (qua _normalize_people_ids) vào sự kiện.
+    - đã active → skipped (tên);
+    - status removed → đổi lại active, GIỮ điểm, log participant "Thêm lại" (tính vào added);
+    - người mới → seq = max+1; log participant "Thêm" chỉ khi sự kiện đang diễn ra (Nháp không cần log).
+    Trả về (added, skipped)."""
+    by_member = {p.member_id: p for p in ev.participants if p.member_id is not None}
+    # Khách mời đã được "chuyển thành thành viên" SAU khi vào sự kiện: coi như chính thành viên đó
+    # (nếu không, thêm lại bằng member_id sẽ tạo dòng thứ 2 cho cùng một người → điểm bị tách đôi)
+    for p in ev.participants:
+        if p.member_id is None and p.player is not None and p.player.member_id is not None:
+            by_member.setdefault(p.player.member_id, p)
+    by_player = {p.player_id: p for p in ev.participants if p.player_id is not None}
+    max_seq = max((p.seq for p in ev.participants), default=0)
+    log_new = ev.status == models.TournamentStatus.active
+    added, skipped = 0, []
+
+    def _handle(existing, person, member_id=None, player_id=None):
+        nonlocal max_seq, added
+        if existing is not None:
+            if existing.status == "active":
+                skipped.append(existing.display_name)
+                return
+            existing.status = "active"
+            added += 1
+            _pe_log(db, ev, "participant", participant=existing, points_after=existing.points,
+                    note="Thêm lại", actor=actor)
+            return
+        max_seq += 1
+        name, rank = _pe_display(person)
+        p = models.PointEventParticipant(
+            event_id=ev.id, member_id=member_id, player_id=player_id,
+            display_name=name, rank_snapshot=rank, seq=max_seq, points=0, status="active",
+        )
+        db.add(p)
+        added += 1
+        if member_id is not None: by_member[member_id] = p
+        if player_id is not None: by_player[player_id] = p
+        if log_new:
+            db.flush()   # cần p.id cho log (Session autoflush=False)
+            _pe_log(db, ev, "participant", participant=p, points_after=0, note="Thêm", actor=actor)
+
+    for mid in member_ids:
+        _handle(by_member.get(mid), _get_member_in_club(db, mid, ev.club_id), member_id=mid)
+    for plid in player_ids:
+        _handle(by_player.get(plid), _get_player_in_club(db, plid, ev.club_id), player_id=plid)
+    return added, skipped
+
+
+def _apply_point_delta(db: Session, ev: "models.PointEvent", p: "models.PointEventParticipant",
+                       delta: int, client_op_id: str, actor: Optional[str]) -> bool:
+    """Ghi 1 lượt ±1 cho p. Trả về True nếu đã ghi, False nếu bỏ qua vì trùng client_op_id (idempotent).
+
+    Nguyên tử ở tầng DB: KHÔNG dùng p.points += delta (mất cập nhật khi nhiều máy cùng bấm) mà
+    UPDATE ... SET points = points + :d WHERE ... — MỘT câu lệnh vừa chặn xuống dưới 0, vừa chặn người đã rời,
+    vừa chặn sự kiện không còn 'active' (kết thúc giữa lúc request đang bay). Log + version cùng transaction."""
+    if delta not in (1, -1):
+        raise HTTPException(422, "Chỉ hỗ trợ +1 / −1")
+    # Idempotent TRƯỚC các guard trạng thái: client retry lượt đã ghi thì luôn nhận 200 + trạng thái hiện tại,
+    # kể cả khi giữa chừng sự kiện vừa kết thúc hoặc người vừa rời.
+    dup = db.query(models.PointLog.id).filter(
+        models.PointLog.event_id == ev.id, models.PointLog.client_op_id == client_op_id,
+    ).first()
+    if dup is not None:
+        return False
+    if ev.status != models.TournamentStatus.active:
+        raise HTTPException(400, "Sự kiện chưa bắt đầu hoặc đã kết thúc")
+    if p.status != "active":
+        raise HTTPException(409, "Người này đã rời sự kiện")
+    pid, eid = p.id, ev.id
+
+    res = db.execute(
+        text("UPDATE point_event_participants SET points = points + :d "
+             "WHERE id = :pid AND event_id = :eid AND status = 'active' AND points + :d >= 0 "
+             "AND EXISTS (SELECT 1 FROM point_events e WHERE e.id = :eid AND e.status = 'active')"),
+        {"d": delta, "pid": pid, "eid": eid},
+    )
+    if res.rowcount == 0:
+        db.rollback()
+        # Đọc lại bằng câu lệnh thuần (KHÔNG db.refresh: dòng người có thể vừa bị xoá cứng → ObjectDeletedError/500)
+        row = db.execute(
+            text("SELECT p.status, e.status FROM point_event_participants p "
+                 "JOIN point_events e ON e.id = p.event_id WHERE p.id = :pid AND p.event_id = :eid"),
+            {"pid": pid, "eid": eid},
+        ).first()
+        if row is None:
+            raise HTTPException(404, "Người này không còn trong sự kiện")
+        if row[1] != "active":
+            raise HTTPException(400, "Sự kiện chưa bắt đầu hoặc đã kết thúc")
+        if row[0] != "active":
+            raise HTTPException(409, "Người này đã rời sự kiện")
+        raise HTTPException(409, "Điểm không thể xuống dưới 0")
+    new_points = db.execute(
+        text("SELECT points FROM point_event_participants WHERE id = :pid"), {"pid": pid}
+    ).scalar()   # đọc lại trong cùng transaction (đang giữ khoá ghi)
+    db.add(models.PointLog(
+        event_id=eid, participant_id=pid, kind="score", delta=delta, points_after=new_points,
+        client_op_id=client_op_id, actor_name=actor, created_at=_now_vn(),
+    ))
+    _pe_bump_version(db, ev)
+    try:
+        db.commit()
+    except IntegrityError:
+        # 2 request cùng client_op_id chạy song song đều qua check dup ở trên → UNIQUE(event_id, client_op_id)
+        # chặn bản thứ hai (rollback cả lượt cộng điểm của bản này) → trả trạng thái hiện tại như đã ghi.
+        db.rollback()
+        return False
+    db.expire(p, ["points"])
+    return True
+
+
+@app.get("/api/point-events", response_model=List[schemas.PointEventListOut])
+def list_point_events(
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    """Danh sách nhẹ (không nhúng participants), mới nhất trước."""
+    perms.require_view()
+    evs = db.query(models.PointEvent).filter(
+        models.PointEvent.club_id == perms.club_id
+    ).order_by(models.PointEvent.id.desc()).all()
+    counts = dict(
+        db.query(models.PointLog.event_id, func.count(models.PointLog.id))
+        .join(models.PointEvent, models.PointEvent.id == models.PointLog.event_id)
+        .filter(models.PointEvent.club_id == perms.club_id, models.PointLog.kind == "score")
+        .group_by(models.PointLog.event_id).all()
+    )
+    return [_point_event_out(e, db, with_participants=False, log_count=counts.get(e.id, 0)) for e in evs]
+
+
+@app.post("/api/point-events", response_model=schemas.PointEventOut, status_code=201)
+def create_point_event(
+    data: schemas.PointEventCreate,
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    """Tạo sự kiện Nháp. Tên rỗng/khoảng trắng → "Mini game dd/mm/yyyy" (giờ VN). Cho phép 0 người."""
+    perms.require_create()
+    name = (data.name or "").strip() or f"Mini game {_now_vn():%d/%m/%Y}"
+    member_ids, player_ids = _normalize_people_ids(db, perms.club_id, data.member_ids, data.player_ids)
+    ev = models.PointEvent(
+        club_id=perms.club_id, kind="mini_game", name=name, description=data.description,
+        status=models.TournamentStatus.draft, version=0,
+        created_by=_perm_actor_name(db, perms), created_at=_now_vn(),
+    )
+    db.add(ev); db.flush()
+    _pe_add_people(db, ev, member_ids, player_ids, actor=None)
+    db.commit(); db.refresh(ev)
+    return _point_event_out(ev, db)
+
+
+@app.get("/api/point-events/{eid}", response_model=schemas.PointEventOut)
+def get_point_event(
+    eid: int,
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    perms.require_view()
+    ev = _get_club_point_event(db, eid, perms)
+    return _point_event_out(ev, db)
+
+
+@app.get("/api/point-events/{eid}/state", response_model=schemas.PointEventStateOut)
+def get_point_event_state(
+    eid: int,
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    """Poll 3s: chỉ version + status + điểm từng người."""
+    perms.require_view()
+    ev = _get_club_point_event(db, eid, perms)
+    return _point_event_state(ev, db)
+
+
+@app.get("/api/point-events/{eid}/logs", response_model=List[schemas.PointLogOut])
+def list_point_event_logs(
+    eid: int,
+    after_id: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    perms.require_view()
+    ev = _get_club_point_event(db, eid, perms)
+    return _point_logs(db, ev.id, after_id, limit)
+
+
+@app.put("/api/point-events/{eid}", response_model=schemas.PointEventOut)
+def update_point_event(
+    eid: int,
+    data: schemas.PointEventUpdate,
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    """Sửa tên/mô tả ở mọi trạng thái. Trạng thái: draft→active (cần ≥1 người active; log "Bắt đầu"),
+    active→completed (log "Kết thúc"), completed→active (MỞ LẠI, log "Mở lại"). Mỗi lần đổi trạng thái version += 1."""
+    perms.require_edit()
+    ev = _get_club_point_event(db, eid, perms)
+    actor = _perm_actor_name(db, perms)
+    updates = data.model_dump(exclude_unset=True)
+
+    if "name" in updates:
+        name = (updates["name"] or "").strip()
+        if not name:
+            raise HTTPException(400, "Tên sự kiện không được để trống")
+        ev.name = name
+    if "description" in updates:
+        ev.description = updates["description"]
+
+    new_status = data.status
+    if new_status is not None and new_status.value != ev.status.value:
+        cur, nxt = ev.status, models.TournamentStatus(new_status.value)
+        S = models.TournamentStatus
+        now = _now_vn()
+        if (cur, nxt) == (S.draft, S.active):
+            if not any(p.status == "active" for p in ev.participants):
+                raise HTTPException(400, "Cần ít nhất 1 người tham gia")
+            cols, note = {"started_at": now}, "Bắt đầu"
+        elif (cur, nxt) == (S.active, S.completed):
+            cols, note = {"completed_at": now}, "Kết thúc"
+        elif (cur, nxt) == (S.completed, S.active):
+            cols, note = {"completed_at": None}, "Mở lại"
+        else:
+            raise HTTPException(400, f"Không thể chuyển trạng thái từ '{cur.value}' sang '{nxt.value}'")
+        # Compare-and-swap: chỉ đổi khi trạng thái vẫn là `cur` — 2 máy cùng bấm (Kết thúc/Bắt đầu) thì chỉ một
+        # bên thắng, bên kia nhận 409 thay vì ghi 2 log và ghi đè started_at/completed_at.
+        res = db.execute(sa_update(models.PointEvent)
+                         .where(models.PointEvent.id == ev.id, models.PointEvent.status == cur)
+                         .values(status=nxt, **cols))
+        if res.rowcount == 0:
+            db.rollback()
+            raise HTTPException(409, "Trạng thái sự kiện vừa được thay đổi ở máy khác — hãy làm mới")
+        db.expire(ev, ["status", "started_at", "completed_at"])
+        _pe_log(db, ev, "status", note=note, actor=actor)
+        _pe_bump_version(db, ev)
+
+    db.commit(); db.refresh(ev)
+    return _point_event_out(ev, db)
+
+
+@app.post("/api/point-events/{eid}/participants/bulk", response_model=schemas.PointEventBulkOut)
+def add_point_event_participants_bulk(
+    eid: int,
+    data: schemas.PointEventBulkIn,
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    """Thêm hàng loạt (thành viên + khách mời) khi Nháp HOẶC đang diễn ra (người đến muộn)."""
+    perms.require_edit()
+    ev = _get_club_point_event(db, eid, perms)
+    if ev.status == models.TournamentStatus.completed:
+        raise HTTPException(400, "Sự kiện đã kết thúc")
+    member_ids, player_ids = _normalize_people_ids(db, perms.club_id, data.member_ids, data.player_ids)
+    actor = _perm_actor_name(db, perms)
+    attempts = 8   # nhiều máy cùng thêm người: mỗi lần va chạm UNIQUE(seq/người) là một lần đọc lại + thử lại
+    for attempt in range(attempts):
+        added, skipped = _pe_add_people(db, ev, member_ids, player_ids, actor=actor)
+        if added:
+            _pe_bump_version(db, ev)
+        try:
+            db.commit()
+            break
+        except IntegrityError:
+            # 2 request thêm cùng người / cùng lúc cấp trùng seq → UNIQUE chặn một bên. Đọc lại rồi thử tiếp:
+            # người đã có sẽ nằm trong `skipped`, người mới nhận seq kế tiếp.
+            db.rollback()
+            if attempt == attempts - 1:
+                raise HTTPException(409, "Danh sách vừa thay đổi ở máy khác — hãy thử lại")
+            ev = _get_club_point_event(db, eid, perms)
+    db.refresh(ev)
+    return {"added": added, "skipped": skipped, "event": _point_event_out(ev, db)}
+
+
+@app.delete("/api/point-events/{eid}/participants/{pid}", status_code=204)
+def remove_point_event_participant(
+    eid: int, pid: int,
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    """Nháp → xoá cứng. Đang diễn ra: chưa có log score → xoá cứng; đã có → status="removed" + log "Rời"
+    (giữ điểm và lịch sử). Đã kết thúc → 400."""
+    perms.require_edit()
+    ev = _get_club_point_event(db, eid, perms)
+    if ev.status == models.TournamentStatus.completed:
+        raise HTTPException(400, "Sự kiện đã kết thúc")
+    if pid < 1 or pid > _PE_MAX_ID:
+        raise HTTPException(404, "Không tìm thấy người tham gia")
+    p = db.query(models.PointEventParticipant).filter(
+        models.PointEventParticipant.id == pid, models.PointEventParticipant.event_id == ev.id,
+    ).first()
+    if not p:
+        raise HTTPException(404, "Không tìm thấy người tham gia")
+    if ev.status != models.TournamentStatus.draft and p.status != "active":
+        raise HTTPException(409, "Người này đã rời sự kiện")
+    # Xoá cứng chỉ khi CHƯA có lượt chấm — kiểm tra nằm TRONG câu DELETE (nguyên tử). Nếu kiểm trước rồi xoá sau,
+    # một lượt +1 chen giữa sẽ đã trả 200 rồi bị cascade xoá mất điểm. rowcount == 0 → đã có điểm → đánh dấu "rời".
+    res = db.execute(
+        text("DELETE FROM point_event_participants WHERE id = :pid AND event_id = :eid "
+             "AND NOT EXISTS (SELECT 1 FROM point_logs l WHERE l.participant_id = :pid AND l.kind = 'score')"),
+        {"pid": pid, "eid": ev.id},
+    )
+    if res.rowcount:
+        db.expire_all()   # log "Thêm" của người này (nếu có) tự dọn theo FK ON DELETE CASCADE ở tầng DB
+    else:
+        db.refresh(p)
+        if ev.status == models.TournamentStatus.draft:
+            raise HTTPException(409, "Người này đã có lượt chấm")
+        p.status = "removed"
+        _pe_log(db, ev, "participant", participant=p, points_after=p.points, note="Rời",
+                actor=_perm_actor_name(db, perms))
+    _pe_bump_version(db, ev)
+    db.commit()
+
+
+@app.post("/api/point-events/{eid}/participants/{pid}/points", response_model=schemas.PointEventOut)
+def add_point_event_points(
+    eid: int, pid: int,
+    data: schemas.PointDeltaIn,
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    """Cộng/trừ 1 điểm (xem _apply_point_delta). Luôn trả PointEventOut đầy đủ để mọi máy hội tụ."""
+    perms.require_edit()
+    ev = _get_club_point_event(db, eid, perms)
+    if pid < 1 or pid > _PE_MAX_ID:
+        raise HTTPException(404, "Không tìm thấy người tham gia")
+    p = db.query(models.PointEventParticipant).filter(
+        models.PointEventParticipant.id == pid, models.PointEventParticipant.event_id == ev.id,
+    ).first()
+    if not p:
+        raise HTTPException(404, "Không tìm thấy người tham gia")
+    _apply_point_delta(db, ev, p, data.delta, data.client_op_id, actor=_perm_actor_name(db, perms))
+    db.refresh(ev)
+    return _point_event_out(ev, db)
+
+
+@app.delete("/api/point-events/{eid}", status_code=204)
+def delete_point_event(
+    eid: int,
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    """Xoá sự kiện ở mọi trạng thái — cascade participants + logs."""
+    perms.require_delete()
+    ev = _get_club_point_event(db, eid, perms)
+    db.delete(ev); db.commit()
 
 
 # ── Helpers ghép đội đôi (partner draw) — dùng cho guard ở nhiều endpoint ──
