@@ -1,6 +1,6 @@
 import { useState } from "react";
 import {
-  Card, Form, Input, Button, Steps, Typography,
+  Card, Form, Input, Button, Steps, Typography, Alert,
   Row, Col, Divider, message, InputNumber,
 } from "antd";
 import {
@@ -114,6 +114,8 @@ export default function Setup() {
               <Form.Item name="description" label="Mô tả">
                 <Input.TextArea rows={2} placeholder="Giới thiệu ngắn về câu lạc bộ..." />
               </Form.Item>
+
+              <Alert type="info" showIcon style={{ marginBottom: 12 }} message="Hệ thống sẽ tạo sẵn 7 danh mục khoản mặc định cho CLB mới: Thuê sân, Quỹ CLB hàng tháng, Liên hoan, Đồ ăn/uống, Tổ chức sự kiện, Chi phí tham gia giải, Xé vé - Giao lưu. Có thể sửa tên, số tiền hoặc xoá sau trong mục Danh mục khoản." />
 
               <Divider orientation="left" style={{ fontSize: 13 }}>Thông tin liên hệ (tùy chọn)</Divider>
 

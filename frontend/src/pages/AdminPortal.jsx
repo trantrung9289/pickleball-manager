@@ -646,6 +646,9 @@ export default function AdminPortal({ onBack }) {
           <Form.Item name="sport" label="Môn thể thao" rules={[{ required: true, message: "Nhập môn thể thao" }]}>
             <Input placeholder="VD: Pickleball, Tennis, Cầu lông" />
           </Form.Item>
+          {!clubModal.record && (
+            <Alert type="info" showIcon style={{ marginBottom: 12 }} message="Hệ thống sẽ tạo sẵn 7 danh mục khoản mặc định cho CLB mới: Thuê sân, Quỹ CLB hàng tháng, Liên hoan, Đồ ăn/uống, Tổ chức sự kiện, Chi phí tham gia giải, Xé vé - Giao lưu. Có thể sửa tên, số tiền hoặc xoá sau trong mục Danh mục khoản." />
+          )}
           <Row gutter={12}>
             <Col span={12}>
               <Form.Item name="phone" label="Điện thoại">

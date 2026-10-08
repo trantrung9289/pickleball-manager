@@ -222,6 +222,39 @@ def club_status(db: Session = Depends(get_db)):
     return {"initialized": db.query(models.Club.id).first() is not None}
 
 
+# Danh mục khoản tạo sẵn cho CLB MỚI (yêu cầu BTC 2026-10-08): (tên, loại, số tiền mặc định, định kỳ).
+# Chỉ áp dụng lúc tạo CLB — CLB đã có từ trước không bị thêm; BTC sửa/xoá tự do sau đó trong "Danh mục khoản".
+DEFAULT_FEE_TYPES = [
+    ("Liên hoan",             "expense", 0, False),
+    ("Đồ ăn/uống",            "expense", 0, False),
+    ("Thuê sân",              "expense", 0, True),
+    ("Tổ chức sự kiện",       "expense", 0, False),
+    ("Chi phí tham gia giải", "income",  0, False),
+    ("Quỹ CLB hàng tháng",    "income",  0, True),
+    ("Xé vé - Giao lưu",      "income",  0, False),
+]
+
+
+def _create_default_fee_types(db: Session, club_id: int) -> int:
+    """Tạo bộ danh mục khoản mặc định cho một CLB. Idempotent: bỏ qua tên đã có trong CLB đó
+    (không phân biệt hoa thường/khoảng trắng). Không commit — gọi trong transaction tạo CLB. Trả về số đã tạo."""
+    existing = {
+        (row[0] or "").strip().casefold()
+        for row in db.query(models.FeeType.name).filter(models.FeeType.club_id == club_id).all()
+    }
+    created = 0
+    for name, kind, amount, recurring in DEFAULT_FEE_TYPES:
+        if name.casefold() in existing:
+            continue
+        db.add(models.FeeType(
+            club_id=club_id, name=name, type=models.FeeTypeCategory(kind),
+            default_amount=amount, is_recurring=recurring, remind_enabled=False,
+        ))
+        existing.add(name.casefold())
+        created += 1
+    return created
+
+
 @app.post("/api/club/setup", response_model=schemas.TokenOut)
 def club_setup(payload: schemas.ClubSetup, db: Session = Depends(get_db)):
     """Khởi tạo CLB lần đầu + tạo tài khoản admin."""
@@ -236,6 +269,8 @@ def club_setup(payload: schemas.ClubSetup, db: Session = Depends(get_db)):
         address=payload.address, phone=payload.phone, email=payload.email,
     )
     db.add(club)
+    db.flush()                                   # cần club.id (Session autoflush=False)
+    _create_default_fee_types(db, club.id)       # bộ danh mục khoản mặc định cho CLB mới
 
     admin = models.User(
         username=payload.admin_username,
@@ -448,7 +483,9 @@ def admin_create_club(payload: schemas.ClubUpdate, db: Session = Depends(get_db)
     if not (payload.sport or "").strip():
         raise HTTPException(400, "Nhập môn thể thao")
     club = models.Club(**{k: v for k, v in payload.dict().items() if v is not None})
-    db.add(club); db.commit(); db.refresh(club)
+    db.add(club); db.flush()
+    _create_default_fee_types(db, club.id)       # bộ danh mục khoản mặc định cho CLB mới
+    db.commit(); db.refresh(club)
     return club
 
 @app.put("/api/admin/clubs/{cid}", response_model=schemas.ClubOut)
