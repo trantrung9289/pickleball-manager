@@ -24,7 +24,7 @@ import time
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 import models, schemas
-from database import engine, get_db, Base
+from database import engine, get_db, Base, SessionLocal
 from tournament_engine import (
     generate_schedule, generate_group_schedule,
     generate_knockout_from_groups, compute_standings,
@@ -160,6 +160,54 @@ def _run_migration():
         conn.commit()
 
 _run_migration()
+
+
+# Bảng phẳng có club_id (thứ tự xoá: con trước cha). tournaments/point_events xoá qua ORM để cascade con.
+_CLUB_SCOPED_FLAT_TABLES = ["transactions", "reminder_log", "bot_config", "public_report_tokens",
+                            "club_memberships", "players", "members", "fee_types"]
+
+
+def _purge_orphan_club_rows() -> dict:
+    """Xoá dòng có club_id trỏ tới CLB KHÔNG còn tồn tại (mồ côi do xoá CLB khi khoá ngoại còn tắt, trước 2026-07).
+    Chạy mỗi lần khởi động. Nếu không dọn, CLB tạo sau có thể nhận lại id cũ và "kế thừa" toàn bộ dữ liệu này
+    (sự cố 2026-10-08). Bỏ qua club_id NULL (dữ liệu thời đơn CLB). Trả về {bảng: số dòng đã xoá}."""
+    from sqlalchemy import inspect as sa_inspect, text
+    removed: dict = {}
+    db = SessionLocal()
+    try:
+        existing = set(sa_inspect(engine).get_table_names())
+        club_ids = db.query(models.Club.id)
+        orphan_cond = lambda col: (col.isnot(None)) & (~col.in_(club_ids))   # noqa: E731
+        for model, label in ((models.Tournament, "tournaments"), (models.PointEvent, "point_events")):
+            rows = db.query(model).filter(orphan_cond(model.club_id)).all()
+            for r in rows:
+                db.delete(r)
+            if rows:
+                removed[label] = len(rows)
+        db.flush()
+        orphan_members = [r[0] for r in db.query(models.Member.id).filter(orphan_cond(models.Member.club_id)).all()]
+        if orphan_members:
+            db.query(models.User).filter(models.User.member_id.in_(orphan_members)).update(
+                {"member_id": None}, synchronize_session=False)
+        for table in _CLUB_SCOPED_FLAT_TABLES:
+            if table not in existing:
+                continue
+            res = db.execute(text(
+                f"DELETE FROM {table} WHERE club_id IS NOT NULL AND club_id NOT IN (SELECT id FROM clubs)"))
+            if res.rowcount:
+                removed[table] = res.rowcount
+        db.commit()
+    except Exception as e:   # không chặn khởi động vì dọn dẹp thất bại
+        db.rollback()
+        print(f"[startup] ⚠️  Dọn dữ liệu mồ côi thất bại: {e}")
+    finally:
+        db.close()
+    if removed:
+        print(f"[startup] 🧹 Đã xoá dữ liệu mồ côi (CLB không còn tồn tại): {removed}")
+    return removed
+
+
+_purge_orphan_club_rows()
 
 
 _IS_PRODUCTION = bool(os.environ.get("FLY_APP_NAME") or os.environ.get("APP_ENV") == "production")

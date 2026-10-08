@@ -112,6 +112,10 @@ class Transaction(Base):
 
 class Club(Base):
     __tablename__ = "clubs"
+    # AUTOINCREMENT: id CLB đã xoá KHÔNG bao giờ được cấp lại. Sự cố 2026-10-08: CLB thử nghiệm id=2 bị xoá lúc FK
+    # còn tắt để lại dữ liệu mồ côi club_id=2; CLB mới sau đó nhận lại id=2 và "kế thừa" thành viên/khoản/giao dịch.
+    # DB cũ: migrations/add_clubs_autoincrement.py tạo lại bảng; main._purge_orphan_club_rows dọn mồ côi lúc khởi động.
+    __table_args__ = ({"sqlite_autoincrement": True},)
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(200), nullable=False)
