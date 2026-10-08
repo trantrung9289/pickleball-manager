@@ -575,9 +575,19 @@ def admin_delete_club(cid: int, db: Session = Depends(get_db), su = Depends(requ
     db.query(models.Member).filter(models.Member.club_id == cid).delete(synchronize_session=False)
     db.query(models.FeeType).filter(models.FeeType.club_id == cid).delete(synchronize_session=False)
     db.query(models.ClubMembership).filter(models.ClubMembership.club_id == cid).delete(synchronize_session=False)
+    # bot_config (FK clubs.id, không ON DELETE) — trước đây bị bỏ sót → CLB nào đã từng mở cấu hình bot
+    # (hoặc kế thừa cấu hình của CLB cũ) không xoá được: SQLite chặn bằng IntegrityError → 500 (sự cố 2026-10-08).
+    db.query(models.BotConfig).filter(models.BotConfig.club_id == cid).delete(synchronize_session=False)
+    # Lưới an toàn cho bảng có club_id thêm sau này mà quên liệt kê ở trên: xoá thẳng ở tầng DB
+    for table in _CLUB_SCOPED_FLAT_TABLES:
+        db.execute(text(f"DELETE FROM {table} WHERE club_id = :cid"), {"cid": cid})
 
     db.delete(club)  # players.club_id (ON DELETE CASCADE) tự dọn ở đây
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as e:
+        db.rollback()
+        raise HTTPException(409, f"Không xoá được CLB vì còn dữ liệu tham chiếu ở tầng CSDL: {str(e.orig)[:120]}")
     return {"ok": True}
 
 @app.get("/api/admin/memberships", response_model=List[schemas.MembershipOut])

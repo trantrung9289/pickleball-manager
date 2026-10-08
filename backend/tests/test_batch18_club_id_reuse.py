@@ -3,6 +3,7 @@
 import importlib.util
 import os
 import sqlite3
+from datetime import date
 
 import models
 from auth import hash_password
@@ -89,3 +90,38 @@ def test_purge_orphan_club_rows_removes_only_orphans(world, db):
     assert (db.query(models.Member).filter_by(club_id=world.club1.id).count(),
             db.query(models.FeeType).filter_by(club_id=world.club1.id).count()) == before_club1
     assert main._purge_orphan_club_rows() == {}   # lần 2 không còn gì
+
+
+def test_admin_delete_club_with_bot_config_and_all_related_data(client, world, db):
+    """Tái hiện sự cố không xoá được CLB "Pick Newborn": CLB có bot_config (FK clubs.id, không ON DELETE) +
+    đủ loại dữ liệu khác → trước đây 500 IntegrityError; nay 200 và không còn dòng nào tham chiếu CLB."""
+    h = _superuser(world)
+    cid = client.post("/api/admin/clubs", json={"name": "Pick Newborn", "sport": "Pickleball"}, headers=h).json()["id"]
+    m = models.Member(club_id=cid, member_code="TV0001", full_name="Trần Trung", status="active")
+    db.add(m); db.flush()
+    ft = db.query(models.FeeType).filter_by(club_id=cid).first()          # 1 trong 7 danh mục mặc định
+    db.add(models.Transaction(club_id=cid, fee_type_id=ft.id, member_id=m.id, type="income", amount=1000, transaction_date=date(2026, 10, 8)))
+    for k, v in (("welcome_message", "xin chào"), ("enable_thu", "true"), ("menu_config", "{}")):
+        db.add(models.BotConfig(club_id=cid, key=k, value=v))
+    db.add(models.PublicReportToken(token="tok-pn", slug="pick-newborn-x", club_id=cid, label="pub", is_active=True))
+    db.add(models.ClubMembership(user_id=world.admin1.id, club_id=cid, role=models.UserRole.admin,
+                                 can_view=True, can_create=True, can_edit=True, can_delete=True))
+    db.add(models.Player(name="Khách", club_id=cid, rank="C"))
+    db.commit()
+    hc = World.headers(world.admin1, type("C", (), {"id": cid})())
+    t = client.post("/api/tournaments", json={"name": "Test giải", "format": "round_robin", "member_ids": [m.id]}, headers=hc)
+    assert t.status_code == 201, t.text
+    pe = client.post("/api/point-events", json={"name": "Mini", "member_ids": [m.id]}, headers=hc)
+    assert pe.status_code == 201, pe.text
+
+    r = client.delete(f"/api/admin/clubs/{cid}", headers=h)
+    assert r.status_code == 200, r.text
+    db.expire_all()
+    assert db.query(models.Club).filter_by(id=cid).first() is None
+    for model in (models.Member, models.FeeType, models.Transaction, models.BotConfig, models.PublicReportToken,
+                  models.ClubMembership, models.Player, models.Tournament, models.PointEvent):
+        assert db.query(model).filter(model.club_id == cid).count() == 0, model.__tablename__
+    raw = sqlite3.connect(str(engine.url.database))
+    assert raw.execute("PRAGMA foreign_key_check").fetchall() == []
+    # CLB khác không bị ảnh hưởng
+    assert db.query(models.Member).filter_by(club_id=world.club1.id).count() == len(world.members1)
