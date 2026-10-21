@@ -5,13 +5,16 @@ import {
 } from "antd";
 import {
   ReloadOutlined, SyncOutlined, TrophyOutlined, EditOutlined, SafetyCertificateOutlined, StarOutlined,
+  FileTextOutlined,
 } from "@ant-design/icons";
 import ResponsiveTable from "./ResponsiveTable";
+import PublicTieBoard from "./PublicTieBoard";
 import DrawCeremony from "./draw/DrawCeremony";
 import PartnerDrawCeremony from "./draw/PartnerDrawCeremony";
 import PublicPointEventBoard from "./PublicPointEventBoard";
 import { useViewMode } from "../contexts/ViewModeContext";
 import { teamLabel, teamRank } from "../utils/tournamentLabels";
+import { tieScoreText } from "../utils/teamLabels";
 import {
   serverOffset, verifyDraw, verifyPartnerDraw, partnerLabelForStep, partnerDrawFinished, partnerDrawStuck,
   normalizePartnerRules, ranksPhrase, UNRANKED,
@@ -150,20 +153,32 @@ function PublicScoreModal({ match, tid, api, onSaved, onClose }) {
   );
 }
 
-function BracketCard({ match }) {
+// onOpen (giải đồng đội): bấm vào ô → mở biên bản trận; ô hiện cả tỉ số tạm của trận đang đấu dở
+function BracketCard({ match, onOpen }) {
   const p1 = teamLabel(match?.p1) || (match?.p1_id ? "?" : "BYE");
   const p2 = teamLabel(match?.p2) || (match?.p2_id ? "?" : "BYE");
   const done = match.status === "completed";
   const w = match.winner_id;
+  const inProgress = !done && !!onOpen && tieScoreText(match) != null;
+  const showScore = done || inProgress;
+  const clickable = !!onOpen && !!match.p1_id && !!match.p2_id;
 
   return (
-    <Card size="small" style={{ borderRadius: 8, borderColor: done ? "#52c41a" : "#d9d9d9" }}>
+    <Card
+      size="small"
+      hoverable={clickable}
+      onClick={clickable ? () => onOpen(match) : undefined}
+      style={{
+        borderRadius: 8, borderColor: done ? "#52c41a" : inProgress ? "#1677ff" : "#d9d9d9",
+        cursor: clickable ? "pointer" : undefined,
+      }}
+    >
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
         <Text style={{ fontWeight: w === match.p1_id ? 700 : 400, color: w === match.p1_id ? "#52c41a" : "inherit", fontSize: 13 }}>
           {p1}
         </Text>
-        <Text style={{ minWidth: 24, textAlign: "center", fontWeight: 700 }}>
-          {done ? match.score1 : "–"}
+        <Text style={{ minWidth: 24, textAlign: "center", fontWeight: 700, color: inProgress ? "#1677ff" : undefined }}>
+          {showScore ? match.score1 : "–"}
         </Text>
       </div>
       <Divider style={{ margin: "4px 0" }} />
@@ -171,15 +186,22 @@ function BracketCard({ match }) {
         <Text style={{ fontWeight: w === match.p2_id ? 700 : 400, color: w === match.p2_id ? "#52c41a" : "inherit", fontSize: 13 }}>
           {p2}
         </Text>
-        <Text style={{ minWidth: 24, textAlign: "center", fontWeight: 700 }}>
-          {done ? match.score2 : "–"}
+        <Text style={{ minWidth: 24, textAlign: "center", fontWeight: 700, color: inProgress ? "#1677ff" : undefined }}>
+          {showScore ? match.score2 : "–"}
         </Text>
       </div>
+      {clickable && (
+        <div style={{ textAlign: "right", marginTop: 4 }}>
+          <Text type="secondary" style={{ fontSize: 11 }}>
+            <FileTextOutlined /> Biên bản{inProgress ? " · đang đấu" : ""}
+          </Text>
+        </div>
+      )}
     </Card>
   );
 }
 
-function KnockoutBracket({ matches }) {
+function KnockoutBracket({ matches, onOpen }) {
   const { isMobileView } = useViewMode();
   const rounds = [...new Set(matches.map(m => m.round_number))].sort((a, b) => a - b);
 
@@ -196,7 +218,7 @@ function KnockoutBracket({ matches }) {
             label: <Text strong style={{ color: "#1677ff" }}>{rName} ({done}/{rMatches.length})</Text>,
             children: (
               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                {rMatches.map(m => <BracketCard key={m.id} match={m} />)}
+                {rMatches.map(m => <BracketCard key={m.id} match={m} onOpen={onOpen} />)}
               </div>
             ),
           };
@@ -217,7 +239,7 @@ function KnockoutBracket({ matches }) {
                 {rName}
               </Text>
               <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-                {rMatches.map(m => <BracketCard key={m.id} match={m} />)}
+                {rMatches.map(m => <BracketCard key={m.id} match={m} onOpen={onOpen} />)}
               </div>
             </div>
           );
@@ -260,24 +282,45 @@ function RoundedSchedule({ matches, columns, mobileProps }) {
 function StandingsTable({ tournament, group, api }) {
   const [rows, setRows] = useState([]);
   const doneCount = tournament.matches?.filter(m => m.status === "completed").length ?? 0;
+  const isTeam = tournament.team_type === "team";
 
   useEffect(() => {
     api.tournaments.standings(tournament.id, group).then(r => setRows(r.data));
   }, [tournament.id, group, doneCount, api]);
 
+  const diffCell = v => <Text style={{ color: v > 0 ? "#52c41a" : v < 0 ? "#ff4d4f" : "inherit" }}>{v > 0 ? `+${v}` : v}</Text>;
   const cols = [
     { title: "#", dataIndex: "rank", width: 40, align: "center",
       render: v => v <= 2 ? <b style={{ color: v === 1 ? "#faad14" : "#1677ff" }}>{v}</b> : v },
-    { title: "Đội", dataIndex: "team_name", render: (v, r) => v || r.full_name },
+    {
+      title: "Đội", dataIndex: "team_name",
+      render: (v, r) => (
+        <span>
+          {v || r.full_name}
+          {/* Giải đồng đội: bằng nhau mọi chỉ số tie-break → điều lệ bốc thăm, BTC xử lý ngoài hệ thống */}
+          {r.needs_draw && (
+            <Tag color="warning" style={{ marginLeft: 6 }} title="Bằng mọi chỉ số — ban tổ chức bốc thăm xếp hạng">Bốc thăm</Tag>
+          )}
+        </span>
+      ),
+    },
     { title: "T.đấu", dataIndex: "played", width: 55, align: "center" },
     { title: "Thắng", dataIndex: "won", width: 55, align: "center",
       render: v => <Text style={{ color: "#52c41a", fontWeight: 600 }}>{v}</Text> },
     { title: "Thua", dataIndex: "lost", width: 55, align: "center",
       render: v => <Text style={{ color: "#ff4d4f" }}>{v}</Text> },
-    { title: "BT", dataIndex: "goals_for", width: 45, align: "center" },
-    { title: "BB", dataIndex: "goals_against", width: 45, align: "center" },
-    { title: "Hiệu số", dataIndex: "goal_diff", width: 65, align: "center",
-      render: v => <Text style={{ color: v > 0 ? "#52c41a" : v < 0 ? "#ff4d4f" : "inherit" }}>{v > 0 ? `+${v}` : v}</Text> },
+    ...(isTeam
+      ? [
+        // Giải đồng đội: 2 chỉ số tie-break của điều lệ thay cho BT/BB/Hiệu số (tổng tỉ số tie)
+        { title: "HS trận", dataIndex: "rubber_diff", width: 75, align: "center", render: v => diffCell(v ?? 0) },
+        { title: "HS điểm", dataIndex: "pts_diff", width: 75, align: "center",
+          render: (v, r) => diffCell(v ?? r.points_diff ?? 0) },
+      ]
+      : [
+        { title: "BT", dataIndex: "goals_for", width: 45, align: "center" },
+        { title: "BB", dataIndex: "goals_against", width: 45, align: "center" },
+        { title: "Hiệu số", dataIndex: "goal_diff", width: 65, align: "center", render: v => diffCell(v) },
+      ]),
     { title: "Điểm", dataIndex: "points", width: 55, align: "center",
       render: v => <b style={{ color: "#1677ff", fontSize: 15 }}>{v}</b> },
   ];
@@ -295,7 +338,82 @@ function StandingsTable({ tournament, group, api }) {
   );
 }
 
-function matchTableCols(onScore) {
+// ── Giải đồng đội: tab "Đội" — danh sách đội và VĐV (public GET .../tournaments/{tid}/teams) ─────
+const GENDER_TAG = {
+  male: { label: "Nam", color: "blue" },
+  female: { label: "Nữ", color: "magenta" },
+  other: { label: "Khác", color: "default" },
+};
+
+function TeamsPanel({ api, tid, participantCount }) {
+  const [teams, setTeams] = useState(null);   // null = đang tải
+  const [error, setError] = useState(false);
+
+  // Bọc trong Promise để api.tournaments.teams thiếu (bản api.js cũ) cũng chỉ là lỗi tải, không vỡ trang.
+  // Tải lại khi số đội đổi (detail 12s thấy đội mới); VĐV bổ sung giữa giải hiện khi đổi giải / F5.
+  useEffect(() => {
+    let cancelled = false;
+    Promise.resolve().then(() => api.tournaments.teams(tid))
+      .then(r => { if (!cancelled) { setTeams(Array.isArray(r.data) ? r.data : []); setError(false); } })
+      .catch(() => { if (!cancelled) { setError(true); setTeams(prev => prev || []); } });
+    return () => { cancelled = true; };
+  }, [api, tid, participantCount]);
+
+  if (teams === null) return <div style={{ textAlign: "center", padding: 32 }}><Spin /></div>;
+  if (teams.length === 0) {
+    return error
+      ? <Alert type="warning" showIcon message="Không tải được danh sách đội — thử lại sau" />
+      : <Empty description="Chưa có đội nào" image={Empty.PRESENTED_IMAGE_SIMPLE} />;
+  }
+
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 12 }}>
+      {teams.map(t => {
+        const p = t.participant || {};
+        const players = [...(t.players || [])].sort((a, b) =>
+          (b.is_captain ? 1 : 0) - (a.is_captain ? 1 : 0)
+          || (a.display_name || "").localeCompare(b.display_name || "", "vi"));
+        return (
+          <Card
+            key={p.id ?? t.id}
+            size="small"
+            title={<span style={{ wordBreak: "break-word", whiteSpace: "normal" }}>{teamLabel(p)}</span>}
+            extra={(
+              <Space size={4}>
+                {p.group_name && <Tag color="blue" style={{ margin: 0 }}>Bảng {p.group_name}</Tag>}
+                {p.status === "withdrawn" && <Tag style={{ margin: 0 }}>bỏ giải</Tag>}
+              </Space>
+            )}
+          >
+            {players.length === 0
+              ? <Text type="secondary">Chưa có VĐV</Text>
+              : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  {players.map(pl => {
+                    const g = GENDER_TAG[pl.gender];
+                    return (
+                      <div key={pl.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                        <span style={{ minWidth: 0, wordBreak: "break-word" }}>
+                          {pl.is_captain && <StarOutlined style={{ color: "#faad14", marginRight: 4 }} title="Đội trưởng" />}
+                          {pl.display_name}
+                        </span>
+                        <Tag color={g?.color || "default"} style={{ margin: 0, flex: "none" }}>{g?.label || "—"}</Tag>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            <div style={{ marginTop: 8, fontSize: 12 }}><Text type="secondary">{players.length} VĐV</Text></div>
+          </Card>
+        );
+      })}
+    </div>
+  );
+}
+
+// onScore: nhập điểm qua PIN (giải đơn/đôi có bật public_scoring); onOpenTie: giải đồng đội → mở biên bản
+// (giải đồng đội KHÔNG nhập điểm qua public — điểm ghi theo từng trận thành phần ở trang quản trị).
+function matchTableCols(onScore, onOpenTie) {
   const cols = [
     { title: "Vòng", dataIndex: "round_name", width: 160 },
     {
@@ -309,10 +427,19 @@ function matchTableCols(onScore) {
       },
     },
     {
-      title: "Tỉ số", align: "center", width: 90,
-      render: (_, m) => m.status === "completed"
-        ? <b style={{ fontSize: 16 }}>{m.score1} – {m.score2}</b>
-        : <Tag>Chưa đấu</Tag>,
+      title: "Tỉ số", align: "center", width: onOpenTie ? 120 : 90,
+      render: (_, m) => {
+        if (m.status === "completed") return <b style={{ fontSize: 16 }}>{m.score1} – {m.score2}</b>;
+        const live = onOpenTie ? tieScoreText(m) : null;   // giải đồng đội: tỉ số tạm của trận đang đấu dở
+        return live
+          ? (
+            <span style={{ whiteSpace: "nowrap" }}>
+              <b style={{ fontSize: 16, color: "#1677ff" }}>{live}</b>
+              <Tag color="processing" style={{ marginLeft: 4 }}>Đang đấu</Tag>
+            </span>
+          )
+          : <Tag>Chưa đấu</Tag>;
+      },
     },
     {
       title: "Đội 2",
@@ -344,6 +471,18 @@ function matchTableCols(onScore) {
       ),
     });
   }
+  if (onOpenTie) {
+    cols.push({
+      title: "", width: 110, align: "center",
+      render: (_, m) => (
+        <Button size="small" icon={<FileTextOutlined />}
+          disabled={!m.p1_id || !m.p2_id}
+          onClick={(e) => { e.stopPropagation(); onOpenTie(m); }}>
+          Biên bản
+        </Button>
+      ),
+    });
+  }
   return cols;
 }
 
@@ -356,29 +495,44 @@ function TournamentContent({ tournament, api, onScored }) {
   const doneCount = matches.filter(m => m.status === "completed").length;
   const groupDoneCount = groupMatches.filter(m => m.status === "completed").length;
   const [scoreMatch, setScoreMatch] = useState(null);
+  const [tieMatch, setTieMatch] = useState(null);   // giải đồng đội: trận đang mở biên bản
+  const isTeam = tournament.team_type === "team";
 
   const mobileProps = {
     mobileTitle: (m) => {
       const p1 = teamLabel(m.p1) || "BYE";
       const p2 = teamLabel(m.p2) || "BYE";
+      const live = isTeam ? tieScoreText(m) : null;   // tỉ số tạm của trận đồng đội đang đấu dở
       const score = m.status === "completed"
         ? <b style={{ color: "#1677ff" }}> {m.score1}–{m.score2}</b>
-        : <Tag style={{ marginLeft: 4 }}>Chưa đấu</Tag>;
+        : live
+          ? <span><b style={{ color: "#1677ff" }}> {live}</b> <Tag color="processing" style={{ marginLeft: 4 }}>Đang đấu</Tag></span>
+          : <Tag style={{ marginLeft: 4 }}>Chưa đấu</Tag>;
       return <span>{p1} vs {p2}{score}</span>;
     },
     mobileHideColumns: ["Đội 1", "Tỉ số", "Đội 2", "Kết quả"],
+    // Desktop (antd Table): bấm cả dòng cũng mở biên bản; ResponsiveTable chỉ truyền onRow xuống Table
+    ...(isTeam ? {
+      onRow: (m) => (m.p1_id && m.p2_id ? { onClick: () => setTieMatch(m), style: { cursor: "pointer" } } : {}),
+    } : {}),
   };
 
-  const cols = matchTableCols(tournament.public_scoring_enabled ? setScoreMatch : null);
+  // Giải đồng đội: ẩn nút nhập điểm PIN (backend chặn POST /score với giải team), thay bằng nút "Biên bản"
+  const cols = matchTableCols(
+    !isTeam && tournament.public_scoring_enabled ? setScoreMatch : null,
+    isTeam ? setTieMatch : null,
+  );
+  const bracketOpen = isTeam ? setTieMatch : undefined;
   const tabItems = [];
 
-  if (fmt === "round_robin" || fmt === "individual") {
+  // round_robin_double (vòng tròn hai lượt) trước đây bị bỏ sót → trang public không có lịch/BXH (lỗi có sẵn)
+  if (fmt === "round_robin" || fmt === "round_robin_double" || fmt === "individual") {
     tabItems.push({
       key: "schedule",
       label: `Lịch thi đấu (${doneCount}/${matches.length})`,
       children: <RoundedSchedule columns={cols} matches={matches} mobileProps={mobileProps} />,
     });
-    if (fmt === "round_robin") {
+    if (fmt === "round_robin" || fmt === "round_robin_double") {
       tabItems.push({
         key: "standings",
         label: "Bảng xếp hạng",
@@ -391,7 +545,7 @@ function TournamentContent({ tournament, api, onScored }) {
     tabItems.push({
       key: "bracket",
       label: "Sơ đồ đấu",
-      children: <KnockoutBracket matches={matches} />,
+      children: <KnockoutBracket matches={matches} onOpen={bracketOpen} />,
     });
     tabItems.push({
       key: "schedule",
@@ -432,13 +586,21 @@ function TournamentContent({ tournament, api, onScored }) {
         label: `Vòng loại (${koMatches.filter(m => m.status === "completed").length}/${koMatches.length})`,
         children: (
           <>
-            <KnockoutBracket matches={koMatches} />
+            <KnockoutBracket matches={koMatches} onOpen={bracketOpen} />
             <Divider />
             <RoundedSchedule columns={cols} matches={koMatches} mobileProps={mobileProps} />
           </>
         ),
       });
     }
+  }
+
+  if (isTeam) {
+    tabItems.push({
+      key: "teams",
+      label: `Đội (${(tournament.participants || []).length})`,
+      children: <TeamsPanel api={api} tid={tournament.id} participantCount={(tournament.participants || []).length} />,
+    });
   }
 
   return (
@@ -451,6 +613,16 @@ function TournamentContent({ tournament, api, onScored }) {
           api={api}
           onSaved={() => { setScoreMatch(null); onScored && onScored(); }}
           onClose={() => setScoreMatch(null)}
+        />
+      )}
+      {tieMatch && (
+        <PublicTieBoard
+          api={api}
+          tid={tournament.id}
+          match={tieMatch}
+          tournament={tournament}
+          onClose={() => setTieMatch(null)}
+          onFinished={onScored}
         />
       )}
     </>

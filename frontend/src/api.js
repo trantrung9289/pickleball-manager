@@ -158,6 +158,37 @@ export const tournamentsApi = {
   },
   // Ghép tay 2 người đơn lẻ thành 1 đội (giải đôi, Nháp, không có phiên ghép đội đang mở)
   pairParticipants: (tid, p1Id, p2Id) => api.post(`/api/tournaments/${tid}/participants/pair`, { p1_id: p1Id, p2_id: p2Id }),
+
+  // ── GIẢI ĐỒNG ĐỘI (team_type="team"): đội nhiều VĐV, trận đồng đội (tie) gồm nhiều trận thành phần (rubber) ──
+  // Đội = participant có team_name; VĐV của đội = TournamentTeamPlayer (team_player_id). Mọi thao tác trên tie
+  // trả về TieOut đầy đủ để client thay state ngay, không cần GET lại.
+  teams: {
+    list: (tid) => api.get(`/api/tournaments/${tid}/teams`),                                   // → TeamOut[] {participant, players}
+    create: (tid, data) => api.post(`/api/tournaments/${tid}/teams`, data),                    // {team_name} (Nháp)
+    update: (tid, pid, data) => api.put(`/api/tournaments/${tid}/teams/${pid}`, data),         // {team_name?}
+    delete: (tid, pid) => api.delete(`/api/tournaments/${tid}/teams/${pid}`),                  // Nháp
+    // {member_ids, player_ids} → {added, skipped, team}; một người chỉ ở một đội (người đã ở đội khác → skipped)
+    addPlayers: (tid, pid, data) => api.post(`/api/tournaments/${tid}/teams/${pid}/players/bulk`, data),
+    patchPlayer: (tid, pid, tpid, data) => api.patch(`/api/tournaments/${tid}/teams/${pid}/players/${tpid}`, data),   // {is_captain?, gender?}
+    removePlayer: (tid, pid, tpid) => api.delete(`/api/tournaments/${tid}/teams/${pid}/players/${tpid}`),
+  },
+  // Đội hình đăng ký theo giai đoạn (leg1 | leg2 | knockout) — khoá tự động khi giai đoạn có điểm đầu tiên
+  lineups: {
+    list: (tid, pid) => api.get(`/api/tournaments/${tid}/teams/${pid}/lineups`),                              // → LineupOut[]
+    set: (tid, pid, stage, data) => api.put(`/api/tournaments/${tid}/teams/${pid}/lineups/${stage}`, data),   // {slots: {label: [tpid]}}
+    unlock: (tid, pid, stage, data) => api.post(`/api/tournaments/${tid}/teams/${pid}/lineups/${stage}/unlock`, data),   // {note}
+  },
+  // Biên bản trận đồng đội
+  tie: {
+    get: (tid, mid) => api.get(`/api/tournaments/${tid}/matches/${mid}/tie`),
+    drawOrder: (tid, mid) => api.post(`/api/tournaments/${tid}/matches/${mid}/tie/draw-order`),
+    setPlayers: (tid, mid, rid, data) => api.put(`/api/tournaments/${tid}/matches/${mid}/tie/rubbers/${rid}`, data),   // {side1_players?, side2_players?}
+    score: (tid, mid, rid, data) => api.post(`/api/tournaments/${tid}/matches/${mid}/tie/rubbers/${rid}/score`, data),  // {score1, score2}
+    walkover: (tid, mid, rid, data) => api.post(`/api/tournaments/${tid}/matches/${mid}/tie/rubbers/${rid}/walkover`, data),   // {side: 1|2} bên THUA
+    resetScore: (tid, mid, rid) => api.delete(`/api/tournaments/${tid}/matches/${mid}/tie/rubbers/${rid}/score`),
+  },
+  // Nhật ký thao tác giải đồng đội (mở khoá đội hình, đổi VĐV, điểm, xử thua, bốc thăm) — mới nhất trước
+  teamLogs: (tid, limit = 200) => api.get(`/api/tournaments/${tid}/team-logs`, { params: { limit } }),
 };
 
 // Sự kiện thành tích cá nhân (Mini game): cộng/trừ điểm từng người bằng nút +/−, không có trận đấu.
@@ -216,6 +247,9 @@ export const createPublicReportApi = (slug) => {
       // Ghép đội đôi: public theo dõi trực tiếp (poll 2s) + biên bản các phiên đã kết thúc
       partnerDraw: (tid) => pub.get(`${base}/tournaments/${tid}/partner-draw`),
       partnerDrawHistory: (tid) => pub.get(`${base}/tournaments/${tid}/partner-draws`),
+      // Giải đồng đội: danh sách đội + VĐV (không PII) và biên bản một trận đồng đội (poll như trận thường)
+      teams: (tid) => pub.get(`${base}/tournaments/${tid}/teams`),
+      tie: (tid, mid) => pub.get(`${base}/tournaments/${tid}/matches/${mid}/tie`),
     },
     // Sự kiện thành tích cá nhân: chỉ hiện khi status != draft; `state` poll 3s (bucket rate-limit riêng)
     // Mỗi request có timeout 10s để vòng poll public không kẹt khi mạng treo

@@ -13,6 +13,8 @@ import useHotkey from "../hooks/useHotkey";
 import { useRankLevels } from "../hooks/useRankLevels";
 import ResponsiveTable from "../components/ResponsiveTable";
 import RankLevelsModal from "../components/RankLevelsModal";
+import GenderTag from "../components/team/GenderTag";
+import { GENDER_LABELS, GENDER_OPTIONS, TEAM_TYPE_LABELS } from "../utils/teamFormat";
 
 const { Title, Text } = Typography;
 const { Option } = Select;
@@ -106,11 +108,12 @@ export default function Guests() {
 
     setSaving(true);
     try {
+      const payload = { ...vals, gender: vals.gender ?? null };   // Select xoá → undefined → JSON bỏ khoá → không xoá được
       if (editing) {
-        await playersApi.update(editing.id, vals);
+        await playersApi.update(editing.id, payload);
         message.success("Đã cập nhật khách mời");
       } else {
-        await playersApi.create(vals);
+        await playersApi.create(payload);
         message.success("Đã thêm khách mời mới");
       }
       setModalOpen(false);
@@ -190,6 +193,12 @@ export default function Guests() {
       onFilter: (value, record) => (value === unranked ? (!record.rank || record.rank === unranked) : record.rank === value),
     },
     {
+      title: "Giới tính", dataIndex: "gender", width: 90,
+      render: (v) => (v ? <GenderTag value={v} /> : "—"),
+      filters: Object.entries(GENDER_LABELS).map(([k, v]) => ({ text: v, value: k })),
+      onFilter: (value, record) => record.gender === value,
+    },
+    {
       title: "Thao tác", width: 180,
       render: (_, r) => (
         <Space>
@@ -244,9 +253,10 @@ export default function Guests() {
           <span>
             {r.name}
             {r.rank && <Tag color="purple" style={{ marginLeft: 6 }}>{r.rank}</Tag>}
+            {r.gender && <GenderTag value={r.gender} style={{ marginLeft: 6 }} />}
           </span>
         )}
-        mobileHideColumns={["Họ và tên", "Hạng"]}
+        mobileHideColumns={["Họ và tên", "Hạng", "Giới tính"]}
       />
 
       <Modal
@@ -279,11 +289,21 @@ export default function Guests() {
               </Form.Item>
             </Col>
           </Row>
-          <Form.Item name="rank" label="Hạng (Rank)" initialValue={unranked}>
-            <Select placeholder="Chọn hoặc nhập hạng" allowClear showSearch>
-              {formRankOptions.map(r => <Option key={r} value={r}>{r}</Option>)}
-            </Select>
-          </Form.Item>
+          <Row gutter={16}>
+            <Col span={12}>
+              <Form.Item name="rank" label="Hạng (Rank)" initialValue={unranked}>
+                <Select placeholder="Chọn hoặc nhập hạng" allowClear showSearch>
+                  {formRankOptions.map(r => <Option key={r} value={r}>{r}</Option>)}
+                </Select>
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              {/* Giới tính dùng cho giải đồng đội (Đôi Nam / Đôi Nữ / Đôi Nam Nữ...) — không bắt buộc */}
+              <Form.Item name="gender" label="Giới tính">
+                <Select placeholder="Chưa khai" allowClear options={GENDER_OPTIONS} />
+              </Form.Item>
+            </Col>
+          </Row>
         </Form>
       </Modal>
 
@@ -314,7 +334,7 @@ export default function Guests() {
                   }
                   description={
                     <Text type="secondary">
-                      {item.team_type === "doubles" ? "Đấu đôi" : "Đấu đơn"}
+                      {TEAM_TYPE_LABELS[item.team_type] || "Đấu đơn"}
                       {item.team_name ? ` — ${item.team_name}` : ""}
                       {item.as_partner ? " (vai trò: đối tác)" : ""}
                     </Text>

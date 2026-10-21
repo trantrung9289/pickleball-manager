@@ -158,6 +158,7 @@ class MemberBase(BaseModel):
     join_date: Optional[date] = None
     status: MemberStatus = MemberStatus.active
     rank: Optional[str] = None
+    gender: Optional[str] = None      # male | female | other
     address: Optional[str] = None
     notes: Optional[str] = None
 
@@ -174,6 +175,7 @@ class MemberUpdate(BaseModel):
     join_date: Optional[date] = None
     status: Optional[MemberStatus] = None
     rank: Optional[str] = None
+    gender: Optional[str] = None
     address: Optional[str] = None
     notes: Optional[str] = None
 
@@ -225,6 +227,7 @@ class PlayerCreate(BaseModel):
     phone: Optional[str] = None
     email: Optional[str] = None
     rank: Optional[str] = "Chưa xếp hạng"
+    gender: Optional[str] = None      # male | female | other
     member_id: Optional[int] = None  # NULL = khách mời
 
 
@@ -234,6 +237,7 @@ class PlayerOut(BaseModel):
     phone: Optional[str] = None
     email: Optional[str] = None
     rank: Optional[str] = "Chưa xếp hạng"
+    gender: Optional[str] = None
     member_id: Optional[int] = None
     club_id: int
     is_guest: bool = False  # computed field
@@ -317,6 +321,7 @@ class TournamentCreate(BaseModel):
     score_pin: Optional[str] = None          # PIN 4 số — cho phép nhập điểm qua public
     public_scoring_enabled: bool = False
     third_place_enabled: bool = False        # có trận tranh giải 3 không (knockout/combined, cần ≥4 đội)
+    team_rules: Optional[Dict[str, Any]] = None   # bắt buộc khi team_type == "team" (xem normalize_team_rules)
 
 
 class TournamentUpdate(BaseModel):
@@ -329,6 +334,7 @@ class TournamentUpdate(BaseModel):
     rank_rules: Optional[List[Dict[str, str]]] = None
     num_groups: Optional[int] = Field(default=None, ge=1, le=16)
     third_place_enabled: Optional[bool] = None
+    team_rules: Optional[Dict[str, Any]] = None
 
 
 class ParticipantSlotUpdate(BaseModel):
@@ -383,6 +389,7 @@ class MatchOut(BaseModel):
     next_match_slot: Optional[int] = None
     loser_next_match_id: Optional[int] = None
     loser_next_match_slot: Optional[int] = None
+    rubber_draw_seed: Optional[str] = None   # giải đồng đội: đã bốc thăm thứ tự trận thành phần chưa
     p1: Optional[ParticipantOut] = None
     p2: Optional[ParticipantOut] = None
     winner: Optional[ParticipantOut] = None
@@ -568,6 +575,7 @@ class TournamentOut(BaseModel):
     public_scoring_enabled: bool = False
     third_place_enabled: bool = False
     has_score_pin: bool = False
+    team_rules: Optional[Any] = None        # quy tắc giải đồng đội (team_type == "team")
     participants: List[ParticipantOut] = []
     matches: List[MatchOut] = []
     draw: Optional[DrawSummaryOut] = None   # phiên bốc thăm mới nhất (property Tournament.draw)
@@ -659,6 +667,7 @@ class PublicTournamentOut(BaseModel):
     public_scoring_enabled: bool = False
     third_place_enabled: bool = False
     has_score_pin: bool = False
+    team_rules: Optional[Any] = None
     participants: List[PublicParticipantOut] = []
     matches: List[PublicMatchOut] = []
     draw: Optional[DrawSummaryOut] = None   # phiên bốc thăm mới nhất (property Tournament.draw)
@@ -797,3 +806,134 @@ class PointEventBulkOut(BaseModel):
     added: int
     skipped: List[str] = []
     event: PointEventOut
+
+
+# ── Giải ĐỒNG ĐỘI (team_type="team") ─────────────────────────────────────────
+
+class TeamCreate(BaseModel):
+    team_name: str = Field(min_length=1, max_length=200)
+
+
+class TeamUpdate(BaseModel):
+    team_name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+
+
+class TeamPlayersBulkIn(BaseModel):
+    member_ids: List[int] = []
+    player_ids: List[int] = []
+
+
+class TeamPlayerPatch(BaseModel):
+    is_captain: Optional[bool] = None
+    gender: Optional[str] = None      # sửa snapshot giới tính khi chưa khai
+
+
+class TeamPlayerOut(BaseModel):
+    id: int
+    participant_id: int
+    member_id: Optional[int] = None
+    player_id: Optional[int] = None
+    display_name: str
+    gender: Optional[str] = None      # = gender_snapshot
+    is_captain: bool = False
+
+    class Config:
+        from_attributes = True
+
+
+class TeamOut(BaseModel):
+    participant: ParticipantOut
+    players: List[TeamPlayerOut] = []
+
+
+class TeamPlayersBulkOut(BaseModel):
+    added: int
+    skipped: List[str] = []
+    team: TeamOut
+
+
+class LineupIn(BaseModel):
+    slots: Dict[str, List[int]]       # {"Đôi Nam 1": [team_player_id, ...]}
+
+
+class LineupUnlockIn(BaseModel):
+    note: str = Field(min_length=1, max_length=200)
+
+
+class LineupOut(BaseModel):
+    stage_key: str
+    slots: Dict[str, List[int]] = {}
+    locked: bool = False
+    locked_at: Optional[datetime] = None
+    unlock_note: Optional[str] = None
+    warnings: List[str] = []
+    over_limit: List[int] = []        # team_player_id xuất hiện quá max_rubbers_per_player
+
+
+class RubberPlayersIn(BaseModel):
+    side1_players: Optional[List[int]] = None
+    side2_players: Optional[List[int]] = None
+
+
+class RubberScoreIn(BaseModel):
+    score1: int = Field(ge=0, le=999)
+    score2: int = Field(ge=0, le=999)
+
+
+class RubberWalkoverIn(BaseModel):
+    side: int = Field(ge=1, le=2)     # bên THUA (đến trễ / bỏ trận thành phần)
+
+
+class RubberOut(BaseModel):
+    id: int
+    order_index: int
+    code: str
+    label: str
+    side1_players: List[int] = []
+    side2_players: List[int] = []
+    score1: Optional[int] = None
+    score2: Optional[int] = None
+    status: str = "pending"
+    is_walkover: bool = False
+    start1: int = 0
+    start2: int = 0
+    target: int = 0                   # mốc điểm của trận thành phần này (PA2: cộng dồn)
+
+
+class TieResultOut(BaseModel):
+    score1: int = 0
+    score2: int = 0
+    winner_side: Optional[int] = None
+    decided: bool = False
+    finished: bool = False
+    detail: Optional[str] = None
+
+
+class TieOut(BaseModel):
+    match: Any                        # MatchOut (admin) hoặc PublicMatchOut (public)
+    stage_key: str
+    rules: Dict[str, Any]
+    rubbers: List[RubberOut] = []
+    team1: Optional[TeamOut] = None
+    team2: Optional[TeamOut] = None
+    lineup1: Optional[LineupOut] = None
+    lineup2: Optional[LineupOut] = None
+    result: TieResultOut
+    warnings: List[str] = []
+    over_limit: List[int] = []
+    draw_seed: Optional[str] = None
+    can_edit: bool = True             # false khi giải không active / trận không còn thi đấu
+    blocked_reason: Optional[str] = None   # lý do trận không nhập biên bản được (xử thắng bỏ giải, đội bỏ giải)
+
+
+class TeamLogOut(BaseModel):
+    id: int
+    match_id: Optional[int] = None
+    participant_id: Optional[int] = None
+    kind: str
+    note: Optional[str] = None
+    actor_name: Optional[str] = None
+    created_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True

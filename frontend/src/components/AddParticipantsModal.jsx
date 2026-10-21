@@ -5,6 +5,7 @@ import {
 import { PlusOutlined, UserAddOutlined, UserOutlined } from "@ant-design/icons";
 import { membersApi, playersApi, tournamentsApi } from "../api";
 import ResponsiveTable from "./ResponsiveTable";
+import GenderTag from "./team/GenderTag";
 import { useRankLevels } from "../hooks/useRankLevels";
 
 const { Text } = Typography;
@@ -139,16 +140,18 @@ export function AddParticipantsModal({
 
   const inTournamentTag = <Tag color="default" style={{ marginLeft: 6 }}>{inLabel}</Tag>;
   const rankTag = (v) => (v ? <Tag color="purple">{v}</Tag> : <Text type="secondary">—</Text>);
+  // Giới tính (nếu đã khai) cạnh tên — giải đồng đội cần để xếp Đôi Nam / Đôi Nữ / Đôi Nam Nữ
+  const genderTag = (g) => (g ? <GenderTag value={g} style={{ marginLeft: 6 }} /> : null);
 
   const memberCols = [
-    { title: "Họ và tên", dataIndex: "full_name", render: (v, r) => <span>{v}{usedMemberIds.has(r.id) && inTournamentTag}</span> },
+    { title: "Họ và tên", dataIndex: "full_name", render: (v, r) => <span>{v}{genderTag(r.gender)}{usedMemberIds.has(r.id) && inTournamentTag}</span> },
     { title: "Hạng", dataIndex: "rank", width: 110, render: rankTag },
     { title: "Trạng thái", dataIndex: "status", width: 110, render: (v) => { const s = MEMBER_STATUS_MAP[v] || { label: v, color: "default" }; return <Badge status={s.color} text={s.label} />; } },
     { title: "SĐT", dataIndex: "phone", width: 120, render: (v) => v || "—" },
   ];
   const guestCols = [
     { title: "Họ và tên", dataIndex: "name",
-      render: (v, r) => <span><Tag color="orange" style={{ marginRight: 6 }}>Khách</Tag>{v}{usedPlayerIds.has(r.id) && inTournamentTag}</span> },
+      render: (v, r) => <span><Tag color="orange" style={{ marginRight: 6 }}>Khách</Tag>{v}{genderTag(r.gender)}{usedPlayerIds.has(r.id) && inTournamentTag}</span> },
     { title: "SĐT", dataIndex: "phone", width: 120, render: (v) => v || "—" },
     { title: "Hạng", dataIndex: "rank", width: 110, render: (v) => rankTag(v || unranked) },
   ];
@@ -185,7 +188,9 @@ export function AddParticipantsModal({
           : "Tích chọn người chơi ở hai tab rồi bấm Thêm"}
         description={tournament.team_type === "doubles"
           ? "Giải đôi: mỗi người được thêm ở trạng thái chưa có đội — ghép đội bằng vòng quay hoặc ghép tay sau."
-          : undefined} />
+          : tournament.team_type === "team"
+            ? "Giải đồng đội: một người chỉ thuộc MỘT đội trong giải. Nên khai giới tính để xếp đúng Đôi Nam / Đôi Nữ / Đôi Nam Nữ."
+            : undefined} />
       <Tabs
         defaultActiveKey="member"
         items={[
@@ -212,6 +217,7 @@ export function AddParticipantsModal({
                     return (
                       <span>
                         {r.full_name}
+                        {genderTag(r.gender)}
                         {r.rank && <Tag color="purple" style={{ marginLeft: 6 }}>{r.rank}</Tag>}
                         {r.status !== "active" && <Badge status={s.color} text={s.label} style={{ marginLeft: 8 }} />}
                         {usedMemberIds.has(r.id) && inTournamentTag}
@@ -249,6 +255,7 @@ export function AddParticipantsModal({
                       mobileTitle={(r) => (
                         <span>
                           <Tag color="orange" style={{ marginRight: 6 }}>Khách</Tag>{r.name}
+                          {genderTag(r.gender)}
                           {usedPlayerIds.has(r.id) && inTournamentTag}
                         </span>
                       )}

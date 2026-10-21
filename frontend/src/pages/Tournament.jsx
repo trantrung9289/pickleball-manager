@@ -11,7 +11,7 @@ import {
   EditOutlined, DeleteOutlined, ReloadOutlined,
   CheckCircleOutlined, SaveOutlined, ArrowRightOutlined,
   UserOutlined, TeamOutlined, UserAddOutlined, PrinterOutlined, GiftOutlined, WarningOutlined,
-  SettingOutlined, StarOutlined,
+  SettingOutlined, StarOutlined, FileTextOutlined, HistoryOutlined, UsergroupAddOutlined,
 } from "@ant-design/icons";
 import dayjs from "dayjs";
 import { tournamentsApi, pointEventsApi, membersApi, playersApi } from "../api";
@@ -21,10 +21,16 @@ import PointEventDetail, { CreatePointEventModal } from "./PointEventDetail";
 import TournamentPrintSheet from "../components/TournamentPrintSheet";
 import DrawCeremony from "../components/draw/DrawCeremony";
 import PartnerDrawCeremony from "../components/draw/PartnerDrawCeremony";
+import TeamRulesEditor from "../components/team/TeamRulesEditor";
+import TeamRosterPanel from "../components/team/TeamRosterPanel";
+import TieSheetModal from "../components/team/TieSheetModal";
+import TeamLogsModal from "../components/team/TeamLogsModal";
 import { useViewMode } from "../contexts/ViewModeContext";
+import { useAuth } from "../context/AuthContext";
 import { useRankLevels } from "../hooks/useRankLevels";
 import { buildRealBracketNodes, computeBracketGeometry, findThirdPlaceMatch } from "../utils/bracketLayout";
 import { teamLabel, teamRank } from "../utils/tournamentLabels";
+import { TEAM_TYPE_LABELS, defaultTeamRules, normalizeTeamRules, tieScoreLabel } from "../utils/teamFormat";
 import {
   DRAW_FORMATS, serverOffset, normalizeRank, UNRANKED, partnerPlan, normalizePartnerRules, ranksLabel,
 } from "../utils/drawMath";
@@ -43,6 +49,9 @@ const STATUS_MAP = {
   active:    { label: "Đang diễn ra", color: "processing" },
   completed: { label: "Kết thúc", color: "success" },
 };
+const TEAM_TYPE_COLOR = { singles: "default", doubles: "geekblue", team: "volcano" };
+/** Tag loại đội (Đấu đơn / Đấu đôi / Đồng đội) dùng ở danh sách và header trang giải. */
+const teamTypeTag = (v) => <Tag color={TEAM_TYPE_COLOR[v] || "default"}>{TEAM_TYPE_LABELS[v] || "Đấu đơn"}</Tag>;
 // Danh sách hạng KHÔNG còn cứng ở đây — lấy từ cấu hình CLB qua hook useRankLevels (dùng chung Thành viên /
 // Khách mời / quy tắc ghép đội). "Chưa xếp hạng" là hạng ngầm định (options của hook đã có sẵn).
 
@@ -287,10 +296,13 @@ function CreateWizard({ onCreated, onClose }) {
   const [format, setFormat] = useState(null);
   const [teamType, setTeamType] = useState("singles");
   const [thirdPlaceEnabled, setThirdPlaceEnabled] = useState(true);
+  // Giải đồng đội: quy tắc trận thành phần / cách tính điểm (TeamRulesEditor), gửi kèm team_type="team"
+  const [teamRules, setTeamRules] = useState(defaultTeamRules);
   // PIN nhập điểm qua public
   const [pinEnabled, setPinEnabled] = useState(false);
   const [pinValue, setPinValue] = useState("");
   const [saving, setSaving] = useState(false);
+  const isTeam = teamType === "team";
 
   const handleNext = async () => {
     try { await form.validateFields(); setFormat(form.getFieldValue("format")); }
@@ -302,6 +314,12 @@ function CreateWizard({ onCreated, onClose }) {
     const vals = form.getFieldsValue();
     if (!vals.name || !vals.format) { setStep(0); message.error("Thiếu thông tin giải"); return; }
     if (pinEnabled && !/^\d{4}$/.test(pinValue)) { message.error("Mã PIN phải gồm đúng 4 chữ số"); return; }
+    let rulesPayload;
+    if (isTeam) {
+      if (vals.format === "individual") { message.error("Giải đồng đội không dùng thể thức thi đấu riêng lẻ — chọn thể thức khác"); return; }
+      try { rulesPayload = normalizeTeamRules(teamRules); }
+      catch (e) { message.error(e.message || "Quy tắc đồng đội không hợp lệ"); return; }
+    }
 
     setSaving(true);
     try {
@@ -315,9 +333,10 @@ function CreateWizard({ onCreated, onClose }) {
         public_scoring_enabled: pinEnabled,
         score_pin: pinEnabled ? pinValue : null,
         third_place_enabled: (vals.format === "knockout" || vals.format === "combined") ? thirdPlaceEnabled : false,
+        ...(isTeam ? { team_rules: rulesPayload } : {}),
       };
       const res = await tournamentsApi.create(payload);
-      message.success("Đã tạo giải đấu — thêm người chơi ngay trên trang giải");
+      message.success(isTeam ? "Đã tạo giải đồng đội — tạo đội và thêm VĐV ngay trên trang giải" : "Đã tạo giải đấu — thêm người chơi ngay trên trang giải");
       onCreated(res.data);
     } catch (err) {
       message.error(err?.response?.data?.detail || "Không thể tạo giải đấu");
@@ -329,17 +348,22 @@ function CreateWizard({ onCreated, onClose }) {
     { title: "Loại đội & tuỳ chọn" },
   ];
 
-  const teamTypeCard = (value, icon, title, desc) => (
-    <Card size="small" hoverable onClick={() => setTeamType(value)}
-      style={{ borderColor: teamType === value ? "#1677ff" : "#d9d9d9", cursor: "pointer" }}>
-      <Space>
-        {icon}
-        <div>
-          <div style={{ fontWeight: 600 }}>{title}</div>
-          <Text type="secondary" style={{ fontSize: 12 }}>{desc}</Text>
-        </div>
-      </Space>
-    </Card>
+  const teamTypeCard = (value, icon, title, desc, disabledReason) => (
+    <Tooltip title={disabledReason}>
+      <Card size="small" hoverable={!disabledReason} onClick={disabledReason ? undefined : () => setTeamType(value)}
+        style={{
+          borderColor: teamType === value ? "#1677ff" : "#d9d9d9", cursor: disabledReason ? "not-allowed" : "pointer",
+          opacity: disabledReason ? 0.5 : 1, height: "100%",
+        }}>
+        <Space>
+          {icon}
+          <div>
+            <div style={{ fontWeight: 600 }}>{title}</div>
+            <Text type="secondary" style={{ fontSize: 12 }}>{desc}</Text>
+          </div>
+        </Space>
+      </Card>
+    </Tooltip>
   );
 
   return (
@@ -356,7 +380,11 @@ function CreateWizard({ onCreated, onClose }) {
           <Form.Item name="format" label="Thể thức thi đấu" rules={[{ required: true, message: "Chọn thể thức" }]}>
             <Select placeholder="Chọn thể thức" onChange={setFormat}>
               {Object.entries(FORMAT_MAP).map(([k, v]) => (
-                <Select.Option key={k} value={k}><Tag color={v.color}>{v.label}</Tag></Select.Option>
+                // Giải đồng đội không có thể thức riêng lẻ (backend 400) — vô hiệu khi đã chọn "Đồng đội" ở bước 2
+                <Select.Option key={k} value={k} disabled={isTeam && k === "individual"}>
+                  <Tag color={v.color}>{v.label}</Tag>
+                  {isTeam && k === "individual" && <Text type="secondary" style={{ fontSize: 12 }}>không dùng cho đồng đội</Text>}
+                </Select.Option>
               ))}
             </Select>
           </Form.Item>
@@ -382,18 +410,30 @@ function CreateWizard({ onCreated, onClose }) {
       {step === 1 && (
         <div>
           <div style={{ marginBottom: 8, fontWeight: 600 }}>Loại đội</div>
-          <Row gutter={12} style={{ marginBottom: 16 }}>
-            <Col span={12}>
+          <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
+            <Col xs={24} sm={8}>
               {teamTypeCard("singles",
                 <UserOutlined style={{ fontSize: 20, color: teamType === "singles" ? "#1677ff" : "#999" }} />,
                 "Đấu đơn", "Mỗi người chơi là 1 đội")}
             </Col>
-            <Col span={12}>
+            <Col xs={24} sm={8}>
               {teamTypeCard("doubles",
                 <TeamOutlined style={{ fontSize: 20, color: teamType === "doubles" ? "#1677ff" : "#999" }} />,
                 "Đấu đôi", "2 người ghép thành 1 đội")}
             </Col>
+            <Col xs={24} sm={8}>
+              {teamTypeCard("team",
+                <UsergroupAddOutlined style={{ fontSize: 20, color: isTeam ? "#1677ff" : "#999" }} />,
+                "Đồng đội (nhiều VĐV)", "Mỗi trận gồm nhiều trận thành phần (đôi nam, đôi nữ...)",
+                format === "individual" ? "Thể thức thi đấu riêng lẻ không hỗ trợ đồng đội — quay lại chọn thể thức khác" : undefined)}
+            </Col>
           </Row>
+
+          {isTeam && (
+            <Card size="small" style={{ marginBottom: 16 }} title="Quy tắc giải đồng đội">
+              <TeamRulesEditor value={teamRules} onChange={setTeamRules} />
+            </Card>
+          )}
 
           <Card size="small" style={{ marginBottom: 16 }}>
             <Row justify="space-between" align="middle">
@@ -422,8 +462,12 @@ function CreateWizard({ onCreated, onClose }) {
 
           <Alert
             type="info" showIcon
-            message="Sau khi tạo, thêm người chơi và (giải đôi) ghép đội ngay trên trang giải."
-            description="Giải ở trạng thái Nháp cho tới khi bấm 'Bắt đầu giải'. Lịch thi đấu được sinh ngẫu nhiên hoặc bốc thăm sau khi bắt đầu."
+            message={isTeam
+              ? "Sau khi tạo, tạo từng đội và thêm VĐV (thành viên / khách mời) ngay trên trang giải — tab Đội."
+              : "Sau khi tạo, thêm người chơi và (giải đôi) ghép đội ngay trên trang giải."}
+            description={isTeam
+              ? "Mỗi đội đăng ký đội hình theo giai đoạn; thứ tự các trận thành phần được bốc thăm ở từng trận đồng đội. Giải ở trạng thái Nháp cho tới khi bấm 'Bắt đầu giải'."
+              : "Giải ở trạng thái Nháp cho tới khi bấm 'Bắt đầu giải'. Lịch thi đấu được sinh ngẫu nhiên hoặc bốc thăm sau khi bắt đầu."}
           />
         </div>
       )}
@@ -924,27 +968,45 @@ function BracketCard({ match, onScoreClick }) {
 }
 
 // ── Bảng xếp hạng (W=1, L=0) ────────────────────────────
+// Giải đồng đội: thay BT/BB/Hiệu số bằng "HS trận" (rubber_diff: hiệu số trận thành phần) và "HS điểm" (pts_diff:
+// hiệu số điểm nhỏ / tổng tích luỹ) theo thứ tự tie-break điều lệ; `needs_draw` = còn bằng nhau hoàn toàn → tô cảnh báo.
 function StandingsTable({ tournament, group }) {
   const [rows, setRows] = useState([]);
+  const isTeam = tournament.team_type === "team";
   const doneCount = tournament.matches?.filter(m => m.status === "completed").length ?? 0;
 
   useEffect(() => {
     tournamentsApi.standings(tournament.id, group).then(r => setRows(r.data));
   }, [tournament.id, group, doneCount]);
 
+  const diffCell = (v) => <Text style={{ color: v > 0 ? "#52c41a" : v < 0 ? "#ff4d4f" : "inherit" }}>{v > 0 ? `+${v}` : v}</Text>;
   const cols = [
     { title: "#", dataIndex: "rank", width: 40, align: "center",
       render: v => v <= 2 ? <b style={{ color: v === 1 ? "#faad14" : "#1677ff" }}>{v}</b> : v },
-    { title: "Đội", dataIndex: "team_name", render: (v, r) => v || r.full_name },
+    { title: "Đội", dataIndex: "team_name",
+      render: (v, r) => (
+        <span>
+          {v || r.full_name}
+          {isTeam && r.needs_draw && (
+            <Tooltip title="Bằng điểm, hiệu số trận và hiệu số điểm — cần bốc thăm để phân hạng">
+              <Tag color="warning" style={{ marginLeft: 6 }}>Cần bốc thăm</Tag>
+            </Tooltip>
+          )}
+        </span>
+      ) },
     { title: "T.đấu", dataIndex: "played", width: 55, align: "center" },
     { title: "Thắng", dataIndex: "won", width: 55, align: "center",
       render: v => <Text style={{ color: "#52c41a", fontWeight: 600 }}>{v}</Text> },
     { title: "Thua", dataIndex: "lost", width: 55, align: "center",
       render: v => <Text style={{ color: "#ff4d4f" }}>{v}</Text> },
-    { title: "BT", dataIndex: "goals_for", width: 45, align: "center" },
-    { title: "BB", dataIndex: "goals_against", width: 45, align: "center" },
-    { title: "Hiệu số", dataIndex: "goal_diff", width: 65, align: "center",
-      render: v => <Text style={{ color: v > 0 ? "#52c41a" : v < 0 ? "#ff4d4f" : "inherit" }}>{v > 0 ? `+${v}` : v}</Text> },
+    ...(isTeam ? [
+      { title: "HS trận", dataIndex: "rubber_diff", width: 70, align: "center", render: (v) => diffCell(v ?? 0) },
+      { title: "HS điểm", dataIndex: "pts_diff", width: 70, align: "center", render: (v) => diffCell(v ?? 0) },
+    ] : [
+      { title: "BT", dataIndex: "goals_for", width: 45, align: "center" },
+      { title: "BB", dataIndex: "goals_against", width: 45, align: "center" },
+      { title: "Hiệu số", dataIndex: "goal_diff", width: 65, align: "center", render: diffCell },
+    ]),
     { title: "Điểm", dataIndex: "points", width: 55, align: "center",
       render: v => <b style={{ color: "#1677ff", fontSize: 15 }}>{v}</b> },
   ];
@@ -953,9 +1015,15 @@ function StandingsTable({ tournament, group }) {
     <ResponsiveTable columns={cols} dataSource={rows} rowKey="participant_id" size="small"
       pagination={false}
       rowClassName={(_, i) => i < 2 ? "ant-table-row-selected" : ""}
+      onRow={(r) => ({ style: isTeam && r.needs_draw ? { background: "#fffbe6" } : undefined })}
       mobileTitle={(r) => {
         const icon = r.rank === 1 ? "🥇" : r.rank === 2 ? "🥈" : r.rank === 3 ? "🥉" : `#${r.rank}`;
-        return <span>{icon} <b>{r.team_name || r.full_name}</b></span>;
+        return (
+          <span>
+            {icon} <b>{r.team_name || r.full_name}</b>
+            {isTeam && r.needs_draw && <Tag color="warning" style={{ marginLeft: 6 }}>Cần bốc thăm</Tag>}
+          </span>
+        );
       }}
       mobileHideColumns={["#", "Đội"]}
     />
@@ -1112,19 +1180,28 @@ function ReplaceParticipantModal({ tournament, target, onSaved, onClose }) {
 
 // ── Sửa cài đặt giải (chỉ khi Nháp) — chỉ thể thức ───────────
 function EditSetupModal({ tournament, onSaved, onClose }) {
-  // Chỉ còn cài đặt thể thức — danh sách / thêm người chơi đã chuyển sang ParticipantsPanel trên trang giải
+  // Chỉ còn cài đặt thể thức — danh sách / thêm người chơi đã chuyển sang ParticipantsPanel trên trang giải.
+  // Giải đồng đội (Nháp): sửa thêm được quy tắc trận thành phần / cách tính điểm (team_rules thuộc SETUP_FIELDS).
   const [form] = Form.useForm();
   const [format, setFormat] = useState(tournament.format);
   const [saving, setSaving] = useState(false);
+  const isTeam = tournament.team_type === "team";
+  const [teamRules, setTeamRules] = useState(() => (isTeam ? normalizeTeamRules(tournament.team_rules) : null));
 
   const handleSaveConfig = async () => {
     const vals = await form.validateFields();
+    let rulesPayload;
+    if (isTeam) {
+      try { rulesPayload = normalizeTeamRules(teamRules); }
+      catch (e) { message.error(e.message || "Quy tắc đồng đội không hợp lệ"); return; }
+    }
     setSaving(true);
     try {
       await tournamentsApi.update(tournament.id, {
         format: vals.format,
         num_groups: vals.format === "combined" ? (vals.num_groups || 2) : undefined,
         third_place_enabled: (vals.format === "knockout" || vals.format === "combined") ? !!vals.third_place_enabled : false,
+        ...(isTeam ? { team_rules: rulesPayload } : {}),
       });
       message.success("Đã lưu cấu hình");
       await onSaved();
@@ -1135,7 +1212,7 @@ function EditSetupModal({ tournament, onSaved, onClose }) {
   };
 
   return (
-    <Modal title="Sửa cài đặt thể thức" open onCancel={onClose} width={560}
+    <Modal title="Sửa cài đặt thể thức" open onCancel={onClose} width={isTeam ? 720 : 560}
       footer={
         <Space>
           <Button onClick={onClose}>Đóng</Button>
@@ -1147,7 +1224,7 @@ function EditSetupModal({ tournament, onSaved, onClose }) {
         <Form.Item name="format" label="Thể thức thi đấu">
           <Select onChange={setFormat}>
             {Object.entries(FORMAT_MAP).map(([k, v]) => (
-              <Select.Option key={k} value={k}><Tag color={v.color}>{v.label}</Tag></Select.Option>
+              <Select.Option key={k} value={k} disabled={isTeam && k === "individual"}><Tag color={v.color}>{v.label}</Tag></Select.Option>
             ))}
           </Select>
         </Form.Item>
@@ -1162,8 +1239,17 @@ function EditSetupModal({ tournament, onSaved, onClose }) {
           </Form.Item>
         )}
       </Form>
+      {isTeam && (
+        <>
+          <Divider orientation="left" style={{ marginTop: 12 }}>Quy tắc giải đồng đội</Divider>
+          <TeamRulesEditor value={teamRules} onChange={setTeamRules} />
+          <Text type="secondary" style={{ display: "block", marginTop: 8, fontSize: 12 }}>
+            Đổi nhãn trận thành phần sẽ làm lệch khoá slot của đội hình đã đăng ký — xếp lại đội hình sau khi lưu.
+          </Text>
+        </>
+      )}
       <Text type="secondary" style={{ display: "block", marginTop: 12, fontSize: 12 }}>
-        Thêm / xoá người chơi ở khung "Người chơi" trên trang giải.
+        {isTeam ? "Tạo đội / thêm VĐV ở khung \"Đội\" trên trang giải." : "Thêm / xoá người chơi ở khung \"Người chơi\" trên trang giải."}
       </Text>
     </Modal>
   );
@@ -1291,8 +1377,13 @@ function ScorePinModal({ tournament, onSaved, onClose }) {
 // ── Chi tiết giải đấu ─────────────────────────────────────
 function TournamentDetail({ tournament: initData, onBack, onUpdated, autoOpenAdd = false }) {
   const { isMobileView } = useViewMode();
+  const { perms } = useAuth();
+  const canEdit = !!perms?.canEdit;
   const [tournament, setTournament] = useState(initData);
   const [scoreMatch, setScoreMatch] = useState(null);
+  // Giải đồng đội: biên bản trận đang mở (thay ScoreModal) + modal nhật ký thao tác
+  const [tieMatch, setTieMatch] = useState(null);
+  const [logsOpen, setLogsOpen] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [startingKO, setStartingKO] = useState(false);
   const [editNameModal, setEditNameModal] = useState(false);
@@ -1321,6 +1412,29 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated, autoOpenAdd
     window.addEventListener("afterprint", onAfterPrint);
     return () => window.removeEventListener("afterprint", onAfterPrint);
   }, [printing]);
+  // Giải đồng đội: bản in cần thêm đội, đội hình từng giai đoạn và biên bản từng trận → tải trước khi mở hộp in
+  const [printData, setPrintData] = useState(null);
+  const handlePrintClick = useCallback(async () => {
+    if (tournament.team_type !== "team") { setPrintData(null); setPrinting(true); return; }
+    try {
+      const teams = (await tournamentsApi.teams.list(tournament.id)).data || [];
+      const lineups = {};
+      await Promise.all(teams.map(async (tm) => {
+        try { lineups[tm.participant.id] = (await tournamentsApi.lineups.list(tournament.id, tm.participant.id)).data || []; }
+        catch { lineups[tm.participant.id] = []; }
+      }));
+      const ties = {};
+      const ms = (tournament.matches || []).filter((m) => m.p1_id && m.p2_id);
+      await Promise.all(ms.map(async (m) => {
+        try { ties[m.id] = (await tournamentsApi.tie.get(tournament.id, m.id)).data; } catch { /* in khung trống */ }
+      }));
+      setPrintData({ teams, lineups, ties });
+    } catch (err) {
+      message.error(err?.response?.data?.detail || "Không tải được dữ liệu đội để in — in bản rút gọn");
+      setPrintData(null);
+    }
+    setPrinting(true);
+  }, [tournament]);
   const handlePrintReady = useCallback(() => {
     // Đợi 1 tick để React commit xong nội dung trước khi mở hộp thoại in
     setTimeout(() => window.print(), 30);
@@ -1410,7 +1524,9 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated, autoOpenAdd
   const handleStatusChange = async (newStatus) => {
     const labels = { active: "Đang diễn ra", completed: "Kết thúc", draft: "Nháp" };
     const messages = {
-      active: "Bắt đầu giải đấu? Sau khi bắt đầu sẽ không thể sửa thể thức hoặc thêm/xóa người chơi nữa.",
+      active: tournament.team_type === "team"
+        ? "Bắt đầu giải đấu? Sau khi bắt đầu sẽ không thể sửa thể thức, quy tắc hoặc thêm/xoá đội nữa (vẫn bổ sung được VĐV vào đội)."
+        : "Bắt đầu giải đấu? Sau khi bắt đầu sẽ không thể sửa thể thức hoặc thêm/xóa người chơi nữa.",
       completed: "Kết thúc giải đấu?",
     };
     const ok = await confirm({ title: `Chuyển sang "${labels[newStatus]}"?`, content: messages[newStatus] });
@@ -1731,6 +1847,9 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated, autoOpenAdd
 
   const fmt = tournament.format;
   const matches = tournament.matches || [];
+  const isTeam = tournament.team_type === "team";
+  // Giải đồng đội: bấm vào trận (lịch / bảng / nhánh) mở biên bản trận thay vì ô nhập tỉ số
+  const openMatch = isTeam ? setTieMatch : setScoreMatch;
   // Bốc thăm chỉ cho thể thức combined/knockout/individual khi giải đã bắt đầu (vòng tròn: server 400, UI ẩn nút)
   const canDraw = tournament.status === "active" && DRAW_FORMATS.includes(fmt)
     && !(tournament.pairing_mode === "cross_rank" && (tournament.rank_rules || []).length > 0);
@@ -1742,7 +1861,7 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated, autoOpenAdd
   const isDoublesDraft = tournament.status === "draft" && tournament.team_type === "doubles";
   // Chặn "Bắt đầu giải" (backend cũng chặn, cùng thứ tự): < 2 đội/người → còn người chưa có đội → phiên ghép đội đang mở
   const startBlockedReason = tournament.participants.length < 2
-    ? "Cần ít nhất 2 đội/người chơi"
+    ? (isTeam ? "Cần ít nhất 2 đội" : "Cần ít nhất 2 đội/người chơi")
     : unpaired > 0
       ? `Còn ${unpaired} người chưa có đội`
       : (pendingPartnerDraw ? "Đang có phiên ghép đội chưa kết thúc" : null);
@@ -1769,6 +1888,14 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated, autoOpenAdd
       title: "Tỉ số", align: "center", width: 90,
       render: (_, m) => {
         if (m.is_walkover) return <Tag color="gold">Xử thắng</Tag>;
+        if (isTeam) {
+          // Tỉ số tổng của trận đồng đội (số trận thắng PA1 / tổng điểm PA2); đang đấu dở → hiện kèm nhãn
+          const t = tieScoreLabel(m);
+          if (m.status === "completed") return <b style={{ fontSize: 16 }}>{t.text}</b>;
+          return t.live
+            ? <span><b style={{ fontSize: 15 }}>{t.text}</b> <Tag color="processing" style={{ marginLeft: 4 }}>Đang đấu</Tag></span>
+            : <Tag>{t.text}</Tag>;
+        }
         return m.status === "completed"
           ? <b style={{ fontSize: 16 }}>{m.score1} – {m.score2}</b>
           : <Tag>Chưa đấu</Tag>;
@@ -1792,7 +1919,15 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated, autoOpenAdd
     },
     {
       title: "", width: 80, align: "center",
-      render: (_, m) => (
+      render: (_, m) => isTeam ? (
+        <Button size="small" type={m.status === "completed" ? "default" : "primary"}
+          icon={<FileTextOutlined />}
+          disabled={!m.p1_id || !m.p2_id || m.is_walkover}
+          title={m.is_walkover ? "Trận xử thắng do bỏ giải — không có biên bản" : undefined}
+          onClick={() => setTieMatch(m)}>
+          Biên bản
+        </Button>
+      ) : (
         <Button size="small" type={m.status === "completed" ? "default" : "primary"}
           icon={<EditOutlined />}
           disabled={!m.p1_id || !m.p2_id}
@@ -1813,8 +1948,10 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated, autoOpenAdd
         score = <Tag color="gold" style={{ marginLeft: 4 }}>Xử thắng</Tag>;
       } else if (m.status === "completed") {
         score = <b style={{ color: "#1677ff" }}> {m.score1}–{m.score2}</b>;
+      } else if (isTeam && tieScoreLabel(m).live) {
+        score = <span><b style={{ color: "#1677ff" }}> {tieScoreLabel(m).text}</b> <Tag color="processing" style={{ marginLeft: 4 }}>Đang đấu</Tag></span>;
       } else {
-        score = <Tag style={{ marginLeft: 4 }}>Chưa đấu</Tag>;
+        score = <Tag style={{ marginLeft: 4 }}>{isTeam ? "–" : "Chưa đấu"}</Tag>;
       }
       return <span>{p1} vs {p2} {score}</span>;
     },
@@ -1823,7 +1960,14 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated, autoOpenAdd
 
   const tabItems = [];
 
-  tabItems.push({
+  if (isTeam) {
+    // Giải đồng đội: tab "Đội" (đội, VĐV, đội hình, bỏ giải) thay cho tab "Người chơi"
+    tabItems.push({
+      key: "teams",
+      label: `Đội (${tournament.participants.length})`,
+      children: <TeamRosterPanel tournament={tournament} canEdit={canEdit} onChanged={reload} onWithdraw={handleWithdraw} />,
+    });
+  } else tabItems.push({
     key: "participants",
     label: `Người chơi (${tournament.participants.length})`,
     children: (
@@ -1913,7 +2057,7 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated, autoOpenAdd
     tabItems.push({
       key: "bracket",
       label: "Sơ đồ đấu",
-      children: <KnockoutBracket matches={matches} onScoreClick={setScoreMatch} />,
+      children: <KnockoutBracket matches={matches} onScoreClick={openMatch} />,
     });
     tabItems.push({
       key: "schedule",
@@ -1970,7 +2114,7 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated, autoOpenAdd
         label: `Vòng loại (${koMatches.filter(m => m.status === "completed").length}/${koMatches.length})`,
         children: (
           <>
-            <KnockoutBracket matches={koMatches} onScoreClick={setScoreMatch} />
+            <KnockoutBracket matches={koMatches} onScoreClick={openMatch} />
             <Divider />
             <RoundedSchedule columns={matchTableCols} matches={koMatches} mobileProps={matchTableMobileProps} />
           </>
@@ -1987,13 +2131,17 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated, autoOpenAdd
           <Title level={4} style={{ margin: 0 }}>{tournament.name}</Title>
           <Badge status={STATUS_MAP[tournament.status]?.color} text={STATUS_MAP[tournament.status]?.label} />
           <Tag color={FORMAT_MAP[fmt]?.color}>{FORMAT_MAP[fmt]?.label}</Tag>
-          <Tag color={tournament.team_type === "doubles" ? "geekblue" : "default"}>
-            {tournament.team_type === "doubles" ? "Đấu đôi" : "Đấu đơn"}
-          </Tag>
+          {teamTypeTag(tournament.team_type)}
+          {isTeam && tournament.team_rules && (
+            <Tag color="purple">{tournament.team_rules.scoring === "cumulative" ? "PA2 · nối tiếp" : "PA1 · theo trận"} · {(tournament.team_rules.rubbers || []).length} trận thành phần</Tag>
+          )}
           <Button size="small" icon={<EditOutlined />} onClick={() => {
             editForm.setFieldsValue({ name: tournament.name, description: tournament.description });
             setEditNameModal(true);
           }}>Sửa tên</Button>
+          {isTeam && (
+            <Button size="small" icon={<HistoryOutlined />} onClick={() => setLogsOpen(true)}>Nhật ký</Button>
+          )}
           <Button size="small" icon={<EditOutlined />} onClick={() => setScorePinModal(true)}>
             Đặt/Đổi mã PIN
           </Button>
@@ -2025,7 +2173,7 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated, autoOpenAdd
           )}
           <Button icon={<ReloadOutlined />} onClick={reload}>Làm mới</Button>
           {matches.length > 0 && (
-            <Button icon={<PrinterOutlined />} loading={printing} onClick={() => setPrinting(true)}>
+            <Button icon={<PrinterOutlined />} loading={printing} onClick={handlePrintClick}>
               In bảng thi đấu
             </Button>
           )}
@@ -2112,11 +2260,23 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated, autoOpenAdd
       </Row>
 
       {/* Giải Nháp: chọn người chơi hàng loạt / xoá ngay trên trang giải (đơn lẫn đôi) */}
-      {tournament.status === "draft" && (
+      {tournament.status === "draft" && !isTeam && (
         <ParticipantsPanel
           tournament={tournament}
           onChanged={reload}
           autoOpenAdd={autoOpenAdd && tournament.participants.length === 0}
+        />
+      )}
+
+      {/* Giải đồng đội chưa có lịch (Nháp, hoặc đang diễn ra chưa sinh lịch): khung Đội hiện ngay trên trang;
+          khi đã có lịch, khung này nằm ở tab "Đội" đầu tiên */}
+      {isTeam && matches.length === 0 && (
+        <TeamRosterPanel
+          tournament={tournament}
+          canEdit={canEdit}
+          onChanged={reload}
+          onWithdraw={handleWithdraw}
+          autoOpenCreate={autoOpenAdd && canEdit && tournament.status === "draft" && tournament.participants.length === 0}
         />
       )}
 
@@ -2146,7 +2306,7 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated, autoOpenAdd
             description={
               tournament.status === "draft"
                 ? (tournament.participants.length < 2
-                    ? "Giải đấu chưa bắt đầu. Thêm ít nhất 2 đội/người chơi rồi bấm 'Bắt đầu giải'."
+                    ? (isTeam ? "Giải đấu chưa bắt đầu. Tạo ít nhất 2 đội (có VĐV) rồi bấm 'Bắt đầu giải'." : "Giải đấu chưa bắt đầu. Thêm ít nhất 2 đội/người chơi rồi bấm 'Bắt đầu giải'.")
                     : isDoublesDraft && unpaired > 0
                       ? "Giải đấu chưa bắt đầu. Ghép đội cho người chưa có đội rồi bấm 'Bắt đầu giải'."
                       : "Giải đấu chưa bắt đầu. Kiểm tra cài đặt thể thức rồi bấm 'Bắt đầu giải'.")
@@ -2174,13 +2334,29 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated, autoOpenAdd
         <Tabs items={tabItems} />
       )}
 
-      {scoreMatch && (
+      {scoreMatch && !isTeam && (
         <ScoreModal
           match={scoreMatch}
           tournament={tournament}
           onSaved={() => { setScoreMatch(null); reload(); }}
           onClose={() => setScoreMatch(null)}
         />
+      )}
+
+      {/* Giải đồng đội: biên bản trận (trận thành phần, bốc thăm thứ tự, điểm, xử thua). Sau mỗi thay đổi điểm
+          tải lại giải để lịch/nhánh/BXH cập nhật tỉ số tổng và đẩy vòng sau */}
+      {tieMatch && isTeam && (
+        <TieSheetModal
+          tournament={tournament}
+          match={tieMatch}
+          canEdit={canEdit}
+          onUpdated={() => { reload().catch(() => {}); }}
+          onClose={() => setTieMatch(null)}
+        />
+      )}
+
+      {logsOpen && isTeam && (
+        <TeamLogsModal tournament={tournament} onClose={() => setLogsOpen(false)} />
       )}
 
       {replaceTarget && (
@@ -2234,7 +2410,7 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated, autoOpenAdd
       )}
 
       {printing && createPortal(
-        <TournamentPrintSheet tournament={tournament} onReady={handlePrintReady} />,
+        <TournamentPrintSheet tournament={tournament} onReady={handlePrintReady} {...(printData || {})} />,
         document.body
       )}
 
@@ -2344,9 +2520,7 @@ export default function Tournament() {
         : <Tag color={FORMAT_MAP[v]?.color}>{FORMAT_MAP[v]?.label}</Tag> },
     { title: "Loại đội", dataIndex: "team_type", width: 90,
       // Sự kiện thành tích không có loại đội → trả null để ResponsiveTable (mobile) ẩn hẳn dòng, desktop ô để trống
-      render: (v, r) => r.kind === "point_event"
-        ? null
-        : <Tag color={v === "doubles" ? "geekblue" : "default"}>{v === "doubles" ? "Đấu đôi" : "Đấu đơn"}</Tag> },
+      render: (v, r) => (r.kind === "point_event" ? null : teamTypeTag(v)) },
     { title: "Trạng thái", dataIndex: "status", render: v => <Badge status={STATUS_MAP[v]?.color} text={STATUS_MAP[v]?.label} /> },
     { title: "Người/Đội", render: (_, r) => (r.kind === "point_event" ? r.participant_count : r.participants?.length) || 0, align: "center", width: 80 },
     {

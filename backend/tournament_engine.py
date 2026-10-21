@@ -779,6 +779,7 @@ def compute_standings(
     matches: List[Dict],
     participants: List[Dict],
     group: Optional[str] = None,
+    profile: str = "default",
 ) -> List[Dict]:
     """
     Tính bảng xếp hạng vòng bảng.
@@ -786,8 +787,15 @@ def compute_standings(
     Trận walkover (đối thủ bỏ giải, is_walkover=True): vẫn tính thắng/thua/điểm xếp hạng như
     thắng thật, nhưng KHÔNG cộng vào hiệu số bàn thắng/bàn thua — tránh 1 đội được lợi hiệu
     số ảo khi so tie-break với các đội thi đấu thật.
-    Tiebreaker: điểm → đối đầu trực tiếp giữa các đội bằng điểm (điểm, hiệu số, ghi được)
+    Tiebreaker (profile="default"): điểm → đối đầu trực tiếp giữa các đội bằng điểm (điểm, hiệu số, ghi được)
                 → hiệu số toàn giải → điểm ghi được toàn giải.
+
+    Giải ĐỒNG ĐỘI — m dict có thêm rubber_won1/rubber_won2 (số trận thành phần thắng) và pts1/pts2 (tổng điểm nhỏ);
+    score1/score2 của tie là số trận thắng (PA1) hoặc tổng điểm cộng dồn (PA2):
+      profile="team_match_points" (điều lệ PA1): điểm bảng → đối đầu trực tiếp → hiệu số TRẬN THÀNH PHẦN toàn bảng
+                → hiệu số ĐIỂM NHỎ toàn bảng → (bốc thăm: giữ nguyên thứ tự, đánh dấu needs_draw).
+      profile="team_cumulative" (điều lệ PA2): điểm bảng → hiệu số TỔNG ĐIỂM TÍCH LUỸ toàn bảng → đối đầu trực tiếp
+                → (bốc thăm).
     """
     stats: Dict[int, Dict] = {}
     for p in participants:
@@ -802,6 +810,8 @@ def compute_standings(
             "played": 0, "won": 0, "lost": 0,
             "goals_for": 0, "goals_against": 0,
             "points": 0,
+            # giải đồng đội: trận thành phần thắng/thua và điểm nhỏ ghi/thua (0 với giải thường)
+            "rubbers_won": 0, "rubbers_lost": 0, "pts_for": 0, "pts_against": 0,
         }
 
     for m in matches:
@@ -828,11 +838,19 @@ def compute_standings(
         stats[p1]["goals_against"] += s2
         stats[p2]["goals_for"] += s2
         stats[p2]["goals_against"] += s1
-        if s1 > s2:
+        rw1, rw2 = int(m.get("rubber_won1") or 0), int(m.get("rubber_won2") or 0)
+        pt1, pt2 = int(m.get("pts1") or 0), int(m.get("pts2") or 0)
+        stats[p1]["rubbers_won"] += rw1; stats[p1]["rubbers_lost"] += rw2
+        stats[p2]["rubbers_won"] += rw2; stats[p2]["rubbers_lost"] += rw1
+        stats[p1]["pts_for"] += pt1; stats[p1]["pts_against"] += pt2
+        stats[p2]["pts_for"] += pt2; stats[p2]["pts_against"] += pt1
+        # Giải đồng đội: tie đã có winner_id (có thể hoà số trận nhưng phân định bằng hiệu số/trận cuối)
+        winner = m.get("winner_id") if profile != "default" else None
+        if winner == p1 or (winner is None and s1 > s2):
             stats[p1]["won"] += 1
             stats[p1]["points"] += 1
             stats[p2]["lost"] += 1
-        elif s2 > s1:
+        elif winner == p2 or (winner is None and s2 > s1):
             stats[p2]["won"] += 1
             stats[p2]["points"] += 1
             stats[p1]["lost"] += 1
@@ -841,6 +859,9 @@ def compute_standings(
     rows = list(stats.values())
     for r in rows:
         r["goal_diff"] = r["goals_for"] - r["goals_against"]
+        r["rubber_diff"] = r["rubbers_won"] - r["rubbers_lost"]
+        r["pts_diff"] = r["pts_for"] - r["pts_against"]
+        r["needs_draw"] = False
 
     completed_matches = [m for m in matches if m.get("status") == "completed"]
 
@@ -865,13 +886,28 @@ def compute_standings(
             my_score, opp_score = (s1, s2) if p1 == pid else (s2, s1)
             h_for += my_score
             h_against += opp_score
-            if my_score > opp_score:
+            won_h2h = (m.get("winner_id") == pid) if (profile != "default" and m.get("winner_id")) else my_score > opp_score
+            if won_h2h:
                 h_points += 1
+        if profile != "default":
+            return (-h_points,)          # điều lệ: đối đầu trực tiếp chỉ xét kết quả thắng/thua
         return (-h_points, -(h_for - h_against), -h_for)
 
-    # Nhóm theo điểm số; trong mỗi nhóm bằng điểm: đối đầu trực tiếp trước,
-    # rồi mới tới hiệu số / điểm ghi được toàn giải.
-    rows.sort(key=lambda x: (-x["points"], -x["goal_diff"], -x["goals_for"]))
+    def secondary_key(x: Dict) -> tuple:
+        if profile == "team_match_points":
+            return (-x["rubber_diff"], -x["pts_diff"])
+        if profile == "team_cumulative":
+            return (-x["goal_diff"],)    # hiệu số tổng điểm tích luỹ (score của tie là tổng điểm)
+        return (-x["goal_diff"], -x["goals_for"])
+
+    def group_sort_key(x: Dict, tied_ids: set) -> tuple:
+        h2h = head_to_head_key(x["participant_id"], tied_ids)
+        if profile == "team_cumulative":
+            return secondary_key(x) + h2h     # PA2: hiệu số tích luỹ TRƯỚC, đối đầu SAU
+        return h2h + secondary_key(x)         # default & PA1: đối đầu trước
+
+    # Nhóm theo điểm số; trong mỗi nhóm bằng điểm áp tie-break theo profile.
+    rows.sort(key=lambda x: (-x["points"],) + secondary_key(x))
     ordered: List[Dict] = []
     i = 0
     while i < len(rows):
@@ -881,11 +917,266 @@ def compute_standings(
         tied_group = rows[i:j]
         if len(tied_group) > 1:
             tied_ids = {r["participant_id"] for r in tied_group}
-            tied_group.sort(key=lambda x: head_to_head_key(x["participant_id"], tied_ids)
-                            + (-x["goal_diff"], -x["goals_for"]))
+            tied_group.sort(key=lambda x: group_sort_key(x, tied_ids))
+            if profile != "default":
+                # Vẫn bằng nhau sau mọi chỉ số → điều lệ: bốc thăm. Đánh dấu để BTC xử lý, giữ thứ tự ổn định.
+                keys = [group_sort_key(x, tied_ids) for x in tied_group]
+                for k in range(len(tied_group)):
+                    dup = any(keys[k] == keys[o] for o in range(len(tied_group)) if o != k)
+                    if dup:
+                        tied_group[k]["needs_draw"] = True
         ordered.extend(tied_group)
         i = j
 
     for idx, r in enumerate(ordered):
         r["rank"] = idx + 1
     return ordered
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# GIẢI ĐỒNG ĐỘI (team_type="team") — hàm thuần, không DB.
+# Trận đồng đội (tie) = 1 TournamentMatch giữa 2 đội; bên trong là các trận thành phần (rubber)
+# theo thể thức MD/WD/XD/MS/WS. Hai cách tính điểm theo điều lệ: match_points (PA1) và cumulative (PA2).
+# ══════════════════════════════════════════════════════════════════════════════
+
+RUBBER_CODES = {
+    "MD": ("Đôi Nam", ("male", "male")),
+    "WD": ("Đôi Nữ", ("female", "female")),
+    "XD": ("Đôi Nam Nữ", ("male", "female")),
+    "MS": ("Đơn Nam", ("male",)),
+    "WS": ("Đơn Nữ", ("female",)),
+}
+TEAM_SCORINGS = ("match_points", "cumulative")
+STAGE_KEYS = ("leg1", "leg2", "knockout")
+STAGE_LABELS = {"leg1": "Lượt đi / Vòng bảng", "leg2": "Lượt về", "knockout": "Vòng loại trực tiếp"}
+GENDER_LABELS = {"male": "Nam", "female": "Nữ", "other": "Khác"}
+
+
+def normalize_team_rules(raw: Optional[Dict]) -> Dict:
+    """Chuẩn hoá team_rules. Mặc định: PA1, 5 thể thức (MD, WD, XD, MS, WS), 11 điểm, cách biệt 2,
+    tối đa 2 trận/VĐV, đánh hết các trận. PA2: target_total mặc định = điểm/trận × số trận.
+    Nhãn thiếu → tự sinh "Đôi Nam 1", "Đôi Nam 2"...; nhãn trùng → thêm hậu tố để làm khoá slot đội hình."""
+    raw = dict(raw or {})
+    scoring = raw.get("scoring") if raw.get("scoring") in TEAM_SCORINGS else "match_points"
+    try:
+        ppr = int(raw.get("points_per_rubber") or 11)
+    except (TypeError, ValueError):
+        ppr = 11
+    ppr = max(1, min(ppr, 99))
+    rubbers_in = raw.get("rubbers") or [{"code": c} for c in ("MD", "WD", "XD", "MS", "WS")]
+    counters: Dict[str, int] = {}
+    rubbers: List[Dict] = []
+    for r in rubbers_in:
+        code = str((r or {}).get("code") or "").upper().strip()
+        if code not in RUBBER_CODES:
+            continue
+        counters[code] = counters.get(code, 0) + 1
+        label = str((r or {}).get("label") or "").strip() or f"{RUBBER_CODES[code][0]} {counters[code]}"
+        rubbers.append({"code": code, "label": label})
+    if not rubbers:
+        raise ValueError("Cần ít nhất 1 trận thành phần")
+    if len(rubbers) > 20:
+        raise ValueError("Tối đa 20 trận thành phần")
+    seen: Dict[str, int] = {}
+    for r in rubbers:
+        base = r["label"]
+        if base in seen:
+            seen[base] += 1
+            r["label"] = f"{base} ({seen[base]})"
+        else:
+            seen[base] = 1
+    n = len(rubbers)
+    target_total = None
+    if scoring == "cumulative":
+        try:
+            target_total = int(raw.get("target_total") or ppr * n)
+        except (TypeError, ValueError):
+            target_total = ppr * n
+        # Kẹp trong [ppr, ppr×n]: mốc lớn hơn tổng điểm tối đa thì trận đồng đội không bao giờ kết thúc
+        target_total = max(ppr, min(target_total, ppr * n))
+    try:
+        max_per = max(1, int(raw.get("max_rubbers_per_player") or 2))
+    except (TypeError, ValueError):
+        max_per = 2
+    return {
+        "scoring": scoring,
+        "rubbers": rubbers,
+        "points_per_rubber": ppr,
+        "win_by_two": bool(raw.get("win_by_two", True)),
+        "target_total": target_total,
+        "max_rubbers_per_player": max_per,
+        "play_all": bool(raw.get("play_all", True)),
+    }
+
+
+def rubber_target(rules: Dict, order_index: int) -> int:
+    """Mốc điểm của trận thành phần thứ `order_index` (1-based). PA2: k × điểm/trận, chặn ở mốc tổng."""
+    if rules["scoring"] == "cumulative":
+        return min(rules["points_per_rubber"] * max(1, int(order_index)), rules["target_total"])
+    return rules["points_per_rubber"]
+
+
+def validate_rubber_score(rules: Dict, rubber: Dict, score1: int, score2: int) -> None:
+    """Kiểm tra tỉ số một trận thành phần. PA1: tỉ số ván đó. PA2: TỔNG sau trận (xuất phát + ghi thêm).
+    Ném ValueError (thông điệp tiếng Việt) khi không hợp lệ."""
+    s1, s2 = int(score1), int(score2)
+    if s1 < 0 or s2 < 0:
+        raise ValueError("Điểm không được âm")
+    if s1 == s2:
+        raise ValueError("Trận thành phần không được hoà")
+    if rules["scoring"] == "cumulative":
+        st1, st2 = int(rubber.get("start1") or 0), int(rubber.get("start2") or 0)
+        if s1 < st1 or s2 < st2:
+            raise ValueError(f"Điểm cộng dồn không được thấp hơn điểm xuất phát ({st1} – {st2})")
+        target = rubber_target(rules, rubber.get("order_index") or 1)
+        hi, lo = max(s1, s2), min(s1, s2)
+        if hi < target:
+            raise ValueError(f"Phải có một bên chạm mốc {target} điểm")
+        if hi == target:
+            if lo >= target:
+                raise ValueError(f"Chỉ một bên được chạm mốc {target} điểm")
+            if rules.get("win_by_two") and lo > target - 2:
+                raise ValueError(f"Cần cách biệt 2 điểm (vd {target}–{target - 2})")
+        else:
+            # vượt mốc chỉ khi deuce (cách biệt 2): bên thua có thể ≥ mốc, vd 62–60
+            if not rules.get("win_by_two") or hi - lo != 2:
+                raise ValueError(f"Bên thắng dừng ở đúng mốc {target} (hoặc hơn đúng 2 điểm khi deuce)")
+        return
+    ppr = rules["points_per_rubber"]
+    hi, lo = max(s1, s2), min(s1, s2)
+    if hi < ppr:
+        raise ValueError(f"Bên thắng phải đạt {ppr} điểm")
+    if rules.get("win_by_two"):
+        if hi == ppr and lo > ppr - 2:
+            raise ValueError(f"Cần cách biệt 2 điểm (vd {ppr}–{ppr - 2})")
+        if hi > ppr and hi - lo != 2:
+            raise ValueError("Quá mốc chỉ khi deuce: bên thắng hơn đúng 2 điểm")
+    else:
+        if hi != ppr:
+            raise ValueError(f"Bên thắng dừng ở đúng {ppr} điểm")
+
+
+def tie_result(rules: Dict, rubbers: List[Dict]) -> Dict:
+    """Kết quả trận đồng đội từ các trận thành phần (dict có order_index, status, score1, score2, start1, start2).
+
+    PA1 (match_points): score = số trận thắng; finished khi mọi trận đã đấu (play_all);
+      hoà số trận → hiệu số điểm nhỏ (Σscore1 − Σscore2) → vẫn bằng → đội thắng trận thành phần CUỐI.
+    PA2 (cumulative): score = tổng điểm cộng dồn sau trận gần nhất; finished khi một bên đạt target_total.
+    Trả: {score1, score2, winner_side, decided, finished, detail, next_start}."""
+    rs = sorted(rubbers, key=lambda r: int(r.get("order_index") or 0))
+    n = len(rs)
+    done = [r for r in rs if r.get("status") == "completed"]
+    if rules["scoring"] == "cumulative":
+        tot1 = tot2 = 0
+        for r in rs:
+            if r.get("status") != "completed":
+                break
+            tot1, tot2 = int(r.get("score1") or 0), int(r.get("score2") or 0)
+        target = rules["target_total"]
+        finished = tot1 >= target or tot2 >= target
+        winner = 1 if (finished and tot1 > tot2) else 2 if (finished and tot2 > tot1) else None
+        detail = (f"Đội {'1' if winner == 1 else '2'} chạm mốc {target} điểm" if finished
+                  else f"Đang {tot1} – {tot2}, mốc {target}")
+        return {"score1": tot1, "score2": tot2, "winner_side": winner, "decided": finished,
+                "finished": finished, "detail": detail, "next_start": (tot1, tot2)}
+    wins1 = sum(1 for r in done if int(r.get("score1") or 0) > int(r.get("score2") or 0))
+    wins2 = sum(1 for r in done if int(r.get("score2") or 0) > int(r.get("score1") or 0))
+    diff = sum(int(r.get("score1") or 0) - int(r.get("score2") or 0) for r in done)
+    finished = n > 0 and len(done) == n
+    decided = wins1 * 2 > n or wins2 * 2 > n
+    winner = None
+    detail = f"Đang {wins1} – {wins2} trận"
+    if finished:
+        if wins1 != wins2:
+            winner = 1 if wins1 > wins2 else 2
+            detail = f"Thắng {max(wins1, wins2)} – {min(wins1, wins2)} trận"
+        elif diff != 0:
+            winner = 1 if diff > 0 else 2
+            detail = f"Hoà {wins1} – {wins2} trận, phân định bằng hiệu số điểm ({diff:+d})"
+        else:
+            last = done[-1] if done else None
+            if last is not None:
+                winner = 1 if int(last.get("score1") or 0) > int(last.get("score2") or 0) else 2
+            detail = f"Hoà {wins1} – {wins2} trận và hiệu số điểm, đội thắng trận cuối được tính thắng"
+    return {"score1": wins1, "score2": wins2, "winner_side": winner, "decided": decided,
+            "finished": finished, "detail": detail, "next_start": (0, 0)}
+
+
+def rubber_players_check(code: str, players: List[int], gender_by_tp: Dict[int, Optional[str]]) -> Tuple[List[str], List[str]]:
+    """(errors, warnings) cho danh sách VĐV một bên của một trận thành phần.
+    Sai số người / trùng người → error (chặn). Giới tính không khớp hoặc chưa khai → warning (không chặn)."""
+    if code not in RUBBER_CODES:
+        return [f"Thể thức không hợp lệ: {code}"], []
+    name, expected = RUBBER_CODES[code]
+    errors: List[str] = []
+    warnings: List[str] = []
+    players = [int(p) for p in (players or [])]
+    if len(players) != len(expected):
+        errors.append(f"{name} cần {len(expected)} VĐV mỗi bên")
+        return errors, warnings
+    if len(set(players)) != len(players):
+        errors.append("Một VĐV không thể xuất hiện 2 lần trong cùng trận thành phần")
+        return errors, warnings
+    genders = [gender_by_tp.get(p) for p in players]
+    if any(g not in ("male", "female") for g in genders):
+        warnings.append(f"{name}: có VĐV chưa khai giới tính")
+    known = sorted(g for g in genders if g in ("male", "female"))
+    need = sorted(expected)
+    if len(known) == len(need) and known != need:
+        warnings.append(f"{name}: giới tính VĐV không khớp thể thức")
+    return errors, warnings
+
+
+def over_limit_players(rules: Dict, sides: List[List[int]]) -> List[int]:
+    """VĐV xuất hiện trong nhiều trận thành phần hơn max_rubbers_per_player (cảnh báo, không chặn)."""
+    counts: Dict[int, int] = {}
+    for side in sides:
+        for tp in set(int(p) for p in (side or [])):
+            counts[tp] = counts.get(tp, 0) + 1
+    limit = rules.get("max_rubbers_per_player") or 2
+    return sorted(tp for tp, c in counts.items() if c > limit)
+
+
+def lineup_check(rules: Dict, slots: Dict[str, List[int]], gender_by_tp: Dict[int, Optional[str]]) -> Dict:
+    """Kiểm tra đội hình theo giai đoạn: {errors, warnings, over_limit}. Slot rỗng = chưa xếp (cho phép)."""
+    errors: List[str] = []
+    warnings: List[str] = []
+    labels = {r["label"]: r["code"] for r in rules["rubbers"]}
+    for label, players in (slots or {}).items():
+        if label not in labels:
+            errors.append(f"Không có trận thành phần '{label}' trong giải")
+            continue
+        if not players:
+            continue
+        e, w = rubber_players_check(labels[label], players, gender_by_tp)
+        errors += [f"{label}: {x}" for x in e]
+        warnings += [f"{label}: {x}" for x in w]
+    sides = [v for v in (slots or {}).values() if v]
+    return {"errors": errors, "warnings": warnings, "over_limit": over_limit_players(rules, sides)}
+
+
+def stage_key_for_match(fmt: str, phase: str, round_number: int, first_leg_rounds: int) -> str:
+    """Giai đoạn đội hình của một trận: knockout → 'knockout'; vòng tròn 2 lượt và round > số vòng lượt đi → 'leg2'; còn lại 'leg1'."""
+    if phase == "knockout":
+        return "knockout"
+    if fmt == "round_robin_double" and first_leg_rounds and int(round_number or 0) > first_leg_rounds:
+        return "leg2"
+    return "leg1"
+
+
+def first_leg_rounds(fmt: str, group_round_numbers: List[int]) -> int:
+    """Số vòng của lượt đi (vòng tròn 2 lượt = một nửa số vòng); 0 với thể thức khác."""
+    if fmt != "round_robin_double" or not group_round_numbers:
+        return 0
+    return max(group_round_numbers) // 2
+
+
+def draw_rubber_order(seed_hex: str, n: int) -> List[int]:
+    """Thứ tự trận thành phần tất định từ seed công khai: lượt k lấy chỉ số SHA256(seed:k) mod (số còn lại)
+    — cùng công thức với vòng quay bốc thăm (draw_pick_index) để khán giả tự kiểm chứng."""
+    remaining = list(range(n))
+    order: List[int] = []
+    for k in range(n):
+        idx = draw_pick_index(seed_hex, k, len(remaining))
+        order.append(remaining.pop(idx))
+    return order   # order[i] = chỉ số mẫu (0-based) được xếp ở vị trí i

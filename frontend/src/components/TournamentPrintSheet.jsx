@@ -5,6 +5,10 @@ import {
   projectedKnockoutSlots, buildProjectedBracketNodes, buildRealBracketNodes, computeBracketGeometry,
   findThirdPlaceMatch,
 } from "../utils/bracketLayout";
+import {
+  normalizeTeamRules, templateRubbers, isCumulative, scoringLabel, stageLabel, playersById, playerNames,
+  rubberCodeLabel, rubberSize, firstLegRounds, stageKeyForMatch, stagesForFormat, genderLabel,
+} from "../utils/teamLabels";
 
 // Giống hệt teamLabel/teamRank trong Tournament.jsx và PublicTournamentTracker.jsx (đã trùng lặp
 // sẵn giữa 2 file đó) — giữ nguyên logic để tên hiển thị nhất quán trên toàn hệ thống.
@@ -17,6 +21,7 @@ const FORMAT_LABEL = {
   combined: "Vòng bảng + loại trực tiếp",
   individual: "Thi đấu riêng lẻ",
 };
+const TEAM_TYPE_LABEL = { singles: "Đấu đơn", doubles: "Đấu đôi", team: "Đồng đội" };
 
 const BOX_W = 220;
 const BOX_H = 76; // đủ chỗ cho tên đội bọc 2 dòng (xem Slot) thay vì cắt "..."
@@ -47,7 +52,7 @@ function SheetHeader({ tournament, subtitle }) {
       </div>
       <div style={{ textAlign: "right", fontSize: 12, color: "#555", lineHeight: 1.6, whiteSpace: "nowrap" }}>
         Ngày: ____ / ____ / 2026 &nbsp;·&nbsp; Số đội: <b>{tournament.participants.length}</b>
-        &nbsp;·&nbsp; {tournament.team_type === "doubles" ? "Đấu đôi" : "Đấu đơn"}
+        &nbsp;·&nbsp; {TEAM_TYPE_LABEL[tournament.team_type] || "Đấu đơn"}
         <br />Người ghi: _______________
       </div>
     </div>
@@ -124,17 +129,30 @@ const STANDINGS_COLS = [
   { label: "H.số", width: 42 },
   { label: "Điểm", width: 36 },
 ];
+// Giải đồng đội: thay H.số (tổng tỉ số tie) bằng 2 chỉ số tie-break của điều lệ —
+// hiệu số TRẬN thành phần (rubber_diff) và hiệu số ĐIỂM nhỏ (pts_diff) từ /standings
+const TEAM_STANDINGS_COLS = [
+  { label: "#", width: 20 },
+  { label: "Đội", width: null },
+  { label: "Trận", width: 34 },
+  { label: "Thắng", width: 40 },
+  { label: "HS trận", width: 48 },
+  { label: "HS điểm", width: 50 },
+  { label: "Điểm", width: 36 },
+];
+const signed = (v) => (v > 0 ? `+${v}` : `${v ?? 0}`);
 
-function StandingsShell({ rows }) {
+function StandingsShell({ rows, isTeam }) {
   if (!rows) return null;
+  const cols = isTeam ? TEAM_STANDINGS_COLS : STANDINGS_COLS;
   return (
     <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
       <colgroup>
-        {STANDINGS_COLS.map((c) => <col key={c.label} style={c.width ? { width: c.width } : undefined} />)}
+        {cols.map((c) => <col key={c.label} style={c.width ? { width: c.width } : undefined} />)}
       </colgroup>
       <thead>
         <tr>
-          {STANDINGS_COLS.map((c, i) => (
+          {cols.map((c, i) => (
             <th key={c.label} style={{
               fontSize: 10.5, textTransform: "uppercase", letterSpacing: ".04em", color: "#666", fontWeight: 700,
               borderBottom: "1.5px solid #141413", padding: "4px 4px", textAlign: i === 1 ? "left" : "center",
@@ -145,7 +163,7 @@ function StandingsShell({ rows }) {
       </thead>
       <tbody>
         {rows.map((r, i) => (
-          <tr key={r.participant_id}>
+          <tr key={r.participant_id} style={{ breakInside: "avoid" }}>
             <td style={cellStyle("center")}>{i + 1}</td>
             <td style={cellStyle("left")}>
               {/* div riêng bên trong <td> — line-clamp cần display:-webkit-box, đặt thẳng lên
@@ -153,11 +171,22 @@ function StandingsShell({ rows }) {
               <div style={{
                 lineHeight: 1.25, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical",
                 overflow: "hidden", wordBreak: "break-word",
-              }}>{r.team_name}</div>
+              }}>
+                {r.team_name}
+                {/* Giải đồng đội: bằng mọi chỉ số → điều lệ bốc thăm xếp hạng */}
+                {r.needs_draw && <span style={{ fontSize: 11, color: "#b8860b", marginLeft: 4 }}>(bốc thăm)</span>}
+              </div>
             </td>
             <td style={cellStyle("center")}>{r.played}</td>
             <td style={cellStyle("center")}>{r.won}</td>
-            <td style={cellStyle("center")}>{r.goal_diff > 0 ? `+${r.goal_diff}` : r.goal_diff}</td>
+            {isTeam
+              ? (
+                <>
+                  <td style={cellStyle("center")}>{signed(r.rubber_diff)}</td>
+                  <td style={cellStyle("center")}>{signed(r.pts_diff ?? r.points_diff)}</td>
+                </>
+              )
+              : <td style={cellStyle("center")}>{signed(r.goal_diff)}</td>}
             <td style={cellStyle("center")}>{r.points}</td>
           </tr>
         ))}
@@ -367,7 +396,7 @@ function projectedBracketContent(node, roundIndex) {
 }
 
 // ── Trang: vòng tròn / vòng tròn hai lượt / thi đấu riêng lẻ ─────────────────
-function RoundRobinSheet({ tournament, standings }) {
+function RoundRobinSheet({ tournament, standings, isTeam }) {
   return (
     <div className="print-page print-portrait">
       <SheetHeader tournament={tournament} subtitle={`BẢNG THI ĐẤU — ${FORMAT_LABEL[tournament.format].toUpperCase()}`} />
@@ -375,14 +404,16 @@ function RoundRobinSheet({ tournament, standings }) {
         <div style={{ flex: 1 }}>
           <MatchRows matches={tournament.matches} />
         </div>
-        <div style={{ width: 310 }}>
+        <div style={{ width: isTeam ? 340 : 310 }}>
           <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".06em", color: "#555", textTransform: "uppercase", margin: "0 0 4px", paddingBottom: 3, borderBottom: "2px solid #141413" }}>
             Bảng xếp hạng
           </div>
-          <StandingsShell rows={standings} />
+          <StandingsShell rows={standings} isTeam={isTeam} />
           <div style={{ marginTop: 28, padding: 12, border: "1.3px dashed #bbb", borderRadius: 6, fontSize: 11.5, color: "#666", lineHeight: 1.6 }}>
             <b style={{ color: "#141413" }}>Ghi chú</b><br />
-            Điền tỉ số vào 2 ô mỗi trận ngay sau khi kết thúc. Sau buổi đấu, nhập lại vào ứng dụng — hệ thống tự tính bảng xếp hạng.
+            {isTeam
+              ? "Ô tỉ số là kết quả tổng của trận đồng đội (số trận thắng hoặc tổng điểm cộng dồn). Chi tiết từng trận thành phần ghi ở Biên bản trận đồng đội (các trang sau); nhập điểm từng trận thành phần vào ứng dụng — hệ thống tự tính kết quả và bảng xếp hạng."
+              : "Điền tỉ số vào 2 ô mỗi trận ngay sau khi kết thúc. Sau buổi đấu, nhập lại vào ứng dụng — hệ thống tự tính bảng xếp hạng."}
           </div>
         </div>
       </div>
@@ -408,7 +439,7 @@ function KnockoutSheet({ tournament }) {
 }
 
 // ── Trang: vòng bảng + loại trực tiếp ─────────────────────────────────────────
-function CombinedSheet({ tournament, standingsByGroup }) {
+function CombinedSheet({ tournament, standingsByGroup, isTeam }) {
   const groups = [...new Set(tournament.participants.map((p) => p.group_name).filter(Boolean))].sort();
   const koMatches = tournament.matches.filter((m) => m.phase === "knockout");
   const hasRealKO = koMatches.length > 0;
@@ -452,7 +483,7 @@ function CombinedSheet({ tournament, standingsByGroup }) {
               </div>
               <MatchRows matches={tournament.matches.filter((m) => m.phase === "group" && m.group_name === g)} />
               <div style={{ marginTop: 6 }}>
-                <StandingsShell rows={standingsByGroup?.[g]} />
+                <StandingsShell rows={standingsByGroup?.[g]} isTeam={isTeam} />
               </div>
             </div>
           ))}
@@ -475,12 +506,320 @@ function CombinedSheet({ tournament, standingsByGroup }) {
   );
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+// GIẢI ĐỒNG ĐỘI (team_type="team"): phiếu đăng ký đội hình theo giai đoạn + biên bản trận đồng đội.
+// Dữ liệu TUỲ CHỌN do trang quản trị truyền vào: teams (TeamOut[]), lineups ({participant_id: LineupOut[]}),
+// ties ({match_id: TieOut}). Thiếu teams → bỏ qua phiếu đội hình; thiếu ties[mid] → in khung trống theo rules.
+// ══════════════════════════════════════════════════════════════════════════════
+
+const sectionTitleStyle = {
+  fontSize: 11, fontWeight: 700, letterSpacing: ".06em", color: "#555", textTransform: "uppercase",
+  margin: "12px 0 4px", paddingBottom: 3, borderBottom: "2px solid #141413",
+};
+const thStyle = (align = "center") => ({
+  fontSize: 11, textTransform: "uppercase", letterSpacing: ".04em", color: "#666", fontWeight: 700,
+  borderBottom: "1.5px solid #141413", padding: "4px 5px", textAlign: align, whiteSpace: "nowrap", overflow: "hidden",
+});
+const tdStyle = (align = "center", extra = {}) => ({
+  fontSize: 12.5, padding: "6px 5px", borderBottom: "1px solid #ccc", textAlign: align, verticalAlign: "middle", ...extra,
+});
+// Ô ghi tay (tỉ số): viền rõ, cao đủ chữ viết; có dữ liệu thì in sẵn vào ô
+const writeBox = (w, h = 24) => ({
+  display: "inline-block", width: w, height: h, border: "1.3px solid #333", borderRadius: 2,
+  textAlign: "center", fontSize: 12.5, lineHeight: `${h}px`, verticalAlign: "middle", boxSizing: "border-box",
+});
+
+function SignatureRow({ labels }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", gap: 16, marginTop: 28, breakInside: "avoid" }}>
+      {labels.map((l) => (
+        <div key={l} style={{ flex: 1, textAlign: "center", fontSize: 12, minWidth: 0 }}>
+          <div style={{ fontWeight: 700, lineHeight: 1.3, wordBreak: "break-word" }}>{l}</div>
+          <div style={{ fontSize: 11, color: "#888" }}>(ký, ghi rõ họ tên)</div>
+          <div style={{ height: 52, borderBottom: "1px dotted #999" }} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Tên VĐV trong ô biên bản: mỗi người một dòng; dòng trống chừa chỗ ghi tay (gạch chấm)
+function PlayerCell({ names, size }) {
+  const lines = Array.from({ length: Math.max(size, names.length) }, (_, i) => names[i] || "");
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+      {lines.map((n, i) => (
+        <div key={i} style={{
+          minHeight: 20, fontSize: 12.5, lineHeight: "20px", wordBreak: "break-word",
+          borderBottom: n ? "none" : "1px dotted #999",
+        }}>
+          {n}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── Trang: PHIẾU ĐĂNG KÝ ĐỘI HÌNH — một trang / đội; mỗi giai đoạn một bảng, điền sẵn nếu đã đăng ký ──
+function TeamLineupSheet({ tournament, rules, team, lineups }) {
+  const p = team.participant || {};
+  const players = [...(team.players || [])].sort((a, b) =>
+    (b.is_captain ? 1 : 0) - (a.is_captain ? 1 : 0)
+    || (a.display_name || "").localeCompare(b.display_name || "", "vi"));
+  const captain = players.find((x) => x.is_captain);
+  const byId = playersById(team);
+  const rubbers = templateRubbers(rules);
+  const stages = [...new Set([...stagesForFormat(tournament.format), ...(lineups || []).map((l) => l.stage_key)])];
+  const maxSize = Math.max(1, ...rubbers.map((r) => rubberSize(r.code)));
+
+  return (
+    <div className="print-page print-portrait">
+      <SheetHeader tournament={tournament} subtitle="PHIẾU ĐĂNG KÝ ĐỘI HÌNH" />
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 12, marginBottom: 6 }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 17, fontWeight: 800, wordBreak: "break-word" }}>Đội: {teamLabel(p)}</div>
+          <div style={{ fontSize: 12, color: "#555" }}>
+            {p.group_name ? `Bảng ${p.group_name} · ` : ""}{players.length} VĐV
+            {p.status === "withdrawn" ? " · đã bỏ giải" : ""}
+          </div>
+        </div>
+        <div style={{ fontSize: 12, color: "#555", whiteSpace: "nowrap" }}>
+          Đội trưởng / lãnh đội: <b>{captain?.display_name || "_______________"}</b>
+        </div>
+      </div>
+
+      <div style={sectionTitleStyle}>Danh sách VĐV</div>
+      <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
+        <colgroup>
+          <col style={{ width: 28 }} /><col /><col style={{ width: 70 }} /><col style={{ width: 110 }} />
+        </colgroup>
+        <thead>
+          <tr>
+            <th style={thStyle()}>TT</th>
+            <th style={thStyle("left")}>Họ tên</th>
+            <th style={thStyle()}>Giới tính</th>
+            <th style={thStyle()}>Ghi chú</th>
+          </tr>
+        </thead>
+        <tbody>
+          {players.map((pl, i) => (
+            <tr key={pl.id} style={{ breakInside: "avoid" }}>
+              <td style={tdStyle()}>{i + 1}</td>
+              <td style={tdStyle("left")}>
+                {pl.display_name}
+                {pl.is_captain ? <span style={{ fontSize: 11, color: "#8a6d00", marginLeft: 6 }}>(đội trưởng)</span> : null}
+              </td>
+              <td style={tdStyle()}>{genderLabel(pl.gender)}</td>
+              <td style={tdStyle()} />
+            </tr>
+          ))}
+          {players.length === 0 && (
+            <tr><td colSpan={4} style={tdStyle("left", { color: "#888" })}>Chưa đăng ký VĐV</td></tr>
+          )}
+        </tbody>
+      </table>
+
+      {stages.map((stage) => {
+        const lu = (lineups || []).find((l) => l.stage_key === stage);
+        const slots = lu?.slots || {};
+        const filled = Object.values(slots).some((ids) => (ids || []).length > 0);
+        return (
+          <div key={stage} style={{ breakInside: "avoid" }}>
+            <div style={sectionTitleStyle}>
+              Đội hình giai đoạn: {stageLabel(stage)}
+              <span style={{ fontWeight: 400, textTransform: "none", letterSpacing: 0, marginLeft: 8, color: "#888" }}>
+                {filled ? (lu?.locked ? "— đã đăng ký, đã khoá" : "— đã đăng ký (điền sẵn)") : "— lãnh đội điền tay"}
+              </span>
+            </div>
+            <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
+              <colgroup>
+                <col style={{ width: 28 }} /><col style={{ width: 150 }} />
+                {Array.from({ length: maxSize }, (_, i) => <col key={i} />)}
+              </colgroup>
+              <thead>
+                <tr>
+                  <th style={thStyle()}>TT</th>
+                  <th style={thStyle("left")}>Thể thức</th>
+                  {Array.from({ length: maxSize }, (_, i) => <th key={i} style={thStyle("left")}>VĐV {i + 1}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                {rubbers.map((r) => {
+                  const names = playerNames(slots[r.label] || [], byId);
+                  const size = rubberSize(r.code);
+                  return (
+                    <tr key={r.order_index} style={{ breakInside: "avoid" }}>
+                      <td style={tdStyle()}>{r.order_index}</td>
+                      <td style={tdStyle("left")}>
+                        {r.label}
+                        <div style={{ fontSize: 11, color: "#888" }}>{rubberCodeLabel(r.code)}</div>
+                      </td>
+                      {Array.from({ length: maxSize }, (_, i) => (
+                        <td key={i} style={tdStyle("left", { height: 32 })}>
+                          {i >= size
+                            ? <span style={{ color: "#bbb" }}>—</span>
+                            : (names[i] || <div style={{ borderBottom: "1px dotted #999", height: 20 }} />)}
+                        </td>
+                      ))}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        );
+      })}
+
+      <div style={{ marginTop: 10, padding: "8px 12px", border: "1.3px dashed #bbb", borderRadius: 6, fontSize: 11.5, color: "#666", lineHeight: 1.6 }}>
+        <b style={{ color: "#141413" }}>Ghi chú</b><br />
+        Thể thức: {scoringLabel(rules)} · {rules.points_per_rubber} điểm/trận{rules.win_by_two ? ", cách biệt 2" : ""}
+        {isCumulative(rules) ? ` · mốc tổng ${rules.target_total} điểm` : ""} · mỗi VĐV tối đa {rules.max_rubbers_per_player} trận
+        thành phần trong một trận đồng đội. Đội hình giai đoạn tự khoá khi giai đoạn đó có trận thành phần đầu tiên được
+        ghi điểm; thay đổi sau đó phải qua ban tổ chức (có ghi nhận lý do).
+      </div>
+      <SignatureRow labels={["Lãnh đội", "Ban tổ chức"]} />
+    </div>
+  );
+}
+
+// ── Trang: BIÊN BẢN TRẬN ĐỒNG ĐỘI — một trang / trận đã đủ 2 đội (tie thật nếu có, không thì khung mẫu) ──
+function TieSheet({ tournament, rules, match, tie, teamsById, firstLeg }) {
+  const cumulative = isCumulative(rules);
+  const rubbers = tie?.rubbers?.length
+    ? [...tie.rubbers].sort((a, b) => a.order_index - b.order_index)
+    : templateRubbers(rules);
+  const team1 = tie?.team1 || teamsById?.[match.p1_id];
+  const team2 = tie?.team2 || teamsById?.[match.p2_id];
+  const byId = playersById(team1, team2);
+  const stage = tie?.stage_key || stageKeyForMatch(tournament.format, match, firstLeg);
+  const res = tie?.result;
+  const finished = !!res?.finished || match.status === "completed";
+  const name1 = teamLabel(match.p1);
+  const name2 = teamLabel(match.p2);
+  const total1 = finished ? (res?.score1 ?? match.score1) : null;
+  const total2 = finished ? (res?.score2 ?? match.score2) : null;
+  const winnerSide = res?.winner_side
+    ?? (match.winner_id === match.p1_id ? 1 : match.winner_id === match.p2_id ? 2 : null);
+  const winnerName = finished ? (winnerSide === 1 ? name1 : winnerSide === 2 ? name2 : "") : "";
+  const scored = (r) => r.status === "completed" && r.score1 != null;
+  const sideWinner = (r) => (!scored(r) ? "" : (r.score1 > r.score2 ? name1 : r.score2 > r.score1 ? name2 : ""));
+  const showStart = (r) => scored(r) || (r.start1 || 0) > 0 || (r.start2 || 0) > 0;
+
+  return (
+    <div className="print-page print-portrait">
+      <SheetHeader tournament={tournament} subtitle="BIÊN BẢN TRẬN ĐỒNG ĐỘI" />
+      <div style={{ fontSize: 12, color: "#555", marginBottom: 6 }}>
+        {match.round_name || `Vòng ${match.round_number}`} · Trận #{match.match_number}
+        {match.group_name ? ` · Bảng ${match.group_name}` : ""} · Giai đoạn: {stageLabel(stage)}
+        &nbsp;·&nbsp; Sân: ______ &nbsp;·&nbsp; Giờ: ______
+      </div>
+      <div style={{
+        display: "flex", alignItems: "center", gap: 12, padding: "10px 12px",
+        border: "1.5px solid #141413", borderRadius: 6, marginBottom: 8, breakInside: "avoid",
+      }}>
+        <div style={{ flex: 1, fontSize: 16, fontWeight: 800, textAlign: "right", wordBreak: "break-word", minWidth: 0 }}>{name1}</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flex: "none" }}>
+          <span style={writeBox(44, 32)}>{total1 ?? ""}</span>
+          <span style={{ fontSize: 16, color: "#999" }}>–</span>
+          <span style={writeBox(44, 32)}>{total2 ?? ""}</span>
+        </div>
+        <div style={{ flex: 1, fontSize: 16, fontWeight: 800, wordBreak: "break-word", minWidth: 0 }}>{name2}</div>
+      </div>
+      <div style={{ fontSize: 11.5, color: "#666", marginBottom: 6, lineHeight: 1.6 }}>
+        {scoringLabel(rules)} · {rules.points_per_rubber} điểm/trận{rules.win_by_two ? ", cách biệt 2" : ""}
+        {cumulative
+          ? ` · mốc tổng ${rules.target_total} điểm (cộng dồn qua các trận)`
+          : (rules.play_all ? " · đánh hết các trận thành phần" : "")}
+        {" · "}tối đa {rules.max_rubbers_per_player} trận/VĐV.
+        {" "}Thứ tự thể thức: {tie?.draw_seed
+          ? <>đã bốc thăm (seed <code style={{ fontSize: 11 }}>{tie.draw_seed}</code>)</>
+          : "theo mẫu — nếu ban tổ chức bốc thăm tại sân, ghi thứ tự thật vào cột TT"}.
+      </div>
+
+      <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
+        <colgroup>
+          <col style={{ width: 26 }} /><col style={{ width: 96 }} /><col /><col />
+          {cumulative && <><col style={{ width: 40 }} /><col style={{ width: 40 }} /><col style={{ width: 36 }} /></>}
+          <col style={{ width: 46 }} /><col style={{ width: 46 }} /><col style={{ width: 84 }} />
+        </colgroup>
+        <thead>
+          <tr>
+            <th style={thStyle()}>TT</th>
+            <th style={thStyle("left")}>Thể thức</th>
+            <th style={thStyle("left")}>VĐV đội 1</th>
+            <th style={thStyle("left")}>VĐV đội 2</th>
+            {cumulative && <><th style={thStyle()}>XP 1</th><th style={thStyle()}>XP 2</th><th style={thStyle()}>Mốc</th></>}
+            <th style={thStyle()}>Đ1</th>
+            <th style={thStyle()}>Đ2</th>
+            <th style={thStyle("left")}>Thắng</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rubbers.map((r) => {
+            const s = scored(r);
+            return (
+              <tr key={r.id ?? r.order_index} style={{ breakInside: "avoid" }}>
+                <td style={tdStyle()}>{r.order_index}</td>
+                <td style={tdStyle("left")}>
+                  {r.label}
+                  <div style={{ fontSize: 11, color: "#888" }}>{rubberCodeLabel(r.code)}</div>
+                </td>
+                <td style={tdStyle("left")}><PlayerCell names={playerNames(r.side1_players, byId)} size={rubberSize(r.code)} /></td>
+                <td style={tdStyle("left")}><PlayerCell names={playerNames(r.side2_players, byId)} size={rubberSize(r.code)} /></td>
+                {cumulative && (
+                  <>
+                    <td style={tdStyle()}>{showStart(r) ? (r.start1 || 0) : ""}</td>
+                    <td style={tdStyle()}>{showStart(r) ? (r.start2 || 0) : ""}</td>
+                    <td style={tdStyle()}>{r.target}</td>
+                  </>
+                )}
+                <td style={tdStyle()}><span style={writeBox(36)}>{s ? r.score1 : ""}</span></td>
+                <td style={tdStyle()}><span style={writeBox(36)}>{s ? r.score2 : ""}</span></td>
+                <td style={tdStyle("left", { fontSize: 11.5, wordBreak: "break-word" })}>
+                  {sideWinner(r)}
+                  {r.is_walkover ? <div style={{ fontSize: 11, color: "#8a6d00", fontStyle: "italic" }}>xử thua</div> : null}
+                </td>
+              </tr>
+            );
+          })}
+          <tr style={{ breakInside: "avoid" }}>
+            <td colSpan={cumulative ? 7 : 4} style={tdStyle("right", { fontWeight: 700, borderBottom: "none", paddingTop: 10 })}>
+              TỔNG KẾT ({cumulative ? "tổng điểm cộng dồn" : "số trận thắng"})
+            </td>
+            <td style={tdStyle("center", { borderBottom: "none", paddingTop: 10 })}><span style={writeBox(36, 28)}>{total1 ?? ""}</span></td>
+            <td style={tdStyle("center", { borderBottom: "none", paddingTop: 10 })}><span style={writeBox(36, 28)}>{total2 ?? ""}</span></td>
+            <td style={tdStyle("left", { borderBottom: "none", paddingTop: 10, fontSize: 11.5, fontWeight: 700, wordBreak: "break-word" })}>
+              {winnerName}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <div style={{ fontSize: 12, marginTop: 8 }}>
+        Đội thắng: <b>{winnerName || "____________________"}</b>
+        {finished && res?.detail ? <span style={{ color: "#555" }}> — {res.detail}</span> : null}
+      </div>
+      <div style={{ fontSize: 11.5, color: "#666", marginTop: 6, lineHeight: 1.6 }}>
+        {cumulative
+          ? "Cách ghi: XP = điểm xuất phát của mỗi đội trước trận thành phần (= tổng sau trận trước); ghi tỉ số SAU trận (đã cộng dồn). Trận thành phần kết thúc khi một đội chạm Mốc; trận đồng đội kết thúc khi một đội chạm mốc tổng — các trận còn lại không cần đấu."
+          : "Cách ghi: điền tỉ số từng trận thành phần; đánh hết các trận dù đã phân định. Hoà số trận → phân định bằng hiệu số điểm nhỏ (tổng điểm ghi − tổng điểm thua); vẫn bằng → đội thắng trận thành phần cuối cùng."}
+        {" "}Xử thua: bên vắng / đến trễ nhận 0 − điểm tối đa, ghi "xử thua" ở cột Thắng.
+      </div>
+      <SignatureRow labels={[`Lãnh đội ${name1}`, "Trọng tài", `Lãnh đội ${name2}`]} />
+    </div>
+  );
+}
+
 /**
  * Component in bảng thi đấu — render ẩn (display:none khi ở màn hình thường), chỉ hiện khi in
  * (xem quy tắc @media print trong index.css). Gọi onReady() khi đã tải xong dữ liệu cần thiết
  * (bảng xếp hạng) để nơi gọi biết lúc nào an toàn để trigger window.print().
+ *
+ * Giải đồng đội (team_type="team") — props tuỳ chọn do trang quản trị truyền thêm:
+ *   teams:   TeamOut[]                         → in "Phiếu đăng ký đội hình" (1 trang / đội); thiếu → bỏ qua
+ *   lineups: { [participant_id]: LineupOut[] } → điền sẵn đội hình theo giai đoạn (thiếu → ô trống)
+ *   ties:    { [match_id]: TieOut }            → điền sẵn biên bản; thiếu → khung trống theo team_rules
  */
-export default function TournamentPrintSheet({ tournament, onReady }) {
+export default function TournamentPrintSheet({ tournament, onReady, teams, lineups, ties }) {
   const [standings, setStandings] = useState(null); // { _all: [...] } hoặc { A: [...], B: [...] }
 
   useEffect(() => {
@@ -513,13 +852,43 @@ export default function TournamentPrintSheet({ tournament, onReady }) {
   if (standings === null) return null;
 
   const fmt = tournament.format;
+  const isTeam = tournament.team_type === "team";
+  const rules = isTeam ? normalizeTeamRules(tournament.team_rules) : null;
+  const teamsById = {};
+  (teams || []).forEach((t) => { if (t?.participant?.id != null) teamsById[t.participant.id] = t; });
+  // Biên bản: mọi trận đã đủ 2 đội (trừ xử thua do bỏ giải — không có trận thành phần);
+  // vòng bảng trước (theo bảng, vòng, số trận), loại trực tiếp sau
+  const tieMatches = isTeam
+    ? (tournament.matches || [])
+      .filter((m) => m.p1_id && m.p2_id && !m.is_walkover)
+      .sort((a, b) => Number(a.phase === "knockout") - Number(b.phase === "knockout")
+        || (a.group_name || "").localeCompare(b.group_name || "")
+        || a.round_number - b.round_number
+        || a.match_number - b.match_number)
+    : [];
+  const firstLeg = isTeam ? firstLegRounds(fmt, tournament.matches) : 0;
+
   return (
     <div className="print-sheet-root">
       {fmt === "knockout" && <KnockoutSheet tournament={tournament} />}
-      {fmt === "combined" && <CombinedSheet tournament={tournament} standingsByGroup={standings} />}
+      {fmt === "combined" && <CombinedSheet tournament={tournament} standingsByGroup={standings} isTeam={isTeam} />}
       {(fmt === "round_robin" || fmt === "round_robin_double" || fmt === "individual") && (
-        <RoundRobinSheet tournament={tournament} standings={standings._all} />
+        <RoundRobinSheet tournament={tournament} standings={standings._all} isTeam={isTeam} />
       )}
+      {isTeam && (teams || []).map((t) => (
+        <TeamLineupSheet
+          key={`lineup-${t.participant?.id}`}
+          tournament={tournament} rules={rules} team={t}
+          lineups={lineups?.[t.participant?.id]}
+        />
+      ))}
+      {isTeam && tieMatches.map((m) => (
+        <TieSheet
+          key={`tie-${m.id}`}
+          tournament={tournament} rules={rules} match={m} tie={ties?.[m.id]}
+          teamsById={teamsById} firstLeg={firstLeg}
+        />
+      ))}
     </div>
   );
 }

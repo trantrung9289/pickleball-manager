@@ -59,6 +59,7 @@ class Member(Base):
     join_date = Column(Date, nullable=True)
     status = Column(Enum(MemberStatus), default=MemberStatus.active)
     rank = Column(String(30), nullable=True)
+    gender = Column(String(10), nullable=True)   # male | female | other | NULL — dùng cho thể thức đồng đội (Đôi Nam/Nữ/Nam Nữ)
     address = Column(String(200), nullable=True)
     notes = Column(Text, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
@@ -181,6 +182,7 @@ class Player(Base):
     phone      = Column(String(20), nullable=True)
     email      = Column(String(100), nullable=True)
     rank       = Column(String(50), nullable=True, default="Chưa xếp hạng")
+    gender     = Column(String(10), nullable=True)   # male | female | other | NULL
     member_id  = Column(Integer, ForeignKey("members.id", ondelete="SET NULL"), nullable=True)
     club_id    = Column(Integer, ForeignKey("clubs.id", ondelete="CASCADE"), nullable=False)
     created_at = Column(DateTime, server_default=func.now())
@@ -204,7 +206,7 @@ class Tournament(Base):
     name = Column(String(200), nullable=False)
     format = Column(Enum(TournamentFormat), nullable=False)
     status = Column(Enum(TournamentStatus), default=TournamentStatus.draft)
-    team_type = Column(String(10), default="singles")     # singles | doubles
+    team_type = Column(String(10), default="singles")     # singles | doubles | team (đồng đội nhiều VĐV)
     pairing_mode = Column(String(30), default="random")   # random | same_rank | cross_rank
     rank_rules = Column(JSON, nullable=True)              # [{"rank1":"A","rank2":"C"}]
     # Quy tắc ghép ĐỒNG ĐỘI (giải đôi) [{"rank1","rank2"}] — TÁCH BIỆT với pairing_mode/rank_rules
@@ -216,6 +218,9 @@ class Tournament(Base):
     score_pin_hash = Column(String(100), nullable=True)          # hash mã PIN 4 số — cho phép nhập điểm qua public
     public_scoring_enabled = Column(Boolean, default=False)      # công tắc bật/tắt, độc lập với việc đã có PIN
     third_place_enabled = Column(Boolean, default=False)         # có trận tranh giải 3 (knockout/combined) không
+    # Thể thức ĐỒNG ĐỘI (team_type="team"): cách tính điểm, mẫu trận thành phần, điểm/trận, mốc tổng...
+    # Xem tournament_engine.normalize_team_rules. NULL với giải đơn/đôi.
+    team_rules = Column(JSON, nullable=True)
 
     participants = relationship("TournamentParticipant", back_populates="tournament", cascade="all, delete-orphan")
     matches = relationship("TournamentMatch", back_populates="tournament", cascade="all, delete-orphan")
@@ -314,8 +319,12 @@ class TournamentMatch(Base):
     # người THUA đi đâu — chỉ set trên 2 trận bán kết khi bật tranh giải 3
     loser_next_match_id = Column(Integer, ForeignKey("tournament_matches.id"), nullable=True)
     loser_next_match_slot = Column(Integer, nullable=True)  # 1 or 2
+    # Giải đồng đội: seed xáo thứ tự trận thành phần của trận này (NULL = chưa bốc thăm thứ tự)
+    rubber_draw_seed = Column(String(64), nullable=True)
 
     tournament = relationship("Tournament", back_populates="matches")
+    rubbers = relationship("TournamentTieRubber", back_populates="match", cascade="all, delete-orphan",
+                           order_by="TournamentTieRubber.order_index", lazy="selectin")
     p1 = relationship("TournamentParticipant", foreign_keys=[p1_id])
     p2 = relationship("TournamentParticipant", foreign_keys=[p2_id])
     winner = relationship("TournamentParticipant", foreign_keys=[winner_id])
@@ -562,3 +571,83 @@ class PointLog(Base):
 
     event = relationship("PointEvent", back_populates="logs")
     participant = relationship("PointEventParticipant")
+
+
+# ── GIẢI ĐỒNG ĐỘI (team_type="team"): đội nhiều VĐV, trận đồng đội = TournamentMatch, trận thành phần = rubber ──
+
+class TournamentTeamPlayer(Base):
+    """VĐV của một đội trong giải đồng đội. UNIQUE theo giải: một người chỉ thuộc một đội (điều lệ 5.2)."""
+    __tablename__ = "tournament_team_players"
+    __table_args__ = (UniqueConstraint("tournament_id", "member_id", name="uq_ttp_tournament_member"),
+                      UniqueConstraint("tournament_id", "player_id", name="uq_ttp_tournament_player"),
+                      {"sqlite_autoincrement": True})
+
+    id = Column(Integer, primary_key=True, index=True)
+    tournament_id = Column(Integer, ForeignKey("tournaments.id", ondelete="CASCADE"), nullable=False, index=True)
+    participant_id = Column(Integer, ForeignKey("tournament_participants.id", ondelete="CASCADE"), nullable=False, index=True)
+    member_id = Column(Integer, ForeignKey("members.id"), nullable=True, index=True)
+    player_id = Column(Integer, ForeignKey("players.id"), nullable=True, index=True)
+    display_name = Column(String(200), nullable=False)      # snapshot tên lúc thêm
+    gender_snapshot = Column(String(10), nullable=True)     # male | female | other | NULL (chưa khai)
+    is_captain = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime, nullable=True)
+
+    participant = relationship("TournamentParticipant")
+    member = relationship("Member")
+    player = relationship("Player")
+
+
+class TournamentTieRubber(Base):
+    """Trận thành phần (Đôi Nam 1, Đơn Nữ 1...) bên trong một trận đồng đội (TournamentMatch)."""
+    __tablename__ = "tournament_tie_rubbers"
+    __table_args__ = (UniqueConstraint("match_id", "order_index", name="uq_rubber_match_order"),
+                      {"sqlite_autoincrement": True})
+
+    id = Column(Integer, primary_key=True, index=True)
+    match_id = Column(Integer, ForeignKey("tournament_matches.id", ondelete="CASCADE"), nullable=False, index=True)
+    order_index = Column(Integer, nullable=False)           # 1..n theo thứ tự thi đấu (sau bốc thăm)
+    code = Column(String(4), nullable=False)                # MD | WD | XD | MS | WS
+    label = Column(String(50), nullable=False)              # "Đôi Nam 1"
+    side1_players = Column(JSON, nullable=True)             # [tournament_team_players.id, ...] của đội p1
+    side2_players = Column(JSON, nullable=True)             # ... của đội p2
+    score1 = Column(Integer, nullable=True)
+    score2 = Column(Integer, nullable=True)
+    status = Column(String(20), default="pending", nullable=False)   # pending | completed
+    is_walkover = Column(Boolean, default=False, nullable=False)
+    start1 = Column(Integer, default=0, nullable=False)     # điểm xuất phát (PA2 cộng dồn); PA1 luôn 0
+    start2 = Column(Integer, default=0, nullable=False)
+    created_at = Column(DateTime, nullable=True)
+
+    match = relationship("TournamentMatch", back_populates="rubbers")
+
+
+class TournamentStageLineup(Base):
+    """Đội hình đăng ký theo GIAI ĐOẠN (leg1 lượt đi / leg2 lượt về / knockout). Khoá khi giai đoạn có điểm."""
+    __tablename__ = "tournament_stage_lineups"
+    __table_args__ = (UniqueConstraint("participant_id", "stage_key", name="uq_lineup_participant_stage"),
+                      {"sqlite_autoincrement": True})
+
+    id = Column(Integer, primary_key=True, index=True)
+    tournament_id = Column(Integer, ForeignKey("tournaments.id", ondelete="CASCADE"), nullable=False, index=True)
+    participant_id = Column(Integer, ForeignKey("tournament_participants.id", ondelete="CASCADE"), nullable=False, index=True)
+    stage_key = Column(String(20), nullable=False)          # leg1 | leg2 | knockout
+    slots = Column(JSON, nullable=True)                     # {"Đôi Nam 1": [team_player_id, ...], ...}
+    locked = Column(Boolean, default=False, nullable=False)
+    locked_at = Column(DateTime, nullable=True)
+    unlock_note = Column(String(200), nullable=True)
+    updated_at = Column(DateTime, nullable=True)
+
+
+class TournamentTeamLog(Base):
+    """Nhật ký thao tác của giải đồng đội: mở khoá đội hình, sửa VĐV trận thành phần, điểm, xử thua, bốc thăm."""
+    __tablename__ = "tournament_team_logs"
+    __table_args__ = ({"sqlite_autoincrement": True},)
+
+    id = Column(Integer, primary_key=True, index=True)
+    tournament_id = Column(Integer, ForeignKey("tournaments.id", ondelete="CASCADE"), nullable=False, index=True)
+    match_id = Column(Integer, nullable=True)
+    participant_id = Column(Integer, nullable=True)
+    kind = Column(String(30), nullable=False)               # lineup_unlock | lineup_set | rubber_players | score | score_reset | walkover | draw_order
+    note = Column(String(300), nullable=True)
+    actor_name = Column(String(100), nullable=True)
+    created_at = Column(DateTime, nullable=True)

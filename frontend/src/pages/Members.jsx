@@ -17,6 +17,8 @@ import useHotkey from "../hooks/useHotkey";
 import { useRankLevels } from "../hooks/useRankLevels";
 import ResponsiveTable from "../components/ResponsiveTable";
 import RankLevelsModal from "../components/RankLevelsModal";
+import GenderTag from "../components/team/GenderTag";
+import { GENDER_LABELS, GENDER_OPTIONS } from "../utils/teamFormat";
 
 const { Title } = Typography;
 const { Option } = Select;
@@ -115,6 +117,7 @@ export default function Members() {
     try {
       const payload = {
         ...vals,
+        gender: vals.gender ?? null,   // Select xoá → undefined → JSON bỏ khoá → backend không xoá được giới tính
         dob: vals.dob ? vals.dob.format("YYYY-MM-DD") : null,
         join_date: vals.join_date ? vals.join_date.format("YYYY-MM-DD") : null,
       };
@@ -226,6 +229,12 @@ export default function Members() {
       // "Chưa xếp hạng" khớp cả bản ghi chưa có hạng (rank rỗng) — cùng cách hiểu với backend
       onFilter: (value, record) => (value === unranked ? (!record.rank || record.rank === unranked) : record.rank === value),
     },
+    {
+      title: "Giới tính", dataIndex: "gender", width: 90,
+      render: (v) => (v ? <GenderTag value={v} /> : "—"),
+      filters: Object.entries(GENDER_LABELS).map(([k, v]) => ({ text: v, value: k })),
+      onFilter: (value, record) => record.gender === value,
+    },
     { title: "Ngày tham gia", dataIndex: "join_date", render: (v) => v ? dayjs(v).format("DD/MM/YYYY") : "—" },
     {
       title: "Trạng thái", dataIndex: "status",
@@ -296,9 +305,10 @@ export default function Members() {
           <span>
             {r.full_name}
             {r.rank && <Tag color="purple" style={{ marginLeft: 6 }}>{r.rank}</Tag>}
+            {r.gender && <GenderTag value={r.gender} style={{ marginLeft: 6 }} />}
           </span>
         )}
-        mobileHideColumns={["Họ và tên", "Hạng"]}
+        mobileHideColumns={["Họ và tên", "Hạng", "Giới tính"]}
       />
 
       {/* Modal Import Excel */}
@@ -447,6 +457,14 @@ export default function Members() {
                 <Select placeholder="Chọn hoặc nhập hạng" allowClear showSearch>
                   {formRankOptions.map(r => <Option key={r} value={r}>{r}</Option>)}
                 </Select>
+              </Form.Item>
+            </Col>
+          </Row>
+          <Row gutter={16}>
+            <Col span={12}>
+              {/* Giới tính dùng cho giải đồng đội (thể thức Đôi Nam / Đôi Nữ / Đôi Nam Nữ...) — không bắt buộc */}
+              <Form.Item name="gender" label="Giới tính">
+                <Select placeholder="Chưa khai" allowClear options={GENDER_OPTIONS} />
               </Form.Item>
             </Col>
           </Row>
