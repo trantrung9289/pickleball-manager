@@ -1,6 +1,6 @@
 // Toán thuần cho vòng quay bốc thăm — không phụ thuộc React/DOM để dùng chung admin + public
 // và đối chiếu được với backend (tournament_engine.py: draw_display_slots / draw_pick_index).
-import { seedOrder } from "./bracketLayout";
+import { seedOrder } from "./bracketLayout.js";
 
 export const DRAW_FORMATS = ["combined", "knockout", "individual"];
 export const GROUP_LETTERS = "ABCDEFGHIJKLMNOP";

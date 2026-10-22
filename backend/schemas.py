@@ -569,6 +569,42 @@ class PartnerDrawOut(BaseModel):
     server_now_ms: int
 
 
+# ── Vòng quay PHÂN VĐV VÀO ĐỘI (giải đồng đội, 2026-10-22) ──
+class TeamDrawRuleIn(BaseModel):
+    """Một vòng phân bổ: lọc theo hạng (rỗng = mọi hạng) và giới tính (rỗng = mọi giới), per_team = trần mỗi đội
+    trong vòng (None = chia đều tới hết)."""
+    ranks: List[str] = []
+    genders: List[str] = []
+    per_team: Optional[int] = Field(default=None, ge=1, le=50)
+
+
+class TeamDrawOpenIn(BaseModel):
+    rules: List[TeamDrawRuleIn] = []
+    reveal_ms: int = Field(5000, ge=1500, le=15000)
+
+
+class TeamDrawSpinIn(BaseModel):
+    expected_step: int = Field(ge=0)
+
+
+class TeamDrawCancelIn(BaseModel):
+    reason: Optional[str] = Field(default=None, max_length=200)
+
+
+class TeamDrawSummaryOut(BaseModel):
+    """Tóm tắt phiên phân đội mới nhất — nhúng vào TournamentOut / PublicTournamentOut."""
+    id: int
+    seq: int
+    status: str
+    total_steps: int
+    done_steps: int
+    finished: bool = False
+    reveal_ms: int
+
+    class Config:
+        from_attributes = True
+
+
 class PartnerDrawSummaryOut(BaseModel):
     """Tóm tắt phiên ghép đội mới nhất — nhúng vào TournamentOut / PublicTournamentOut."""
     id: int
@@ -622,6 +658,7 @@ class TournamentOut(BaseModel):
     unpaired_count: int = 0                 # số người chưa có đội (giải đôi)
     team_players: List[TeamPlayerLiteOut] = []   # giải đồng đội: mọi VĐV (participant_id None = chưa phân đội)
     team_pool_count: int = 0                # giải đồng đội: số VĐV tham dự chưa phân đội
+    team_draw: Optional[TeamDrawSummaryOut] = None   # phiên phân VĐV vào đội mới nhất (property Tournament.team_draw)
 
     class Config:
         from_attributes = True
@@ -717,6 +754,7 @@ class PublicTournamentOut(BaseModel):
     unpaired_count: int = 0
     team_players: List[TeamPlayerLiteOut] = []   # chỉ tên/giới tính/hạng — không SĐT
     team_pool_count: int = 0
+    team_draw: Optional[TeamDrawSummaryOut] = None
 
     class Config:
         from_attributes = True

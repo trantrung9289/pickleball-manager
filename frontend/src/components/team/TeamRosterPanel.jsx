@@ -1,17 +1,20 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert, Button, Card, Col, Empty, Input, InputNumber, Modal, Row, Select, Space, Spin, Tag, Tooltip, Typography, message,
 } from "antd";
 import {
-  DeleteOutlined, EditOutlined, PlusOutlined, RollbackOutlined, StarFilled, StarOutlined, TeamOutlined, UserAddOutlined,
-  UsergroupAddOutlined, UserOutlined,
+  DeleteOutlined, EditOutlined, GiftOutlined, PlusOutlined, RollbackOutlined, StarFilled, StarOutlined, TeamOutlined,
+  UserAddOutlined, UsergroupAddOutlined, UserOutlined,
 } from "@ant-design/icons";
 import { tournamentsApi } from "../../api";
 import { AddParticipantsModal } from "../AddParticipantsModal";
 import ResponsiveTable from "../ResponsiveTable";
 import GenderTag from "./GenderTag";
 import StageLineupModal from "./StageLineupModal";
+import TeamDrawSetupModal from "./TeamDrawSetupModal";
+import TeamDrawCeremony from "../draw/TeamDrawCeremony";
 import { useRankLevels } from "../../hooks/useRankLevels";
+import { serverOffset } from "../../utils/drawMath";
 import { GENDER_OPTIONS, countGenders, normalizeTeamRules, teamRosterWarnings } from "../../utils/teamFormat";
 
 const { Text } = Typography;
@@ -76,6 +79,12 @@ export default function TeamRosterPanel({ tournament, canEdit = false, onChanged
   const [addTarget, setAddTarget] = useState(null);         // TeamOut | "pool"
   const [lineupTarget, setLineupTarget] = useState(null);   // TeamOut
   const [pickKey, setPickKey] = useState(0);                // tăng sau mỗi lần phân đội → ô Select "chọn đội / chọn VĐV" trở về placeholder
+  // Vòng quay phân VĐV vào đội: phiên local (dict team draw), overlay, modal luật, bận
+  const [teamDraw, setTeamDraw] = useState(null);
+  const [drawOpen, setDrawOpen] = useState(false);
+  const [drawSetup, setDrawSetup] = useState(false);
+  const [drawBusy, setDrawBusy] = useState(false);
+  const [drawOffset, setDrawOffset] = useState(0);
   const { options: rankOptions } = useRankLevels();
   const tid = tournament.id;
   const status = tournament.status;
@@ -110,10 +119,108 @@ export default function TeamRosterPanel({ tournament, canEdit = false, onChanged
   }, [loadAll, onChanged]);
 
   const allPlayers = useMemo(() => [...pool, ...teams.flatMap((t) => t.players || [])], [teams, pool]);
-  const canAddPlayers = canEdit && status !== "completed";
   const isDraft = status === "draft";
   const activeTeams = teams.filter((t) => t.participant.status !== "withdrawn");
   const teamOptions = activeTeams.map((t) => ({ value: t.participant.id, label: t.participant.team_name }));
+
+  // ── Phiên phân đội bằng vòng quay ──
+  const applyDraw = useCallback((d) => {
+    setTeamDraw(d);
+    if (d?.server_now_ms) setDrawOffset(serverOffset(d.server_now_ms));
+  }, []);
+  // Tóm tắt trong TournamentOut (sau F5 / tab khác): phiên đang mở → nạp bản đầy đủ; phiên kết thúc nơi khác → bỏ bản local
+  const summaryDraw = tournament.team_draw || null;
+  const openSummary = summaryDraw?.status === "open" ? summaryDraw : null;
+  const drawRef = useRef(null);
+  useEffect(() => { drawRef.current = teamDraw; }, [teamDraw]);
+  useEffect(() => {
+    if (!openSummary?.id || drawRef.current?.id === openSummary.id) return undefined;
+    let cancelled = false;
+    tournamentsApi.teamDraw.get(tid)
+      .then((r) => { if (!cancelled && r.data?.status === "open") applyDraw(r.data); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [openSummary?.id, tid, applyDraw]);
+  useEffect(() => {
+    if (!summaryDraw || !drawRef.current || drawRef.current.id !== summaryDraw.id) return;
+    if (summaryDraw.status !== "open" && drawRef.current.status === "open") { setTeamDraw(null); setDrawOpen(false); }
+  }, [summaryDraw]);
+  const pendingDraw = teamDraw?.status === "open" ? teamDraw : openSummary;
+  const drawLocked = !!pendingDraw;   // phiên mở → khoá thao tác tay (backend cũng chặn)
+  const canAddPlayers = canEdit && status !== "completed" && !drawLocked;
+  const canDraw = canEdit && isDraft && pool.length >= 1 && activeTeams.length >= 2;
+
+  const loadOpenDraw = async () => {
+    const r = await tournamentsApi.teamDraw.get(tid);
+    if (r.data?.status !== "open") return false;
+    applyDraw(r.data); setDrawOpen(true);
+    return true;
+  };
+  const handleOpenDraw = async (rules, revealMs) => {
+    setDrawBusy(true);
+    try {
+      const res = await tournamentsApi.teamDraw.open(tid, { rules, reveal_ms: revealMs });
+      setDrawSetup(false); applyDraw(res.data); setDrawOpen(true);
+      onChanged && onChanged().catch?.(() => {});
+    } catch (e) {
+      if (e?.response?.status === 409) {
+        setDrawSetup(false);
+        try {
+          if (await loadOpenDraw()) message.info("Đang có phiên phân đội chưa kết thúc — tiếp tục phiên đó.");
+          else message.error(e?.response?.data?.detail || "Không thể mở phiên phân đội");
+        } catch (e2) { message.error(e2?.response?.data?.detail || "Không thể tải phiên phân đội"); }
+      } else message.error(e?.response?.data?.detail || "Không thể mở phiên phân đội");
+    } finally { setDrawBusy(false); }
+  };
+  const handleResumeDraw = async () => {
+    setDrawBusy(true);
+    try {
+      if (!(await loadOpenDraw())) {
+        setTeamDraw(null); setDrawOpen(false);
+        message.info("Phiên phân đội đã kết thúc ở nơi khác — đã tải lại");
+        await refresh(true);
+      }
+    } catch (e) { message.error(e?.response?.data?.detail || "Không thể tải phiên phân đội"); }
+    finally { setDrawBusy(false); }
+  };
+  const handleDrawSpin = async () => {
+    if (!teamDraw) return;
+    setDrawBusy(true);
+    try {
+      applyDraw((await tournamentsApi.teamDraw.spin(tid, teamDraw.done_steps)).data);
+    } catch (e) {
+      if (e?.response?.status === 409) {
+        message.warning(e?.response?.data?.detail || "Lượt bốc không khớp — đã đồng bộ lại");
+        try { applyDraw((await tournamentsApi.teamDraw.get(tid)).data); } catch { /* giữ bản local */ }
+      } else message.error(e?.response?.data?.detail || "Không thể quay lượt này");
+    } finally { setDrawBusy(false); }
+  };
+  const handleDrawCommit = async () => {
+    setDrawBusy(true);
+    try {
+      await tournamentsApi.teamDraw.commit(tid);
+      setTeamDraw(null); setDrawOpen(false);
+      message.success("Đã chốt phân đội!");
+      await refresh(true);
+    } catch (e) { message.error(e?.response?.data?.detail || "Không thể chốt phân đội"); }
+    finally { setDrawBusy(false); }
+  };
+  const handleDrawCancel = async () => {
+    const ok = await confirm({
+      title: "Huỷ phiên phân đội?",
+      content: "Kết quả các lượt đã quay sẽ không được dùng. Phiên vẫn hiện trong lịch sử công khai.",
+      okButtonProps: { danger: true }, okText: "Huỷ phiên",
+    });
+    if (!ok) return;
+    setDrawBusy(true);
+    try {
+      await tournamentsApi.teamDraw.cancel(tid);
+      setTeamDraw(null); setDrawOpen(false);
+      await refresh(true);
+      message.success("Đã huỷ phiên phân đội");
+    } catch (e) { message.error(e?.response?.data?.detail || "Không thể huỷ phiên phân đội"); }
+    finally { setDrawBusy(false); }
+  };
 
   const run = async (fn, okMsg, failMsg, notify = false) => {
     try {
@@ -330,16 +437,32 @@ export default function TeamRosterPanel({ tournament, canEdit = false, onChanged
 
   return (
     <>
+      {pendingDraw && !drawOpen && (
+        <Alert type="warning" showIcon style={{ marginBottom: 16 }}
+          message={`Phiên phân đội #${pendingDraw.seq} đang dở (${pendingDraw.done_steps}/${pendingDraw.total_steps} lượt)`}
+          description="Trong lúc phiên mở không sửa tay đội/VĐV được. Tiếp tục quay để chốt, hoặc huỷ phiên."
+          action={
+            <Space>
+              <Button type="primary" size="small" icon={<GiftOutlined />} loading={drawBusy} onClick={handleResumeDraw}>Tiếp tục</Button>
+              <Button danger size="small" loading={drawBusy} onClick={handleDrawCancel}>Huỷ phiên</Button>
+            </Space>
+          } />
+      )}
       <Card size="small" style={{ marginBottom: 16 }}
         title={<span><UserOutlined /> VĐV tham dự chưa phân đội ({pool.length})</span>}
-        extra={canAddPlayers && (
-          <Button type="primary" size="small" icon={<UserAddOutlined />} onClick={() => setAddTarget("pool")}>Thêm VĐV</Button>
+        extra={canEdit && status !== "completed" && (
+          <Space size={4} wrap>
+            {canDraw && !drawLocked && (
+              <Button size="small" icon={<GiftOutlined />} onClick={() => setDrawSetup(true)}>🎡 Phân đội (vòng quay)</Button>
+            )}
+            <Button type="primary" size="small" icon={<UserAddOutlined />} disabled={drawLocked} onClick={() => setAddTarget("pool")}>Thêm VĐV</Button>
+          </Space>
         )}>
         {loading ? <div style={{ textAlign: "center", padding: 16 }}><Spin /></div> : pool.length === 0 ? (
           <Text type="secondary" style={{ fontSize: 13 }}>
             {allPlayers.length === 0
               ? "Bước 1: thêm toàn bộ VĐV tham dự giải (thành viên / khách mời). Bước 2: tạo đội. Bước 3: phân VĐV vào đội (chọn đội trên từng dòng, hoặc chọn từ danh sách ở thẻ đội)."
-              : "Mọi VĐV đã được phân vào đội."}
+              : "Mọi VĐV đã được phân vào đội. Gỡ VĐV khỏi đội (nút ↩ trên thẻ đội) để phân lại, kể cả bằng vòng quay."}
           </Text>
         ) : (
           <>
@@ -411,6 +534,14 @@ export default function TeamRosterPanel({ tournament, canEdit = false, onChanged
       )}
       {lineupTarget && (
         <StageLineupModal tournament={tournament} team={lineupTarget} canEdit={canEdit} onClose={() => setLineupTarget(null)} />
+      )}
+      {drawSetup && (
+        <TeamDrawSetupModal tournament={tournament} pool={pool} teams={activeTeams} initialRules={teamDraw?.rules || tournament.team_draw_rules}
+          busy={drawBusy} onOpen={handleOpenDraw} onClose={() => setDrawSetup(false)} />
+      )}
+      {drawOpen && teamDraw && (
+        <TeamDrawCeremony mode="admin" tournament={tournament} draw={teamDraw} serverOffsetMs={drawOffset} busy={drawBusy}
+          onSpin={handleDrawSpin} onCommit={handleDrawCommit} onCancel={handleDrawCancel} onClose={() => setDrawOpen(false)} fullscreen />
       )}
     </>
   );

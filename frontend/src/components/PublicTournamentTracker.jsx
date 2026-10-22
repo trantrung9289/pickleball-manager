@@ -11,6 +11,7 @@ import ResponsiveTable from "./ResponsiveTable";
 import PublicTieBoard from "./PublicTieBoard";
 import DrawCeremony from "./draw/DrawCeremony";
 import PartnerDrawCeremony from "./draw/PartnerDrawCeremony";
+import TeamDrawCeremony from "./draw/TeamDrawCeremony";
 import PublicPointEventBoard from "./PublicPointEventBoard";
 import { useViewMode } from "../contexts/ViewModeContext";
 import { teamLabel, teamRank } from "../utils/tournamentLabels";
@@ -997,6 +998,34 @@ function PartnerDrawHistoryItem({ draw }) {
 }
 
 // ── Biên bản ghép đội của giải (chỉ tải lại khi phiên mới nhất đổi id/trạng thái) ─────
+// ── Lịch sử phiên PHÂN VĐV VÀO ĐỘI (giải đồng đội): mỗi phiên = lễ dạng inline (bảng đội + minh bạch/kiểm chứng) ──
+function TeamDrawHistory({ api, tid, tournament, historyKey }) {
+  const [draws, setDraws] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    api.tournaments.teamDrawHistory(tid)
+      .then(r => { if (!cancelled) setDraws(Array.isArray(r.data) ? r.data : []); })
+      .catch(() => { if (!cancelled) setDraws([]); });
+    return () => { cancelled = true; };
+  }, [api, tid, historyKey]);
+  if (!draws || draws.length === 0) return null;
+  return (
+    <Collapse style={{ marginTop: 16 }} items={[{
+      key: "team-draws",
+      label: <span><SafetyCertificateOutlined /> Biên bản phân VĐV vào đội ({draws.length} phiên)</span>,
+      children: (
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          {draws.map(d => (
+            <Card key={d.id} size="small" title={`Phiên #${d.seq}`}>
+              <TeamDrawCeremony mode="public" tournament={tournament} draw={d} fullscreen={false} />
+            </Card>
+          ))}
+        </div>
+      ),
+    }]} />
+  );
+}
+
 function PartnerDrawHistory({ api, tid, historyKey }) {
   const [draws, setDraws] = useState([]);
 
@@ -1097,6 +1126,8 @@ export default function PublicTournamentTracker({ api }) {
   // Phiên bốc thăm / ghép đội gắn với giải đang xem: lưu kèm tid để tự "reset" khi đổi giải mà không cần setState trong effect
   const [drawState, setDrawState] = useState(null);           // { tid, draw: DrawOut|null, offset: number }
   const [partnerState, setPartnerState] = useState(null);     // { tid, draw: PartnerDrawOut|null, offset: number }
+  const [teamDrawState, setTeamDrawState] = useState(null);   // { tid, draw: team draw|null, offset } — phân VĐV vào đội (giải đồng đội)
+  const lastTeamDrawKeyRef = useRef(null);
   const pollRef = useRef(null);
   const lastDrawKeyRef = useRef(null);        // "tid:id:status" lần poll trước — phát hiện open → committed/cancelled
   const lastPartnerKeyRef = useRef(null);     // như trên, cho phiên ghép đội
@@ -1228,7 +1259,40 @@ export default function PublicTournamentTracker({ api }) {
   const isPartnerLive = latestPartnerDraw?.status === "open";
   const showPartnerCeremony = partnerDraw?.status === "open";
 
+  // ── Phiên PHÂN VĐV VÀO ĐỘI (team draw) — giải đồng đội Nháp; public thấy giải nhờ có phiên open/committed ──
+  const teamDraw = teamDrawState?.tid === selectedId ? teamDrawState.draw : null;
+  const teamDrawOffset = teamDrawState?.tid === selectedId ? teamDrawState.offset : 0;
+  const loadTeamDraw = useCallback(async () => {
+    if (!selectedId) return { ok: false };
+    try {
+      const r = await api.tournaments.teamDraw(selectedId);
+      const d = r.data?.team_draw || null;
+      setTeamDrawState({ tid: selectedId, draw: d, offset: serverOffset(r.data?.server_now_ms) });
+      const key = d ? `${selectedId}:${d.id}:${d.status}` : null;
+      const prev = lastTeamDrawKeyRef.current;
+      lastTeamDrawKeyRef.current = key;
+      if (prev && prev.startsWith(`${selectedId}:`) && prev.endsWith(":open") && key !== prev) loadDetail(true);
+      return { ok: true };
+    } catch (err) {
+      const status = err?.response?.status;
+      const prev = lastTeamDrawKeyRef.current;
+      if (status === 404 && prev && prev.startsWith(`${selectedId}:`) && prev.endsWith(":open")) {
+        lastTeamDrawKeyRef.current = null;
+        setTeamDrawState({ tid: selectedId, draw: null, offset: 0 });
+        setTournament((t) => (t && t.id === selectedId
+          ? { ...t, team_draw: t.team_draw ? { ...t.team_draw, status: "cancelled" } : null }
+          : t));
+        loadList();
+      }
+      return { ok: false, status };
+    }
+  }, [selectedId, api, loadDetail, loadList]);
+  const latestTeamDraw = pickLatest(teamDraw, tournament?.team_draw || null);
+  const isTeamDrawLive = latestTeamDraw?.status === "open";
+  const showTeamDrawCeremony = teamDraw?.status === "open";
+
   useFastPoll(isPartnerLive && !!selectedId, loadPartnerDraw);
+  useFastPoll(isTeamDrawLive && !!selectedId, loadTeamDraw);
 
   const participantsById = (() => {
     const m = {};
@@ -1253,7 +1317,8 @@ export default function PublicTournamentTracker({ api }) {
   const waiting = tournament && tournament.status === "active" && matches.length === 0 && !showCeremony;
   const showHistory = tournament && latestDraw && latestDraw.status !== "open";
   const showPartnerHistory = tournament && latestPartnerDraw && latestPartnerDraw.status !== "open";
-  const anyLive = isLive || isPartnerLive;
+  const showTeamDrawHistory = tournament && latestTeamDraw && latestTeamDraw.status !== "open";
+  const anyLive = isLive || isPartnerLive || isTeamDrawLive;
 
   return (
     <div>
@@ -1274,7 +1339,9 @@ export default function PublicTournamentTracker({ api }) {
                   {t.status === "draft" && (
                     t.partner_draw_status === "open"
                       ? <Tag color="processing" style={{ marginLeft: 6 }}>Đang ghép đội</Tag>
-                      : <Tag color="orange" style={{ marginLeft: 6 }}>Chuẩn bị</Tag>
+                      : t.team_draw_status === "open"
+                        ? <Tag color="processing" style={{ marginLeft: 6 }}>Đang phân đội</Tag>
+                        : <Tag color="orange" style={{ marginLeft: 6 }}>Chuẩn bị</Tag>
                   )}
                 </span>
               ),
@@ -1297,7 +1364,7 @@ export default function PublicTournamentTracker({ api }) {
           icon={refreshing ? <SyncOutlined spin /> : <ReloadOutlined />}
           onClick={() => {
             if (isEventSelected) { setBoardRefreshKey(k => k + 1); return; }
-            loadDetail(true); if (isLive) loadDraw(); if (isPartnerLive) loadPartnerDraw();
+            loadDetail(true); if (isLive) loadDraw(); if (isPartnerLive) loadPartnerDraw(); if (isTeamDrawLive) loadTeamDraw();
           }}
           loading={false}
         >
@@ -1313,8 +1380,8 @@ export default function PublicTournamentTracker({ api }) {
           <Space style={{ marginBottom: 12 }}>
             <Badge status={anyLive || tournament.status === "active" ? "processing" : "default"} />
             <Text type="secondary">
-              {isPartnerLive
-                ? `Đang theo dõi ghép đội trực tiếp (cập nhật ${DRAW_POLL_MS / 1000}s)`
+              {isPartnerLive || isTeamDrawLive
+                ? `Đang theo dõi ${isTeamDrawLive ? "phân đội" : "ghép đội"} trực tiếp (cập nhật ${DRAW_POLL_MS / 1000}s)`
                 : isLive
                   ? `Đang theo dõi bốc thăm trực tiếp (cập nhật ${DRAW_POLL_MS / 1000}s)`
                   : `Tự động cập nhật mỗi ${POLL_MS / 1000}s`}
@@ -1333,6 +1400,12 @@ export default function PublicTournamentTracker({ api }) {
             </Card>
           )}
 
+          {showTeamDrawCeremony && (
+            <Card size="small" title="🎡 Phân VĐV vào đội trực tiếp" style={{ marginBottom: 16 }}>
+              <TeamDrawCeremony mode="public" tournament={tournament} draw={teamDraw} serverOffsetMs={teamDrawOffset} fullscreen={false} />
+            </Card>
+          )}
+
           {showCeremony && (
             <Card size="small" title="🎡 Lễ bốc thăm trực tiếp" style={{ marginBottom: 16 }}>
               <DrawCeremony
@@ -1346,10 +1419,18 @@ export default function PublicTournamentTracker({ api }) {
           )}
 
           {isDraft
-            ? <DraftTeamsCard tournament={tournament} />
+            ? (tournament.team_type === "team"
+              // Giải đồng đội Nháp (đang/đã phân đội bằng vòng quay): danh sách đội kèm VĐV thay vì bảng người chơi
+              ? <TeamsPanel api={api} tid={tournament.id} participantCount={`${(tournament.participants || []).length}:${tournament.team_draw?.status || ""}:${tournament.team_draw?.done_steps || 0}`} />
+              : <DraftTeamsCard tournament={tournament} />)
             : waiting
               ? <Empty description="Chưa có lịch thi đấu — ban tổ chức sẽ bốc thăm/sinh lịch trước giờ đấu" />
               : <TournamentContent tournament={tournament} api={api} onScored={() => loadDetail(true)} />}
+
+          {showTeamDrawHistory && (
+            <TeamDrawHistory api={api} tid={tournament.id} tournament={tournament}
+              historyKey={`${latestTeamDraw.id}:${latestTeamDraw.status}`} />
+          )}
 
           {showPartnerHistory && (
             <PartnerDrawHistory

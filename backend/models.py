@@ -232,6 +232,9 @@ class Tournament(Base):
     # selectin để TournamentOut/PublicTournamentOut tra tên VĐV cho trận thành phần mà không N+1.
     team_players = relationship("TournamentTeamPlayer", back_populates="tournament", cascade="all, delete-orphan",
                                 order_by="TournamentTeamPlayer.id", lazy="selectin")
+    # Giải đồng đội: phiên VÒNG QUAY PHÂN VĐV VÀO ĐỘI (2026-10-22)
+    team_draws = relationship("TournamentTeamDraw", back_populates="tournament", cascade="all, delete-orphan",
+                              order_by="TournamentTeamDraw.seq", lazy="selectin")
 
     @property
     def has_score_pin(self) -> bool:
@@ -254,6 +257,11 @@ class Tournament(Base):
             return 0
         return sum(1 for p in self.participants
                    if p.partner_member_id is None and p.partner_player_id is None)
+
+    @property
+    def team_draw(self):
+        """Phiên phân VĐV vào đội (giải đồng đội) mới nhất, mọi trạng thái."""
+        return self.team_draws[-1] if self.team_draws else None
 
     @property
     def team_pool_count(self) -> int:
@@ -665,3 +673,68 @@ class TournamentTeamLog(Base):
     note = Column(String(300), nullable=True)
     actor_name = Column(String(100), nullable=True)
     created_at = Column(DateTime, nullable=True)
+
+
+class TournamentTeamDraw(Base):
+    """Phiên VÒNG QUAY PHÂN VĐV VÀO ĐỘI của giải đồng đội (2026-10-22). Pool = VĐV tham dự chưa phân đội
+    (snapshot lúc mở: tpid/tên/giới tính/hạng), teams = đội đang hoạt động; luật = các vòng theo hạng/giới tính;
+    seed commit–reveal như hai vòng quay kia; chốt → gán participant_id cho từng VĐV theo lượt."""
+    __tablename__ = "tournament_team_draws"
+    __table_args__ = (UniqueConstraint("tournament_id", "seq", name="uq_team_draw_tournament_seq"),
+                      {"sqlite_autoincrement": True})
+
+    id = Column(Integer, primary_key=True, index=True)
+    tournament_id = Column(Integer, ForeignKey("tournaments.id", ondelete="CASCADE"), nullable=False, index=True)
+    seq = Column(Integer, nullable=False)
+    status = Column(String(20), default="open", nullable=False)   # open | committed | cancelled | superseded
+    seed_hex = Column(String(64), nullable=False)
+    seed_commit = Column(String(64), nullable=False)
+    pool_json = Column(JSON, nullable=False)                       # [{"tpid","name","gender","rank"}] sắp theo tpid
+    teams_json = Column(JSON, nullable=False)                      # [{"pid","name"}] theo seed/id
+    rules_json = Column(JSON, nullable=False, default=list)        # normalize_team_draw_rules
+    plan_json = Column(JSON, nullable=False)                       # team_draw_plan
+    total_steps = Column(Integer, nullable=False)
+    reveal_ms = Column(Integer, default=5000, nullable=False)
+    created_by = Column(String(50), nullable=True)
+    created_at = Column(DateTime, nullable=True)
+    committed_at = Column(DateTime, nullable=True)
+    cancelled_at = Column(DateTime, nullable=True)
+    cancel_reason = Column(String(200), nullable=True)
+
+    tournament = relationship("Tournament", back_populates="team_draws")
+    steps = relationship("TournamentTeamDrawStep", back_populates="draw", cascade="all, delete-orphan",
+                         order_by="TournamentTeamDrawStep.step_index", lazy="selectin")
+
+    @property
+    def done_steps(self) -> int:
+        return len(self.steps)
+
+    @property
+    def finished(self) -> bool:
+        from tournament_engine import team_draw_finished   # import trễ: tránh phụ thuộc vòng lúc nạp module
+        steps = [{"tpid": st.tpid, "team_pid": st.team_pid} for st in sorted(self.steps, key=lambda s: s.step_index)]
+        return team_draw_finished(list(self.pool_json or []), [x["pid"] for x in (self.teams_json or [])],
+                                  list(self.rules_json or []), steps)
+
+
+class TournamentTeamDrawStep(Base):
+    """Một lượt quay đã chốt của phiên phân đội: VĐV `tpid` vào đội `team_pid` ở vòng/pass nào."""
+    __tablename__ = "tournament_team_draw_steps"
+    __table_args__ = (UniqueConstraint("draw_id", "step_index", name="uq_team_draw_step_index"),
+                      UniqueConstraint("draw_id", "tpid", name="uq_team_draw_step_tpid"),
+                      {"sqlite_autoincrement": True})
+
+    id = Column(Integer, primary_key=True, index=True)
+    draw_id = Column(Integer, ForeignKey("tournament_team_draws.id", ondelete="CASCADE"), nullable=False, index=True)
+    step_index = Column(Integer, nullable=False)
+    tpid = Column(Integer, nullable=False)                  # tournament_team_players.id (không FK: VĐV có thể bị xoá sau)
+    team_pid = Column(Integer, nullable=False)              # tournament_participants.id
+    round_index = Column(Integer, nullable=False)
+    pass_index = Column(Integer, nullable=False)
+    pick_index = Column(Integer, nullable=False)
+    auto = Column(Boolean, default=False, nullable=False)   # chỉ còn 1 người đủ điều kiện → điền không quay
+    eligible_json = Column(JSON, nullable=True)             # [tpid] đủ điều kiện lúc quay (kiểm chứng)
+    spun_at = Column(DateTime, nullable=True)
+    spun_at_ms = Column(Integer, nullable=False)
+
+    draw = relationship("TournamentTeamDraw", back_populates="steps")

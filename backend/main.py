@@ -26,6 +26,7 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 import models, schemas
 from database import engine, get_db, Base, SessionLocal
 from tournament_engine import (
+    normalize_team_draw_rules, team_draw_step_context, team_draw_finished, team_draw_plan,
     generate_schedule, generate_group_schedule,
     generate_knockout_from_groups, compute_standings,
     DRAW_SUPPORTED_FORMATS, draw_slot_label, draw_picks_to_pid_list, draw_pick_index,
@@ -2215,6 +2216,7 @@ def public_tournaments_list(request: Request, slug: str, db: Session = Depends(g
             "status": t.status, "team_type": t.team_type,
             "created_at": t.created_at.isoformat() if t.created_at else None,
             "partner_draw_status": t.partner_draw.status if t.partner_draw else None,
+            "team_draw_status": t.team_draw.status if t.team_draw else None,
             "unpaired_count": t.unpaired_count,
         }
         for t in ts
@@ -2307,7 +2309,8 @@ def _is_public_visible(t: "models.Tournament") -> bool:
         return True
     # Xét MỌI phiên chứ không chỉ phiên mới nhất: đã có phiên chốt (đội đã công khai) thì huỷ một phiên
     # mở thêm sau đó không được làm giải "biến mất" khỏi public. Chỉ ẩn khi mọi phiên đều bị huỷ.
-    return any(d.status in ("open", "committed", "superseded") for d in t.partner_draws)
+    return any(d.status in ("open", "committed", "superseded") for d in t.partner_draws) \
+        or any(d.status in ("open", "committed", "superseded") for d in t.team_draws)
 
 
 def _public_draw_out(draw: "models.TournamentDraw", t: "models.Tournament") -> dict:
@@ -2375,6 +2378,24 @@ def public_tournament_partner_draws(request: Request, slug: str, tid: int, db: S
     """Lịch sử mọi phiên ghép đội (seq giảm dần) kèm seed để khán giả kiểm chứng."""
     t = _public_tournament_or_404(db, slug, tid)
     return [_public_partner_draw_out(d, t) for d in sorted(t.partner_draws, key=lambda d: d.seq, reverse=True)]
+
+
+@app.get("/api/public/report/{slug}/tournaments/{tid}/team-draw")
+@limiter.limit("600/minute")
+def public_tournament_team_draw(request: Request, slug: str, tid: int, db: Session = Depends(get_db)):
+    """Khán giả theo dõi phân VĐV vào đội (giải đồng đội) trực tiếp bằng polling 2s."""
+    t = _public_tournament_or_404(db, slug, tid)
+    d = t.team_draw
+    return {"team_draw": _public_team_draw_out(d, t) if d is not None else None,
+            "server_now_ms": int(time.time() * 1000)}
+
+
+@app.get("/api/public/report/{slug}/tournaments/{tid}/team-draws")
+@limiter.limit("60/minute")
+def public_tournament_team_draws(request: Request, slug: str, tid: int, db: Session = Depends(get_db)):
+    """Lịch sử mọi phiên phân đội (seq giảm dần) kèm seed để khán giả kiểm chứng."""
+    t = _public_tournament_or_404(db, slug, tid)
+    return [_public_team_draw_out(d, t) for d in sorted(t.team_draws, key=lambda d: d.seq, reverse=True)]
 
 
 # ── PUBLIC: sự kiện thành tích cá nhân (Mini game) — hiển thị khi status != draft ──
@@ -2806,6 +2827,9 @@ def update_tournament(
         raise HTTPException(400, "Giải đồng đội không dùng thể thức cá nhân")
     if new_tt != t.team_type and (t.participants or t.team_players):
         raise HTTPException(400, "Đã có đội/người chơi trong giải — xoá hết trước khi đổi loại giải")
+    if t.team_type == "team" and _open_team_draw(t) is not None and (
+            new_status_requested := updates.get("status")) is not None and new_status_requested != t.status:
+        raise HTTPException(400, TEAM_DRAW_OPEN_MSG)
     if new_tt == "team" and "team_rules" not in updates and not t.team_rules:
         updates["team_rules"] = normalize_team_rules(None)
     if new_tt != "team" and t.team_type == "team":
@@ -3687,6 +3711,59 @@ def _gender_map(db: Session, t: "models.Tournament") -> dict:
     return {tp.id: tp.gender_snapshot for tp in _team_players(db, t)}
 
 
+# ── Vòng quay PHÂN VĐV VÀO ĐỘI (team draw) ──────────────────────────────────
+TEAM_DRAW_OPEN_MSG = "Đang có phiên phân đội bằng vòng quay chưa kết thúc — chốt hoặc huỷ phiên trước"
+
+
+def _open_team_draw(t: "models.Tournament"):
+    for d in t.team_draws:
+        if d.status == "open":
+            return d
+    return None
+
+
+def _require_no_open_team_draw(t: "models.Tournament") -> None:
+    """Khi phiên phân đội đang mở, mọi thay đổi tay lên đội/VĐV bị khoá (pool & đội đã snapshot cho khán giả)."""
+    if _open_team_draw(t) is not None:
+        raise HTTPException(400, TEAM_DRAW_OPEN_MSG)
+
+
+def _team_draw_steps_dicts(draw: "models.TournamentTeamDraw") -> list:
+    return [{"tpid": st.tpid, "team_pid": st.team_pid} for st in sorted(draw.steps, key=lambda x: x.step_index)]
+
+
+def _team_draw_out(draw: "models.TournamentTeamDraw", t: "models.Tournament") -> dict:
+    """Dựng dict phiên phân đội dùng chung admin & public (pool chỉ có tpid/tên/giới tính/hạng — không PII).
+    seed_hex chỉ lộ khi phiên đã kết thúc; next_step = ô kế tiếp khi còn mở và chưa hết lượt."""
+    steps = sorted(draw.steps, key=lambda x: x.step_index)
+    team_ids = [x["pid"] for x in (draw.teams_json or [])]
+    ctx = team_draw_step_context(list(draw.pool_json or []), team_ids, list(draw.rules_json or []),
+                                 _team_draw_steps_dicts(draw))
+    return {
+        "id": draw.id, "tournament_id": draw.tournament_id, "seq": draw.seq, "status": draw.status,
+        "total_steps": draw.total_steps, "done_steps": len(steps), "finished": ctx is None, "reveal_ms": draw.reveal_ms,
+        "pool": list(draw.pool_json or []), "teams": list(draw.teams_json or []),
+        "rules": list(draw.rules_json or []), "plan": dict(draw.plan_json or {}),
+        "next_step": ctx if (draw.status == "open" and ctx is not None) else None,
+        "steps": [{
+            "step_index": st.step_index, "tpid": st.tpid, "team_pid": st.team_pid, "round_index": st.round_index,
+            "pass_index": st.pass_index, "pick_index": st.pick_index, "auto": bool(st.auto),
+            "eligible_tpids": list(st.eligible_json or []), "spun_at": st.spun_at, "spun_at_ms": st.spun_at_ms,
+        } for st in steps],
+        "seed_commit": draw.seed_commit,
+        "seed_hex": draw.seed_hex if draw.status != "open" else None,
+        "created_by": draw.created_by, "created_at": draw.created_at, "committed_at": draw.committed_at,
+        "cancelled_at": draw.cancelled_at, "cancel_reason": draw.cancel_reason,
+        "server_now_ms": int(time.time() * 1000),
+    }
+
+
+def _public_team_draw_out(draw: "models.TournamentTeamDraw", t: "models.Tournament") -> dict:
+    out = _team_draw_out(draw, t)
+    out.pop("created_by", None)
+    return out
+
+
 def _first_leg_rounds(db: Session, t: "models.Tournament") -> int:
     rounds = [r[0] for r in db.query(models.TournamentMatch.round_number).filter(
         models.TournamentMatch.tournament_id == t.id, models.TournamentMatch.phase == "group").distinct().all()]
@@ -3929,6 +4006,7 @@ def create_team(tid: int, data: schemas.TeamCreate, db: Session = Depends(get_db
     perms.require_edit()
     t = _get_club_tournament(db, tid, perms)
     _require_team_tournament(t)
+    _require_no_open_team_draw(t)
     if t.status != models.TournamentStatus.draft:
         raise HTTPException(400, "Chỉ thêm đội khi giải còn Nháp")
     name = data.team_name.strip()
@@ -3964,6 +4042,7 @@ def add_team_players(tid: int, pid: int, data: schemas.TeamPlayersBulkIn, db: Se
     perms.require_edit()
     t = _get_club_tournament(db, tid, perms)
     _require_team_tournament(t)
+    _require_no_open_team_draw(t)
     if t.status == models.TournamentStatus.completed:
         raise HTTPException(400, "Giải đã kết thúc")
     p = _get_team(db, t, pid)
@@ -3992,6 +4071,7 @@ def add_tournament_team_players(tid: int, data: schemas.TeamPlayersBulkIn, db: S
     perms.require_edit()
     t = _get_club_tournament(db, tid, perms)
     _require_team_tournament(t)
+    _require_no_open_team_draw(t)
     if t.status == models.TournamentStatus.completed:
         raise HTTPException(400, "Giải đã kết thúc")
     target = None
@@ -4018,6 +4098,7 @@ def patch_tournament_team_player(tid: int, tpid: int, data: schemas.TeamPlayerPa
         raise HTTPException(400, "Giải đã kết thúc")
     tp = _get_team_player(db, t, tpid)
     if "participant_id" in data.model_fields_set and data.participant_id != tp.participant_id:
+        _require_no_open_team_draw(t)
         if data.participant_id is not None:
             target = _get_team(db, t, data.participant_id)
             if target.status == models.ParticipantStatus.withdrawn:
@@ -4036,6 +4117,7 @@ def delete_tournament_team_player(tid: int, tpid: int, db: Session = Depends(get
     perms.require_edit()
     t = _get_club_tournament(db, tid, perms)
     _require_team_tournament(t)
+    _require_no_open_team_draw(t)
     if t.status == models.TournamentStatus.completed:
         raise HTTPException(400, "Giải đã kết thúc")
     tp = _get_team_player(db, t, tpid)
@@ -4050,6 +4132,7 @@ def create_teams_bulk(tid: int, data: schemas.TeamBulkCreateIn, db: Session = De
     perms.require_edit()
     t = _get_club_tournament(db, tid, perms)
     _require_team_tournament(t)
+    _require_no_open_team_draw(t)
     if t.status != models.TournamentStatus.draft:
         raise HTTPException(400, "Chỉ thêm đội khi giải còn Nháp")
     prefix = (data.prefix or "Đội").strip() or "Đội"
@@ -4069,6 +4152,156 @@ def create_teams_bulk(tid: int, data: schemas.TeamBulkCreateIn, db: Session = De
     for p in created:
         db.refresh(p)
     return [_team_out(db, t, p) for p in created]
+
+
+@app.get("/api/tournaments/{tid}/team-draw")
+def get_team_draw(tid: int, db: Session = Depends(get_db), perms: ClubPermissions = Depends(get_club_permission)):
+    """Phiên phân VĐV vào đội mới nhất (mọi trạng thái) — 404 nếu chưa có."""
+    perms.require_view()
+    t = _get_club_tournament(db, tid, perms)
+    _require_team_tournament(t)
+    d = t.team_draw
+    if d is None:
+        raise HTTPException(404, "Giải đấu chưa có phiên phân đội nào")
+    return _team_draw_out(d, t)
+
+
+@app.get("/api/tournaments/{tid}/team-draws")
+def list_team_draws(tid: int, db: Session = Depends(get_db), perms: ClubPermissions = Depends(get_club_permission)):
+    perms.require_view()
+    t = _get_club_tournament(db, tid, perms)
+    _require_team_tournament(t)
+    return [_team_draw_out(d, t) for d in sorted(t.team_draws, key=lambda d: d.seq, reverse=True)]
+
+
+@app.post("/api/tournaments/{tid}/team-draw", status_code=201)
+def open_team_draw(tid: int, data: schemas.TeamDrawOpenIn, db: Session = Depends(get_db),
+                   perms: ClubPermissions = Depends(get_club_permission)):
+    """Mở phiên phân đội: snapshot VĐV chưa phân đội (tpid/tên/giới tính/hạng) + đội đang hoạt động (theo seed),
+    chuẩn hoá luật (tự thêm vòng "còn lại chia đều"), lập kế hoạch, sinh seed bí mật và công bố seed_commit."""
+    perms.require_edit()
+    t = _get_club_tournament(db, tid, perms)
+    _require_team_tournament(t)
+    if t.status != models.TournamentStatus.draft:
+        raise HTTPException(400, "Phân đội bằng vòng quay chỉ thực hiện khi giải ở trạng thái Nháp")
+    if _open_team_draw(t) is not None:
+        raise HTTPException(409, "Đang có phiên phân đội chưa kết thúc")
+    pool = _team_pool(db, t)
+    if not pool:
+        raise HTTPException(400, "Không còn VĐV nào chưa phân đội")
+    teams = sorted((p for p in t.participants if p.status != models.ParticipantStatus.withdrawn),
+                   key=lambda x: (x.seed or 0, x.id))
+    if len(teams) < 2:
+        raise HTTPException(400, "Cần ít nhất 2 đội để phân VĐV")
+    rules = normalize_team_draw_rules([r.model_dump() for r in data.rules])
+    people = [{"tpid": tp.id, "name": tp.display_name, "gender": tp.gender_snapshot, "rank": normalize_rank(tp.rank_snapshot)}
+              for tp in pool]
+    team_ids = [p.id for p in teams]
+    plan = team_draw_plan(people, team_ids, rules)
+    seed_hex = secrets.token_hex(16)
+    d = models.TournamentTeamDraw(
+        tournament_id=t.id, seq=(max((x.seq for x in t.team_draws), default=0) + 1), status="open",
+        seed_hex=seed_hex, seed_commit=hashlib.sha256(seed_hex.encode()).hexdigest(),
+        pool_json=people, teams_json=[{"pid": p.id, "name": p.team_name or f"Đội {p.id}"} for p in teams],
+        rules_json=rules, plan_json=plan, total_steps=plan["total_steps"], reveal_ms=data.reveal_ms,
+        created_by=_perm_actor_name(db, perms), created_at=_now_vn(),
+    )
+    db.add(d)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "Đang có phiên phân đội chưa kết thúc")
+    db.refresh(d); db.refresh(t)
+    return _team_draw_out(d, t)
+
+
+@app.post("/api/tournaments/{tid}/team-draw/spin")
+def spin_team_draw(tid: int, data: schemas.TeamDrawSpinIn, db: Session = Depends(get_db),
+                   perms: ClubPermissions = Depends(get_club_permission)):
+    """Quay một lượt: ô kế tiếp do replay tất định quyết định (vòng → pass rắn → đội), người trúng =
+    eligible[SHA256("{seed}:{k}") mod |eligible|]. expected_step chống bấm trùng."""
+    perms.require_edit()
+    t = _get_club_tournament(db, tid, perms)
+    d = t.team_draw
+    if d is None or d.status != "open":
+        raise HTTPException(409, "Không có phiên phân đội đang mở")
+    done = len(d.steps)
+    team_ids = [x["pid"] for x in (d.teams_json or [])]
+    ctx = team_draw_step_context(list(d.pool_json or []), team_ids, list(d.rules_json or []), _team_draw_steps_dicts(d))
+    if ctx is None:
+        raise HTTPException(409, "Đã hết lượt — bấm 'Chốt & phân đội'")
+    if data.expected_step != done:
+        raise HTTPException(409, "Lượt bốc không khớp — tải lại phiên")
+    eligible = ctx["eligible_tpids"]
+    idx = draw_pick_index(d.seed_hex, done, len(eligible))
+    st = models.TournamentTeamDrawStep(
+        draw_id=d.id, step_index=done, tpid=eligible[idx], team_pid=ctx["team_pid"], round_index=ctx["round_index"],
+        pass_index=ctx["pass_index"], pick_index=idx, auto=(len(eligible) == 1), eligible_json=list(eligible),
+        spun_at=_now_vn(), spun_at_ms=int(time.time() * 1000),
+    )
+    db.add(st)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "Lượt này đã được quay (bấm trùng)")
+    db.refresh(d); db.refresh(t)
+    return _team_draw_out(d, t)
+
+
+@app.post("/api/tournaments/{tid}/team-draw/commit", response_model=schemas.TournamentOut)
+def commit_team_draw(tid: int, db: Session = Depends(get_db), perms: ClubPermissions = Depends(get_club_permission)):
+    """Chốt phiên: gán từng VĐV vào đội theo lượt đã quay. Pool/đội phải còn đúng như lúc mở (các thao tác tay
+    đã bị khoá khi phiên mở, nhưng vẫn kiểm tra lại). Sau chốt seed_hex được công khai."""
+    perms.require_edit()
+    t = _get_club_tournament(db, tid, perms)
+    d = t.team_draw
+    if d is None or d.status != "open":
+        raise HTTPException(409, "Không có phiên phân đội đang mở")
+    if t.status != models.TournamentStatus.draft:
+        raise HTTPException(400, "Phân đội bằng vòng quay chỉ thực hiện khi giải ở trạng thái Nháp")
+    team_ids = [x["pid"] for x in (d.teams_json or [])]
+    if not team_draw_finished(list(d.pool_json or []), team_ids, list(d.rules_json or []), _team_draw_steps_dicts(d)):
+        raise HTTPException(409, "Chưa hết lượt — còn VĐV chưa được phân")
+    steps = sorted(d.steps, key=lambda x: x.step_index)
+    if not steps:
+        raise HTTPException(409, "Phiên chưa quay lượt nào")
+    by_id = {tp.id: tp for tp in _team_players(db, t)}
+    for x in (d.pool_json or []):
+        tp = by_id.get(x["tpid"])
+        if tp is None or tp.participant_id is not None:
+            raise HTTPException(409, "Danh sách VĐV đã thay đổi trong lúc phân đội — huỷ phiên và mở lại")
+    parts = {p.id: p for p in t.participants if p.status != models.ParticipantStatus.withdrawn}
+    if any(pid not in parts for pid in team_ids):
+        raise HTTPException(409, "Danh sách đội đã thay đổi trong lúc phân đội — huỷ phiên và mở lại")
+    for st in steps:
+        by_id[st.tpid].participant_id = st.team_pid
+    now = _now_vn()
+    for x in t.team_draws:
+        if x.status == "committed" and x.id != d.id:
+            x.status = "superseded"
+    d.status = "committed"
+    d.committed_at = now
+    _team_log(db, t, "team_draw", f"Chốt phân đội bằng vòng quay #{d.seq}: {len(steps)} VĐV", _perm_actor_name(db, perms))
+    db.commit(); db.refresh(t)
+    return t
+
+
+@app.post("/api/tournaments/{tid}/team-draw/cancel")
+def cancel_team_draw(tid: int, data: schemas.TeamDrawCancelIn, db: Session = Depends(get_db),
+                     perms: ClubPermissions = Depends(get_club_permission)):
+    """Huỷ phiên đang mở (không undo từng lượt). Phiên huỷ vẫn giữ trong lịch sử kèm seed."""
+    perms.require_edit()
+    t = _get_club_tournament(db, tid, perms)
+    d = t.team_draw
+    if d is None or d.status != "open":
+        raise HTTPException(409, "Không có phiên phân đội đang mở")
+    d.status = "cancelled"
+    d.cancelled_at = _now_vn()
+    d.cancel_reason = data.reason
+    db.commit(); db.refresh(d); db.refresh(t)
+    return _team_draw_out(d, t)
 
 
 def _apply_team_player_patch(db: Session, t: "models.Tournament", tp: "models.TournamentTeamPlayer",
@@ -4107,6 +4340,7 @@ def remove_team_player(tid: int, pid: int, tpid: int, db: Session = Depends(get_
     perms.require_edit()
     t = _get_club_tournament(db, tid, perms)
     _require_team_tournament(t)
+    _require_no_open_team_draw(t)
     tp = _get_team_player(db, t, tpid, participant_id=pid)
     if t.status == models.TournamentStatus.completed:
         raise HTTPException(400, "Giải đã kết thúc")
@@ -4120,6 +4354,7 @@ def delete_team(tid: int, pid: int, db: Session = Depends(get_db), perms: ClubPe
     perms.require_edit()
     t = _get_club_tournament(db, tid, perms)
     _require_team_tournament(t)
+    _require_no_open_team_draw(t)
     if t.status != models.TournamentStatus.draft:
         raise HTTPException(400, "Chỉ xoá đội khi giải còn Nháp")
     p = _get_team(db, t, pid)

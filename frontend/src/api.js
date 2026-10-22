@@ -173,6 +173,15 @@ export const tournamentsApi = {
     removePlayer: (tid, pid, tpid) => api.delete(`/api/tournaments/${tid}/teams/${pid}/players/${tpid}`),   // gỡ về danh sách VĐV tham dự (không rời giải)
     bulkCreate: (tid, data) => api.post(`/api/tournaments/${tid}/teams/bulk`, data),       // {count, prefix?} → TeamOut[] (Nháp)
   },
+  // Vòng quay PHÂN VĐV VÀO ĐỘI (giải đồng đội, Nháp): luật theo vòng {ranks, genders, per_team}, seed commit–reveal
+  teamDraw: {
+    get: (tid) => api.get(`/api/tournaments/${tid}/team-draw`),
+    history: (tid) => api.get(`/api/tournaments/${tid}/team-draws`),
+    open: (tid, data) => api.post(`/api/tournaments/${tid}/team-draw`, data),          // {rules, reveal_ms}
+    spin: (tid, expectedStep) => api.post(`/api/tournaments/${tid}/team-draw/spin`, { expected_step: expectedStep }),
+    commit: (tid) => api.post(`/api/tournaments/${tid}/team-draw/commit`),             // → TournamentOut
+    cancel: (tid, reason) => api.post(`/api/tournaments/${tid}/team-draw/cancel`, { reason }),
+  },
   // VĐV tham dự cấp giải (giải đồng đội, 2026-10-22): participant_id null = chưa phân đội
   teamPlayers: {
     list: (tid) => api.get(`/api/tournaments/${tid}/team-players`),                          // → TeamPlayerOut[] (mọi VĐV)
@@ -258,6 +267,9 @@ export const createPublicReportApi = (slug) => {
       // Giải đồng đội: danh sách đội + VĐV (không PII) và biên bản một trận đồng đội (poll như trận thường)
       teams: (tid) => pub.get(`${base}/tournaments/${tid}/teams`),
       tie: (tid, mid) => pub.get(`${base}/tournaments/${tid}/matches/${mid}/tie`),
+      // Phân VĐV vào đội bằng vòng quay: public theo dõi trực tiếp (poll 2s) + lịch sử phiên
+      teamDraw: (tid) => pub.get(`${base}/tournaments/${tid}/team-draw`),
+      teamDrawHistory: (tid) => pub.get(`${base}/tournaments/${tid}/team-draws`),
     },
     // Sự kiện thành tích cá nhân: chỉ hiện khi status != draft; `state` poll 3s (bucket rate-limit riêng)
     // Mỗi request có timeout 10s để vòng poll public không kẹt khi mạng treo

@@ -1180,3 +1180,136 @@ def draw_rubber_order(seed_hex: str, n: int) -> List[int]:
         idx = draw_pick_index(seed_hex, k, len(remaining))
         order.append(remaining.pop(idx))
     return order   # order[i] = chỉ số mẫu (0-based) được xếp ở vị trí i
+
+
+# ── VÒNG QUAY PHÂN VĐV VÀO ĐỘI (team draw — giải đồng đội, 2026-10-22) — hàm thuần, không I/O ──
+# Luật = các "vòng" theo thứ tự: {ranks (rỗng = mọi hạng), genders (rỗng = mọi giới), per_team (None = chia đều hết)}.
+# Vòng cuối "còn lại chia đều" (không tiêu chí, không trần) luôn được thêm nếu người dùng chưa đặt.
+# Thứ tự đội nhận: kiểu RẮN — mỗi lượt đi qua tất cả đội (pass), lượt kế đảo chiều (người dùng chọn 3A).
+# Nhóm không chia hết: chia tới hết, đội cuối theo thứ tự nhận ít hơn (4A). Replay tất định như partner draw.
+
+TEAM_DRAW_GENDERS = ("male", "female")
+
+
+def normalize_team_draw_rules(rules) -> List[Dict]:
+    """Chuẩn hoá luật: [{"ranks": [...], "genders": [...], "per_team": int|None}]; bỏ phần tử rỗng/None;
+    per_team < 1 → None. Luôn kết thúc bằng vòng "còn lại chia đều" ({ranks: [], genders: [], per_team: None})."""
+    out: List[Dict] = []
+    for rule in (rules or []):
+        if rule is None:
+            continue
+        if not isinstance(rule, dict):
+            rule = dict(rule)
+        ranks: List[str] = []
+        for r in (rule.get("ranks") or []):
+            if r is None or not str(r).strip():
+                continue
+            nr = normalize_rank(r)
+            if nr not in ranks:
+                ranks.append(nr)
+        genders = [g for g in (rule.get("genders") or []) if g in TEAM_DRAW_GENDERS]
+        genders = list(dict.fromkeys(genders))
+        if len(genders) == len(TEAM_DRAW_GENDERS):
+            genders = []                              # chọn cả Nam lẫn Nữ = không lọc
+        per_team = rule.get("per_team")
+        try:
+            per_team = int(per_team) if per_team is not None else None
+        except (TypeError, ValueError):
+            per_team = None
+        if per_team is not None and per_team < 1:
+            per_team = None
+        out.append({"ranks": ranks, "genders": genders, "per_team": per_team})
+    if not out or out[-1]["ranks"] or out[-1]["genders"] or out[-1]["per_team"] is not None:
+        out.append({"ranks": [], "genders": [], "per_team": None})
+    return out
+
+
+def team_draw_person_matches(rule: Dict, person: Dict) -> bool:
+    if rule.get("ranks") and normalize_rank(person.get("rank")) not in rule["ranks"]:
+        return False
+    if rule.get("genders") and person.get("gender") not in rule["genders"]:
+        return False
+    return True
+
+
+def _team_draw_people(people: List[Dict]) -> List[Dict]:
+    return sorted(({"tpid": int(p["tpid"]), "rank": normalize_rank(p.get("rank")), "gender": p.get("gender")}
+                   for p in people), key=lambda x: x["tpid"])
+
+
+def _team_draw_walk(people: List[Dict], team_ids: List[int], rules, steps: List[Dict], picker=None):
+    """Bộ sinh ô (slot) dùng chung cho replay và ước lượng.
+    - steps: các lượt đã quay [{"tpid", "team_pid", ...}] theo thứ tự; khi hết steps:
+        * picker None → trả ngữ cảnh ô kế tiếp (dict) — đây là team_draw_step_context;
+        * picker(eligible) → tự chọn tiếp (ước lượng kế hoạch), chạy tới hết và trả ("done", counts_per_round).
+    Thuật toán: với từng vòng, lặp các pass; mỗi pass đi qua các đội theo chiều rắn (pass chẵn xuôi, lẻ ngược,
+    bộ đếm pass chung toàn phiên); đội đã đủ trần per_team của vòng bị bỏ qua; ô k có eligible = người còn lại khớp
+    tiêu chí vòng (sắp theo tpid); vòng kết thúc khi không còn ai đủ điều kiện hoặc mọi đội đều chạm trần."""
+    rules = normalize_team_draw_rules(rules)
+    ppl = _team_draw_people(people)
+    teams = [int(t) for t in team_ids]
+    remaining = {p["tpid"]: p for p in ppl}
+    steps = list(steps or [])
+    k = 0
+    pass_no = 0
+    counts = [0] * len(rules)
+    if not teams:
+        return None if picker is None else ("done", counts)
+    for r_i, rule in enumerate(rules):
+        given = {t: 0 for t in teams}
+        while True:
+            order = teams if pass_no % 2 == 0 else list(reversed(teams))
+            picked_any = False
+            exhausted = False
+            for pos, t in enumerate(order):
+                if rule["per_team"] is not None and given[t] >= rule["per_team"]:
+                    continue
+                eligible = [pid for pid, p in remaining.items() if team_draw_person_matches(rule, p)]
+                eligible.sort()
+                if not eligible:
+                    exhausted = True
+                    break
+                if k < len(steps):
+                    chosen = int(steps[k]["tpid"])
+                elif picker is None:
+                    return {"step_index": k, "round_index": r_i, "pass_index": pass_no, "team_pid": t,
+                            "team_pos": pos, "eligible_tpids": eligible}
+                else:
+                    chosen = picker(eligible)
+                remaining.pop(chosen, None)
+                given[t] += 1
+                counts[r_i] += 1
+                k += 1
+                picked_any = True
+            if picked_any:
+                pass_no += 1          # pass không bốc được ai (vòng cạn/đội chạm trần) không đổi chiều rắn
+            if exhausted or not picked_any:
+                break
+        if not remaining:
+            break
+    return None if picker is None else ("done", counts)
+
+
+def team_draw_step_context(people: List[Dict], team_ids: List[int], rules, steps: List[Dict]) -> Optional[Dict]:
+    """Ngữ cảnh ô kế tiếp bằng REPLAY tất định; None = đã hết lượt (mọi người đã có đội hoặc không còn đội)."""
+    return _team_draw_walk(people, team_ids, rules, steps, picker=None)
+
+
+def team_draw_finished(people: List[Dict], team_ids: List[int], rules, steps: List[Dict]) -> bool:
+    return team_draw_step_context(people, team_ids, rules, steps) is None
+
+
+def team_draw_plan(people: List[Dict], team_ids: List[int], rules) -> Dict:
+    """Kế hoạch: số lượt từng vòng (ước lượng bằng cách chọn người tpid nhỏ nhất — chính xác khi vòng không có trần,
+    vì vòng không trần vét hết người khớp tiêu chí bất kể thứ tự bốc). total_steps = tổng số người (vòng cuối
+    không tiêu chí, không trần nên ai cũng được phân)."""
+    rules = normalize_team_draw_rules(rules)
+    ppl = _team_draw_people(people)
+    _, counts = _team_draw_walk(ppl, team_ids, rules, [], picker=lambda e: e[0])
+    return {
+        "rounds": [{"index": i, "ranks": r["ranks"], "genders": r["genders"], "per_team": r["per_team"],
+                    "est_count": counts[i]} for i, r in enumerate(rules)],
+        "total_steps": len(ppl) if team_ids else 0,
+        "team_ids": [int(t) for t in team_ids],
+        "estimated": any(r["per_team"] is not None for r in rules),
+    }
