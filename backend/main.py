@@ -251,6 +251,29 @@ def _purge_orphan_club_rows() -> dict:
 _purge_orphan_club_rows()
 
 
+def _backfill_member_codes() -> int:
+    """Cấp mã TV cho thành viên có member_code NULL/rỗng (nhập Excel trước 2026-10-22 để trống cột mã).
+    Chạy mỗi lần khởi động; theo từng CLB, mã kế tiếp chưa dùng (TV0001...). Trả số dòng đã cấp."""
+    db = SessionLocal()
+    try:
+        rows = db.query(models.Member).filter(
+            or_(models.Member.member_code.is_(None), models.Member.member_code == "")
+        ).order_by(models.Member.club_id, models.Member.id).all()
+        for m in rows:
+            m.member_code = auto_member_code(db, m.club_id)
+            db.flush()
+        db.commit()
+        if rows:
+            print(f"[startup] ✅ Đã cấp mã TV cho {len(rows)} thành viên thiếu mã")
+        return len(rows)
+    except Exception as e:   # noqa: BLE001 — không chặn khởi động
+        db.rollback()
+        print(f"[startup] ⚠️ Không cấp được mã TV thiếu: {e}")
+        return 0
+    finally:
+        db.close()
+
+
 _IS_PRODUCTION = bool(os.environ.get("FLY_APP_NAME") or os.environ.get("APP_ENV") == "production")
 
 app = FastAPI(
@@ -752,6 +775,9 @@ def auto_member_code(db: Session, club_id: int) -> str:
     return f"TV{str(n).zfill(4)}"
 
 
+_backfill_member_codes()   # cần auto_member_code ở trên → gọi tại đây thay vì ngay sau định nghĩa
+
+
 def _member_list_order():
     """Thứ tự hiển thị danh sách thành viên (dùng chung cho API list + xuất Excel):
     Hoạt động → Tạm nghỉ → Đình chỉ, trong cùng trạng thái theo mã TV tăng dần
@@ -1051,9 +1077,12 @@ def import_members_excel(
                 skipped.append({"row": i, "name": full_name, "reason": f"Mã '{member_code}' đã tồn tại"})
                 continue
 
+        # Ô mã TV để trống → tự sinh (như tạo tay); KHÔNG để NULL vì MemberOut/Excel/bot đều coi mã là bắt buộc
+        # (sự cố 2026-10-22: 14 thành viên nhập Excel không mã → GET /api/members 500). flush() ngay sau add để
+        # auto_member_code của dòng kế thấy mã vừa cấp (Session autoflush=False).
         member = models.Member(
             club_id=perms.club_id,
-            member_code=member_code,
+            member_code=member_code or auto_member_code(db, perms.club_id),
             full_name=full_name,
             dob=dob,
             phone=phone,
@@ -1066,6 +1095,7 @@ def import_members_excel(
             gender=gender,
         )
         db.add(member)
+        db.flush()
         imported.append({"row": i, "name": full_name})
 
     db.commit()

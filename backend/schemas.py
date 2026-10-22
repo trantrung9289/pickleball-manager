@@ -182,7 +182,7 @@ class MemberUpdate(BaseModel):
 
 class MemberOut(MemberBase):
     id: int
-    member_code: str
+    member_code: Optional[str] = None   # luôn có sau _backfill_member_codes; Optional để một dòng lỗi không làm cả danh sách 500
     created_at: Optional[datetime] = None
 
     class Config:
