@@ -228,6 +228,10 @@ class Tournament(Base):
                          order_by="TournamentDraw.seq", lazy="selectin")
     partner_draws = relationship("TournamentPartnerDraw", back_populates="tournament", cascade="all, delete-orphan",
                                  order_by="TournamentPartnerDraw.seq", lazy="selectin")
+    # Giải đồng đội: MỌI VĐV đã đăng ký (participant_id NULL = "VĐV tham dự" chưa phân đội — đợt 2026-10-22).
+    # selectin để TournamentOut/PublicTournamentOut tra tên VĐV cho trận thành phần mà không N+1.
+    team_players = relationship("TournamentTeamPlayer", back_populates="tournament", cascade="all, delete-orphan",
+                                order_by="TournamentTeamPlayer.id", lazy="selectin")
 
     @property
     def has_score_pin(self) -> bool:
@@ -250,6 +254,13 @@ class Tournament(Base):
             return 0
         return sum(1 for p in self.participants
                    if p.partner_member_id is None and p.partner_player_id is None)
+
+    @property
+    def team_pool_count(self) -> int:
+        """Giải đồng đội: số VĐV đã đăng ký nhưng chưa phân vào đội (không thi đấu nếu giải bắt đầu)."""
+        if self.team_type != "team":
+            return 0
+        return sum(1 for tp in self.team_players if tp.participant_id is None)
 
 
 class TournamentParticipant(Base):
@@ -584,14 +595,17 @@ class TournamentTeamPlayer(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     tournament_id = Column(Integer, ForeignKey("tournaments.id", ondelete="CASCADE"), nullable=False, index=True)
-    participant_id = Column(Integer, ForeignKey("tournament_participants.id", ondelete="CASCADE"), nullable=False, index=True)
+    # NULL = "VĐV tham dự" chưa phân đội (pool chung của giải); bảng được dựng lại ở _migrate_team_players_pool
+    participant_id = Column(Integer, ForeignKey("tournament_participants.id", ondelete="CASCADE"), nullable=True, index=True)
     member_id = Column(Integer, ForeignKey("members.id"), nullable=True, index=True)
     player_id = Column(Integer, ForeignKey("players.id"), nullable=True, index=True)
     display_name = Column(String(200), nullable=False)      # snapshot tên lúc thêm
     gender_snapshot = Column(String(10), nullable=True)     # male | female | other | NULL (chưa khai)
+    rank_snapshot = Column(String(50), nullable=True)       # hạng lúc thêm (member.rank / player.rank), sửa được tại giải
     is_captain = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, nullable=True)
 
+    tournament = relationship("Tournament", back_populates="team_players")
     participant = relationship("TournamentParticipant")
     member = relationship("Member")
     player = relationship("Player")

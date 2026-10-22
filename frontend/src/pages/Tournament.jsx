@@ -4,7 +4,7 @@ import {
   Button, Space, Tag, Modal, Form, Input, Select,
   message, Typography, Row, Col, Card, Steps,
   InputNumber, Tabs, Badge, Statistic, Empty,
-  Divider, Alert, Checkbox, Collapse, AutoComplete, Switch, Tooltip,
+  Divider, Alert, Checkbox, Collapse, AutoComplete, Switch, Tooltip, Popover,
 } from "antd";
 import {
   PlusOutlined, ThunderboltOutlined, TrophyOutlined,
@@ -25,12 +25,13 @@ import TeamRulesEditor from "../components/team/TeamRulesEditor";
 import TeamRosterPanel from "../components/team/TeamRosterPanel";
 import TieSheetModal from "../components/team/TieSheetModal";
 import TeamLogsModal from "../components/team/TeamLogsModal";
+import TieRubbersInline from "../components/team/TieRubbersInline";
 import { useViewMode } from "../contexts/ViewModeContext";
 import { useAuth } from "../context/AuthContext";
 import { useRankLevels } from "../hooks/useRankLevels";
 import { buildRealBracketNodes, computeBracketGeometry, findThirdPlaceMatch } from "../utils/bracketLayout";
 import { teamLabel, teamRank } from "../utils/tournamentLabels";
-import { TEAM_TYPE_LABELS, defaultTeamRules, normalizeTeamRules, tieScoreLabel } from "../utils/teamFormat";
+import { TEAM_TYPE_LABELS, defaultTeamRules, normalizeTeamRules, tieScoreLabel, indexTeamPlayers } from "../utils/teamFormat";
 import {
   DRAW_FORMATS, serverOffset, normalizeRank, UNRANKED, partnerPlan, normalizePartnerRules, ranksLabel,
 } from "../utils/drawMath";
@@ -336,7 +337,7 @@ function CreateWizard({ onCreated, onClose }) {
         ...(isTeam ? { team_rules: rulesPayload } : {}),
       };
       const res = await tournamentsApi.create(payload);
-      message.success(isTeam ? "Đã tạo giải đồng đội — tạo đội và thêm VĐV ngay trên trang giải" : "Đã tạo giải đấu — thêm người chơi ngay trên trang giải");
+      message.success(isTeam ? "Đã tạo giải đồng đội — thêm VĐV tham dự, tạo đội và phân VĐV ngay trên trang giải" : "Đã tạo giải đấu — thêm người chơi ngay trên trang giải");
       onCreated(res.data);
     } catch (err) {
       message.error(err?.response?.data?.detail || "Không thể tạo giải đấu");
@@ -463,7 +464,7 @@ function CreateWizard({ onCreated, onClose }) {
           <Alert
             type="info" showIcon
             message={isTeam
-              ? "Sau khi tạo, tạo từng đội và thêm VĐV (thành viên / khách mời) ngay trên trang giải — tab Đội."
+              ? "Sau khi tạo: (1) thêm toàn bộ VĐV tham dự, (2) tạo đội, (3) phân VĐV vào đội — ngay trên trang giải, khung Đội."
               : "Sau khi tạo, thêm người chơi và (giải đôi) ghép đội ngay trên trang giải."}
             description={isTeam
               ? "Mỗi đội đăng ký đội hình theo giai đoạn; thứ tự các trận thành phần được bốc thăm ở từng trận đồng đội. Giải ở trạng thái Nháp cho tới khi bấm 'Bắt đầu giải'."
@@ -654,7 +655,8 @@ function ScoreModal({ match, tournament, onSaved, onClose }) {
 }
 
 // ── Bracket knockout ─────────────────────────────────────
-function KnockoutBracket({ matches, onScoreClick }) {
+// renderDetail (giải đồng đội): match → chi tiết trận thành phần — popover trên ô nhánh (desktop), inline trong thẻ (mobile)
+function KnockoutBracket({ matches, onScoreClick, renderDetail }) {
   const { isMobileView } = useViewMode();
   // Trận "Tranh giải 3" đi theo đường thua (loser_next_match_id), không phải cây thắng chính —
   // tách riêng để không lẫn vào cùng cột với Chung kết (cả hai có cùng round_number).
@@ -678,7 +680,7 @@ function KnockoutBracket({ matches, onScoreClick }) {
               label: <Text strong style={{ color: "#1677ff" }}>{rName} ({done}/{rMatches.length})</Text>,
               children: (
                 <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                  {rMatches.map(m => <BracketCard key={m.id} match={m} onScoreClick={onScoreClick} />)}
+                  {rMatches.map(m => <BracketCard key={m.id} match={m} onScoreClick={onScoreClick} renderDetail={renderDetail} />)}
                 </div>
               ),
             };
@@ -686,7 +688,7 @@ function KnockoutBracket({ matches, onScoreClick }) {
         />
         {thirdPlace && (
           <Card size="small" style={{ marginTop: 12 }} title={<Text strong style={{ color: "#d48806" }}>Tranh giải 3</Text>}>
-            <BracketCard match={thirdPlace} onScoreClick={onScoreClick} />
+            <BracketCard match={thirdPlace} onScoreClick={onScoreClick} renderDetail={renderDetail} />
           </Card>
         )}
       </>
@@ -694,7 +696,18 @@ function KnockoutBracket({ matches, onScoreClick }) {
   }
 
   // Desktop: sơ đồ nhánh thật với đường nối giữa các vòng
-  return <BracketTreeDesktop matches={matches} onScoreClick={onScoreClick} />;
+  return <BracketTreeDesktop matches={matches} onScoreClick={onScoreClick} renderDetail={renderDetail} />;
+}
+
+/** Bọc ô nhánh bằng Popover chi tiết trận thành phần (chỉ khi có renderDetail và trận đủ 2 đội). */
+function DetailPopover({ match, renderDetail, children }) {
+  if (!renderDetail || !match?.p1_id || !match?.p2_id) return children;
+  return (
+    <Popover content={<div style={{ maxWidth: 560 }}>{renderDetail(match)}</div>} placement="right" mouseEnterDelay={0.25}
+      title={<span style={{ fontSize: 12 }}>{teamLabel(match.p1)} vs {teamLabel(match.p2)}</span>}>
+      {children}
+    </Popover>
+  );
 }
 
 // ── Sơ đồ nhánh trên màn hình — cùng logic hình học với bảng in (bracketLayout.js),
@@ -751,7 +764,7 @@ function TreeSlot({ label, rank, score, scored, isWalkover, isWinner, isPending,
   );
 }
 
-function ThirdPlaceTreeBox({ info, onScoreClick }) {
+function ThirdPlaceTreeBox({ info, onScoreClick, renderDetail }) {
   const { match: m, feeders } = info;
   const nameFor = (side) => {
     const pid = side === 1 ? m.p1_id : m.p2_id;
@@ -762,19 +775,21 @@ function ThirdPlaceTreeBox({ info, onScoreClick }) {
   const scored = m.status === "completed" && m.score1 != null;
   const clickable = !!onScoreClick && !!m.p1_id && !!m.p2_id;
   return (
-    <div
-      onClick={clickable ? () => onScoreClick(m) : undefined}
-      style={{ border: "1.5px solid #ffe58f", borderRadius: 8, background: "#fff", cursor: clickable ? "pointer" : "default" }}
-    >
-      <TreeSlot label={nameFor(1)} rank={teamRank(m.p1)} score={m.score1} scored={scored}
-        isWalkover={m.is_walkover} isWinner={scored && m.winner_id === m.p1_id} isPending={!m.p1_id} />
-      <TreeSlot label={nameFor(2)} rank={teamRank(m.p2)} score={m.score2} scored={scored}
-        isWalkover={m.is_walkover} isWinner={scored && m.winner_id === m.p2_id} isPending={!m.p2_id} last />
-    </div>
+    <DetailPopover match={m} renderDetail={renderDetail}>
+      <div
+        onClick={clickable ? () => onScoreClick(m) : undefined}
+        style={{ border: "1.5px solid #ffe58f", borderRadius: 8, background: "#fff", cursor: clickable ? "pointer" : "default" }}
+      >
+        <TreeSlot label={nameFor(1)} rank={teamRank(m.p1)} score={m.score1} scored={scored}
+          isWalkover={m.is_walkover} isWinner={scored && m.winner_id === m.p1_id} isPending={!m.p1_id} />
+        <TreeSlot label={nameFor(2)} rank={teamRank(m.p2)} score={m.score2} scored={scored}
+          isWalkover={m.is_walkover} isWinner={scored && m.winner_id === m.p2_id} isPending={!m.p2_id} last />
+      </div>
+    </DetailPopover>
   );
 }
 
-function BracketTreeDesktop({ matches, onScoreClick }) {
+function BracketTreeDesktop({ matches, onScoreClick, renderDetail }) {
   const roundsNodes = buildRealBracketNodes(matches);
   if (!roundsNodes.length) return null;
   const thirdPlaceInfo = findThirdPlaceMatch(matches);
@@ -848,22 +863,23 @@ function BracketTreeDesktop({ matches, onScoreClick }) {
             }
             const clickable = !!onScoreClick && !!m.p1_id && !!m.p2_id;
             return (
-              <div
-                key={node.id}
-                onClick={clickable ? () => onScoreClick(m) : undefined}
-                style={{
-                  position: "absolute", left: x, top: y, width: TREE_BOX_W,
-                  border: `1.5px solid ${m.status === "completed" ? "#b7eb8f" : "#d9d9d9"}`,
-                  borderRadius: 8, background: "#fff", boxShadow: "0 1px 2px rgba(0,0,0,.04)",
-                  cursor: clickable ? "pointer" : "default",
-                }}
-              >
-                <Text style={{ position: "absolute", right: 8, top: -18, fontSize: 10.5, color: "#aaa" }}>#{m.match_number}</Text>
-                <TreeSlot label={c.top} rank={teamRank(m.p1)} score={m.score1} scored={c.scored}
-                  isWalkover={m.is_walkover} isWinner={c.scored && m.winner_id === m.p1_id} isPending={!m.p1_id} />
-                <TreeSlot label={c.bottom} rank={teamRank(m.p2)} score={m.score2} scored={c.scored}
-                  isWalkover={m.is_walkover} isWinner={c.scored && m.winner_id === m.p2_id} isPending={!m.p2_id} last />
-              </div>
+              <DetailPopover key={node.id} match={m} renderDetail={renderDetail}>
+                <div
+                  onClick={clickable ? () => onScoreClick(m) : undefined}
+                  style={{
+                    position: "absolute", left: x, top: y, width: TREE_BOX_W,
+                    border: `1.5px solid ${m.status === "completed" ? "#b7eb8f" : "#d9d9d9"}`,
+                    borderRadius: 8, background: "#fff", boxShadow: "0 1px 2px rgba(0,0,0,.04)",
+                    cursor: clickable ? "pointer" : "default",
+                  }}
+                >
+                  <Text style={{ position: "absolute", right: 8, top: -18, fontSize: 10.5, color: "#aaa" }}>#{m.match_number}</Text>
+                  <TreeSlot label={c.top} rank={teamRank(m.p1)} score={m.score1} scored={c.scored}
+                    isWalkover={m.is_walkover} isWinner={c.scored && m.winner_id === m.p1_id} isPending={!m.p1_id} />
+                  <TreeSlot label={c.bottom} rank={teamRank(m.p2)} score={m.score2} scored={c.scored}
+                    isWalkover={m.is_walkover} isWinner={c.scored && m.winner_id === m.p2_id} isPending={!m.p2_id} last />
+                </div>
+              </DetailPopover>
             );
           })
         )}
@@ -872,7 +888,7 @@ function BracketTreeDesktop({ matches, onScoreClick }) {
             <Text strong style={{ display: "block", color: "#d48806", fontSize: 11.5, letterSpacing: ".03em", textTransform: "uppercase", marginBottom: 4 }}>
               Tranh giải 3
             </Text>
-            <ThirdPlaceTreeBox info={thirdPlaceInfo} onScoreClick={onScoreClick} />
+            <ThirdPlaceTreeBox info={thirdPlaceInfo} onScoreClick={onScoreClick} renderDetail={renderDetail} />
           </div>
         )}
         <div style={{
@@ -927,7 +943,7 @@ function RoundedSchedule({ matches, columns, mobileProps }) {
   );
 }
 
-function BracketCard({ match, onScoreClick }) {
+function BracketCard({ match, onScoreClick, renderDetail }) {
   const p1 = teamLabel(match?.p1) || (match?.p1_id ? "?" : "BYE");
   const p2 = teamLabel(match?.p2) || (match?.p2_id ? "?" : "BYE");
   const done = match.status === "completed";
@@ -963,6 +979,11 @@ function BracketCard({ match, onScoreClick }) {
           {cell(match.score2)}
         </Text>
       </div>
+      {renderDetail && match.p1_id && match.p2_id && !match.is_walkover && (
+        <div style={{ marginTop: 8, paddingTop: 6, borderTop: "1px dashed #eee" }} onClick={(e) => e.stopPropagation()}>
+          {renderDetail(match)}
+        </div>
+      )}
     </Card>
   );
 }
@@ -1525,7 +1546,8 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated, autoOpenAdd
     const labels = { active: "Đang diễn ra", completed: "Kết thúc", draft: "Nháp" };
     const messages = {
       active: tournament.team_type === "team"
-        ? "Bắt đầu giải đấu? Sau khi bắt đầu sẽ không thể sửa thể thức, quy tắc hoặc thêm/xoá đội nữa (vẫn bổ sung được VĐV vào đội)."
+        ? `Bắt đầu giải đấu? Sau khi bắt đầu sẽ không thể sửa thể thức, quy tắc hoặc thêm/xoá đội nữa (vẫn bổ sung được VĐV vào đội).${
+          tournament.team_pool_count > 0 ? ` Lưu ý: còn ${tournament.team_pool_count} VĐV tham dự chưa phân đội — họ sẽ không thi đấu cho tới khi được phân vào một đội.` : ""}`
         : "Bắt đầu giải đấu? Sau khi bắt đầu sẽ không thể sửa thể thức hoặc thêm/xóa người chơi nữa.",
       completed: "Kết thúc giải đấu?",
     };
@@ -1850,6 +1872,11 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated, autoOpenAdd
   const isTeam = tournament.team_type === "team";
   // Giải đồng đội: bấm vào trận (lịch / bảng / nhánh) mở biên bản trận thay vì ô nhập tỉ số
   const openMatch = isTeam ? setTieMatch : setScoreMatch;
+  // Giải đồng đội: tên VĐV cho chi tiết trận thành phần (TournamentOut.team_players) + hàm vẽ chi tiết dùng chung lịch/nhánh
+  const playersById = useMemo(() => indexTeamPlayers(tournament.team_players), [tournament.team_players]);
+  const renderTieDetail = isTeam
+    ? (m, compact = false) => <TieRubbersInline match={m} rules={tournament.team_rules} playersById={playersById} compact={compact} />
+    : undefined;
   // Bốc thăm chỉ cho thể thức combined/knockout/individual khi giải đã bắt đầu (vòng tròn: server 400, UI ẩn nút)
   const canDraw = tournament.status === "active" && DRAW_FORMATS.includes(fmt)
     && !(tournament.pairing_mode === "cross_rank" && (tournament.rank_rules || []).length > 0);
@@ -1953,9 +1980,24 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated, autoOpenAdd
       } else {
         score = <Tag style={{ marginLeft: 4 }}>{isTeam ? "–" : "Chưa đấu"}</Tag>;
       }
-      return <span>{p1} vs {p2} {score}</span>;
+      return (
+        <span>
+          {p1} vs {p2} {score}
+          {isTeam && m.p1_id && m.p2_id && !m.is_walkover && (
+            <div style={{ marginTop: 6, fontWeight: 400 }}>{renderTieDetail(m)}</div>
+          )}
+        </span>
+      );
     },
     mobileHideColumns: ["Đội 1", "Tỉ số", "Đội 2", "Kết quả"],
+    // Desktop: giải đồng đội → hàng mở rộng (mặc định mở) hiện các trận thành phần ngay trong lịch vòng bảng / vòng loại
+    ...(isTeam ? {
+      expandable: {
+        expandedRowRender: (m) => renderTieDetail(m),
+        rowExpandable: (m) => !!m.p1_id && !!m.p2_id && !m.is_walkover,
+        defaultExpandAllRows: true,
+      },
+    } : {}),
   };
 
   const tabItems = [];
@@ -2057,7 +2099,7 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated, autoOpenAdd
     tabItems.push({
       key: "bracket",
       label: "Sơ đồ đấu",
-      children: <KnockoutBracket matches={matches} onScoreClick={openMatch} />,
+      children: <KnockoutBracket matches={matches} onScoreClick={openMatch} renderDetail={renderTieDetail && ((m) => renderTieDetail(m, true))} />,
     });
     tabItems.push({
       key: "schedule",
@@ -2114,7 +2156,7 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated, autoOpenAdd
         label: `Vòng loại (${koMatches.filter(m => m.status === "completed").length}/${koMatches.length})`,
         children: (
           <>
-            <KnockoutBracket matches={koMatches} onScoreClick={openMatch} />
+            <KnockoutBracket matches={koMatches} onScoreClick={openMatch} renderDetail={renderTieDetail && ((m) => renderTieDetail(m, true))} />
             <Divider />
             <RoundedSchedule columns={matchTableCols} matches={koMatches} mobileProps={matchTableMobileProps} />
           </>
@@ -2306,7 +2348,7 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated, autoOpenAdd
             description={
               tournament.status === "draft"
                 ? (tournament.participants.length < 2
-                    ? (isTeam ? "Giải đấu chưa bắt đầu. Tạo ít nhất 2 đội (có VĐV) rồi bấm 'Bắt đầu giải'." : "Giải đấu chưa bắt đầu. Thêm ít nhất 2 đội/người chơi rồi bấm 'Bắt đầu giải'.")
+                    ? (isTeam ? "Giải đấu chưa bắt đầu. Thêm VĐV tham dự, tạo ít nhất 2 đội và phân VĐV vào đội rồi bấm 'Bắt đầu giải'." : "Giải đấu chưa bắt đầu. Thêm ít nhất 2 đội/người chơi rồi bấm 'Bắt đầu giải'.")
                     : isDoublesDraft && unpaired > 0
                       ? "Giải đấu chưa bắt đầu. Ghép đội cho người chưa có đội rồi bấm 'Bắt đầu giải'."
                       : "Giải đấu chưa bắt đầu. Kiểm tra cài đặt thể thức rồi bấm 'Bắt đầu giải'.")

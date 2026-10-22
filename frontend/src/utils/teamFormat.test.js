@@ -6,6 +6,7 @@ import {
   autoLabelRubbers, placeholderLabels, normalizeTeamRules, defaultTeamRules, defaultTargetTotal, rubberTarget,
   stagesForFormat, overLimitIds, appearanceCounts, genderIssue, preferredGenders, teamGenderNeeds,
   teamRosterWarnings, tieScoreLabel, playerIndex, rubberStatusLabel, rubberSize, slotIssueText,
+  indexTeamPlayers, matchRubbersForDisplay, rubberScoreView,
 } from "./teamFormat.js";
 
 test("autoLabelRubbers: nhãn trống tự đánh số theo thể thức, bộ đếm tăng cả khi có nhãn tự đặt, trùng nhãn thêm hậu tố", () => {
@@ -133,4 +134,21 @@ test("playerIndex / rubberStatusLabel", () => {
   assert.equal(rubberStatusLabel({ status: "completed", is_walkover: true }, true), "Xử thua");
   assert.equal(rubberStatusLabel({ status: "pending" }, false), "Chưa đấu");
   assert.equal(rubberStatusLabel({ status: "pending" }, true), "Không cần đấu");
+});
+
+test("indexTeamPlayers / matchRubbersForDisplay / rubberScoreView", () => {
+  const idx = indexTeamPlayers([{ id: 3, display_name: "A" }, { id: 5, display_name: "B" }]);
+  assert.equal(idx[5].display_name, "B");
+  const rules = normalizeTeamRules({ rubbers: [{ code: "MD" }, { code: "WS" }] });
+  const tpl = matchRubbersForDisplay({ rubbers: [] }, rules);
+  assert.equal(tpl.template, true);
+  assert.deepEqual(tpl.rubbers.map((r) => r.label), ["Đôi Nam 1", "Đơn Nữ 1"]);
+  const real = matchRubbersForDisplay({ rubbers: [{ id: 9, order_index: 2, label: "x" }, { id: 8, order_index: 1, label: "y" }] }, rules);
+  assert.equal(real.template, false);
+  assert.deepEqual(real.rubbers.map((r) => r.id), [8, 9]);
+  assert.deepEqual(rubberScoreView({ status: "pending" }, rules), { text: null, own: null, winner: null });
+  assert.deepEqual(rubberScoreView({ status: "completed", score1: 11, score2: 7 }, rules), { text: "11 – 7", own: null, winner: 1 });
+  const pa2 = normalizeTeamRules({ scoring: "cumulative", rubbers: [{ code: "MD" }, { code: "MD" }] });
+  assert.deepEqual(rubberScoreView({ status: "completed", score1: 18, score2: 22, start1: 11, start2: 7 }, pa2),
+    { text: "18 – 22", own: "7 / 15", winner: 2 });
 });

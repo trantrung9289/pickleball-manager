@@ -169,8 +169,16 @@ export const tournamentsApi = {
     delete: (tid, pid) => api.delete(`/api/tournaments/${tid}/teams/${pid}`),                  // Nháp
     // {member_ids, player_ids} → {added, skipped, team}; một người chỉ ở một đội (người đã ở đội khác → skipped)
     addPlayers: (tid, pid, data) => api.post(`/api/tournaments/${tid}/teams/${pid}/players/bulk`, data),
-    patchPlayer: (tid, pid, tpid, data) => api.patch(`/api/tournaments/${tid}/teams/${pid}/players/${tpid}`, data),   // {is_captain?, gender?}
-    removePlayer: (tid, pid, tpid) => api.delete(`/api/tournaments/${tid}/teams/${pid}/players/${tpid}`),
+    patchPlayer: (tid, pid, tpid, data) => api.patch(`/api/tournaments/${tid}/teams/${pid}/players/${tpid}`, data),   // {is_captain?, gender?, rank?}
+    removePlayer: (tid, pid, tpid) => api.delete(`/api/tournaments/${tid}/teams/${pid}/players/${tpid}`),   // gỡ về danh sách VĐV tham dự (không rời giải)
+    bulkCreate: (tid, data) => api.post(`/api/tournaments/${tid}/teams/bulk`, data),       // {count, prefix?} → TeamOut[] (Nháp)
+  },
+  // VĐV tham dự cấp giải (giải đồng đội, 2026-10-22): participant_id null = chưa phân đội
+  teamPlayers: {
+    list: (tid) => api.get(`/api/tournaments/${tid}/team-players`),                          // → TeamPlayerOut[] (mọi VĐV)
+    add: (tid, data) => api.post(`/api/tournaments/${tid}/team-players/bulk`, data),         // {member_ids, player_ids, participant_id?} → {added, skipped, team?, pool_count}
+    patch: (tid, tpid, data) => api.patch(`/api/tournaments/${tid}/team-players/${tpid}`, data),   // {participant_id?: int|null, gender?, rank?, is_captain?}
+    remove: (tid, tpid) => api.delete(`/api/tournaments/${tid}/team-players/${tpid}`),        // xoá hẳn khỏi giải
   },
   // Đội hình đăng ký theo giai đoạn (leg1 | leg2 | knockout) — khoá tự động khi giai đoạn có điểm đầu tiên
   lineups: {

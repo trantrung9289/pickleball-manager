@@ -234,3 +234,42 @@ export function rubberStatusLabel(rubber, tieFinished) {
   if (rubber.status === "completed") return rubber.is_walkover ? "Xử thua" : "Hoàn thành";
   return tieFinished ? "Không cần đấu" : "Chưa đấu";
 }
+
+/** Bản đồ id → VĐV từ danh sách phẳng (TournamentOut.team_players). */
+export function indexTeamPlayers(list) {
+  const idx = {};
+  (list || []).forEach((p) => { idx[p.id] = p; });
+  return idx;
+}
+
+/**
+ * Trận thành phần để hiển thị chi tiết ở lịch/nhánh: có biên bản (match.rubbers) thì dùng; chưa có
+ * (chưa mở biên bản) thì trả mẫu theo team_rules (chưa xếp VĐV, chưa bốc thứ tự) kèm cờ `template`.
+ */
+export function matchRubbersForDisplay(match, rules) {
+  const real = match?.rubbers || [];
+  if (real.length) return { rubbers: [...real].sort((a, b) => a.order_index - b.order_index), template: false };
+  const n = normalizeTeamRules(rules);
+  return {
+    template: true,
+    rubbers: n.rubbers.map((r, i) => ({
+      id: `t${i}`, order_index: i + 1, code: r.code, label: r.label, side1_players: [], side2_players: [],
+      score1: null, score2: null, status: "pending", is_walkover: false, start1: 0, start2: 0,
+    })),
+  };
+}
+
+/**
+ * Tỉ số một trận thành phần: PA1 "11 – 7"; PA2 (nối tiếp) "26 – 18" kèm điểm riêng trận "(+11 / +7)";
+ * chưa đấu → null. Bên thắng: 1 | 2 | null.
+ */
+export function rubberScoreView(rubber, rules) {
+  if (!rubber || rubber.status !== "completed" || rubber.score1 == null || rubber.score2 == null) {
+    return { text: null, own: null, winner: null };
+  }
+  const s1 = rubber.score1, s2 = rubber.score2;
+  const cumulative = rules?.scoring === "cumulative";
+  const o1 = s1 - (rubber.start1 || 0), o2 = s2 - (rubber.start2 || 0);
+  const winner = cumulative ? (o1 > o2 ? 1 : o2 > o1 ? 2 : null) : (s1 > s2 ? 1 : s2 > s1 ? 2 : null);
+  return { text: `${s1} – ${s2}`, own: cumulative ? `${o1} / ${o2}` : null, winner };
+}

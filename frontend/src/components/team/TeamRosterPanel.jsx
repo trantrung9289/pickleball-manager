@@ -1,13 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Alert, Button, Card, Col, Empty, Input, Modal, Row, Select, Space, Spin, Tag, Tooltip, Typography, message } from "antd";
 import {
-  DeleteOutlined, EditOutlined, PlusOutlined, StarFilled, StarOutlined, TeamOutlined, UserAddOutlined, UsergroupAddOutlined,
+  Alert, Button, Card, Col, Empty, Input, InputNumber, Modal, Row, Select, Space, Spin, Tag, Tooltip, Typography, message,
+} from "antd";
+import {
+  DeleteOutlined, EditOutlined, PlusOutlined, RollbackOutlined, StarFilled, StarOutlined, TeamOutlined, UserAddOutlined,
+  UsergroupAddOutlined, UserOutlined,
 } from "@ant-design/icons";
 import { tournamentsApi } from "../../api";
 import { AddParticipantsModal } from "../AddParticipantsModal";
 import ResponsiveTable from "../ResponsiveTable";
 import GenderTag from "./GenderTag";
 import StageLineupModal from "./StageLineupModal";
+import { useRankLevels } from "../../hooks/useRankLevels";
 import { GENDER_OPTIONS, countGenders, normalizeTeamRules, teamRosterWarnings } from "../../utils/teamFormat";
 
 const { Text } = Typography;
@@ -30,147 +34,225 @@ function TeamNameModal({ title, initial, okText, saving, onOk, onClose }) {
   );
 }
 
+/** Modal tạo nhanh N đội "<tiền tố> k". */
+function BulkTeamsModal({ existing, saving, onOk, onClose }) {
+  const [count, setCount] = useState(4);
+  const [prefix, setPrefix] = useState("Đội");
+  return (
+    <Modal open title="Tạo nhanh nhiều đội" onCancel={onClose} destroyOnHidden okText="Tạo đội" cancelText="Hủy"
+      confirmLoading={saving} onOk={() => onOk(count, prefix.trim() || "Đội")} okButtonProps={{ disabled: !count }}>
+      <Space direction="vertical" style={{ width: "100%", marginTop: 8 }}>
+        <div>
+          <Text type="secondary">Số đội cần tạo</Text>
+          <InputNumber min={1} max={64} value={count} onChange={(v) => setCount(v || 1)} style={{ width: "100%" }} />
+        </div>
+        <div>
+          <Text type="secondary">Tiền tố tên đội</Text>
+          <Input value={prefix} maxLength={100} onChange={(e) => setPrefix(e.target.value)} placeholder="Đội" />
+        </div>
+        <Text type="secondary" style={{ fontSize: 12 }}>
+          Tên đặt theo số thứ tự tiếp theo ({prefix.trim() || "Đội"} {existing + 1}, {prefix.trim() || "Đội"} {existing + 2}, …); đổi tên từng đội sau.
+        </Text>
+      </Space>
+    </Modal>
+  );
+}
+
 /**
- * Khung "Đội" của giải đồng đội: tạo đội / đổi tên / xoá (Nháp), thêm VĐV (Nháp hoặc đang diễn ra), bảng VĐV
- * (giới tính, đội trưởng, xoá), cảnh báo thiếu giới tính theo thể thức, nút "Đội hình" theo giai đoạn.
- * Props: { tournament, canEdit, onChanged (reload giải — khi danh sách đội đổi), onWithdraw(participant), autoOpenCreate }
+ * Khung "Đội" của giải đồng đội (2026-10-22, luồng mới):
+ *  1. "VĐV tham dự": danh sách chung chưa phân đội — thêm hàng loạt, sửa giới tính/hạng, phân vào đội, xoá.
+ *  2. "Đội": tạo đội / tạo nhanh N đội / đổi tên / xoá (Nháp — VĐV quay về danh sách tham dự), thêm VĐV thẳng vào
+ *     đội (= vào danh sách + phân luôn), chọn từ danh sách tham dự, gỡ VĐV về danh sách, đội trưởng, đội hình theo giai đoạn.
+ * Props: { tournament, canEdit, onChanged (reload giải), onWithdraw(participant), autoOpenCreate }
  */
 export default function TeamRosterPanel({ tournament, canEdit = false, onChanged, onWithdraw, autoOpenCreate = false }) {
   const [teams, setTeams] = useState([]);
+  const [pool, setPool] = useState([]);                    // TeamPlayerOut chưa phân đội
   const [loading, setLoading] = useState(true);
   const [createOpen, setCreateOpen] = useState(() => !!autoOpenCreate);
+  const [bulkOpen, setBulkOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [renameTarget, setRenameTarget] = useState(null);   // TeamOut
-  const [addTarget, setAddTarget] = useState(null);         // TeamOut
+  const [addTarget, setAddTarget] = useState(null);         // TeamOut | "pool"
   const [lineupTarget, setLineupTarget] = useState(null);   // TeamOut
+  const [pickKey, setPickKey] = useState(0);                // tăng sau mỗi lần phân đội → ô Select "chọn đội / chọn VĐV" trở về placeholder
+  const { options: rankOptions } = useRankLevels();
   const tid = tournament.id;
   const status = tournament.status;
   const rules = useMemo(() => normalizeTeamRules(tournament.team_rules), [tournament.team_rules]);
   // Chữ ký danh sách đội của giải → đổi (tạo/xoá/bỏ giải/chia bảng ở nơi khác) thì tải lại đội + VĐV
   const participantsSig = (tournament.participants || []).map((p) => `${p.id}:${p.status}:${p.group_name || ""}:${p.team_name || ""}`).join("|");
 
+  const fetchAll = useCallback(() => Promise.all([tournamentsApi.teams.list(tid), tournamentsApi.teamPlayers.list(tid)])
+    .then(([t, p]) => ({ teams: t.data || [], pool: (p.data || []).filter((x) => x.participant_id == null) })), [tid]);
+  const loadAll = useCallback(async () => {
+    const r = await fetchAll();
+    setTeams(r.teams); setPool(r.pool);
+  }, [fetchAll]);
+
   // Nạp đội + VĐV khi mở và khi danh sách đội của giải đổi ở nơi khác (participantsSig)
   useEffect(() => {
     let cancelled = false;
-    tournamentsApi.teams.list(tid)
-      .then((r) => { if (!cancelled) setTeams(r.data || []); })
+    fetchAll()
+      .then((r) => { if (!cancelled) { setTeams(r.teams); setPool(r.pool); } })
       .catch((err) => { if (!cancelled) message.error(err?.response?.data?.detail || "Không tải được danh sách đội"); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [tid, participantsSig]);
-  // Sau thao tác (thêm/xoá VĐV...): tải lại ngay để các modal/bảng có dữ liệu mới (không chờ effect)
-  const loadTeams = useCallback(async () => {
+  }, [fetchAll, participantsSig]);
+  // Sau thao tác: tải lại ngay để các modal/bảng có dữ liệu mới (không chờ effect)
+  const refresh = useCallback(async (notify = false) => {
     try {
-      const r = await tournamentsApi.teams.list(tid);
-      setTeams(r.data || []);
+      await loadAll();
+      if (notify && onChanged) await onChanged();   // team_pool_count / cảnh báo ở trang giải
     } catch (err) {
       message.error(err?.response?.data?.detail || "Không tải được danh sách đội");
     }
-  }, [tid]);
+  }, [loadAll, onChanged]);
 
-  const allPlayers = useMemo(() => teams.flatMap((t) => t.players || []), [teams]);
+  const allPlayers = useMemo(() => [...pool, ...teams.flatMap((t) => t.players || [])], [teams, pool]);
   const canAddPlayers = canEdit && status !== "completed";
   const isDraft = status === "draft";
+  const activeTeams = teams.filter((t) => t.participant.status !== "withdrawn");
+  const teamOptions = activeTeams.map((t) => ({ value: t.participant.id, label: t.participant.team_name }));
+
+  const run = async (fn, okMsg, failMsg, notify = false) => {
+    try {
+      await fn();
+      if (okMsg) message.success(okMsg);
+      await refresh(notify);
+      return true;
+    } catch (err) {
+      message.error(err?.response?.data?.detail || failMsg);
+      return false;
+    }
+  };
 
   const handleCreate = async (name) => {
     setSaving(true);
     try {
       const res = await tournamentsApi.teams.create(tid, { team_name: name });
-      message.success(`Đã tạo đội "${name}" — thêm VĐV cho đội`);
+      message.success(`Đã tạo đội "${name}"`);
       setCreateOpen(false);
-      await loadTeams();
-      onChanged && (await onChanged());
-      setAddTarget(res.data);   // mở luôn modal thêm VĐV cho đội vừa tạo
+      await refresh(true);
+      if (pool.length === 0) setAddTarget(res.data);   // chưa có VĐV chờ → mở luôn modal thêm VĐV cho đội vừa tạo
     } catch (err) {
       message.error(err?.response?.data?.detail || "Không thể tạo đội");
     } finally { setSaving(false); }
   };
 
+  const handleBulkCreate = async (count, prefix) => {
+    setSaving(true);
+    const ok = await run(() => tournamentsApi.teams.bulkCreate(tid, { count, prefix }), `Đã tạo ${count} đội`, "Không thể tạo đội", true);
+    setSaving(false);
+    if (ok) setBulkOpen(false);
+  };
+
   const handleRename = async (name) => {
     setSaving(true);
-    try {
-      await tournamentsApi.teams.update(tid, renameTarget.participant.id, { team_name: name });
-      message.success("Đã đổi tên đội");
-      setRenameTarget(null);
-      await loadTeams();
-      onChanged && (await onChanged());
-    } catch (err) {
-      message.error(err?.response?.data?.detail || "Không thể đổi tên đội");
-    } finally { setSaving(false); }
+    const ok = await run(() => tournamentsApi.teams.update(tid, renameTarget.participant.id, { team_name: name }), "Đã đổi tên đội", "Không thể đổi tên đội", true);
+    setSaving(false);
+    if (ok) setRenameTarget(null);
   };
 
   const handleDeleteTeam = async (t) => {
+    const n = (t.players || []).length;
     const ok = await confirm({
       title: `Xoá đội "${t.participant.team_name}"?`,
-      content: `${(t.players || []).length} VĐV của đội sẽ rời khỏi giải.`,
+      content: n ? `${n} VĐV của đội sẽ quay về danh sách VĐV tham dự (chưa phân đội).` : "Đội chưa có VĐV.",
       okButtonProps: { danger: true }, okText: "Xoá",
     });
     if (!ok) return;
-    try {
-      await tournamentsApi.teams.delete(tid, t.participant.id);
-      message.success("Đã xoá đội");
-      await loadTeams();
-      onChanged && (await onChanged());
-    } catch (err) {
-      message.error(err?.response?.data?.detail || "Không thể xoá đội");
-    }
+    await run(() => tournamentsApi.teams.delete(tid, t.participant.id), "Đã xoá đội", "Không thể xoá đội", true);
   };
 
-  const handleRemovePlayer = async (t, p) => {
-    const ok = await confirm({ title: `Xoá "${p.display_name}" khỏi đội ${t.participant.team_name}?` });
+  const handleUnassign = async (t, p) => {
+    const ok = await confirm({ title: `Gỡ "${p.display_name}" khỏi đội ${t.participant.team_name}?`, content: "VĐV quay về danh sách VĐV tham dự, không rời giải." });
     if (!ok) return;
-    try {
-      await tournamentsApi.teams.removePlayer(tid, t.participant.id, p.id);
-      message.success("Đã xoá VĐV khỏi đội");
-      await loadTeams();
-    } catch (err) {
-      message.error(err?.response?.data?.detail || "Không thể xoá VĐV");
-    }
+    await run(() => tournamentsApi.teams.removePlayer(tid, t.participant.id, p.id), "Đã gỡ VĐV về danh sách tham dự", "Không thể gỡ VĐV", true);
   };
 
-  const patchPlayer = async (t, p, data, okMsg) => {
+  const handleRemoveFromTournament = async (p) => {
+    const ok = await confirm({ title: `Xoá "${p.display_name}" khỏi giải?`, okButtonProps: { danger: true }, okText: "Xoá" });
+    if (!ok) return;
+    await run(() => tournamentsApi.teamPlayers.remove(tid, p.id), "Đã xoá VĐV khỏi giải", "Không thể xoá VĐV", true);
+  };
+
+  const handleAssign = async (p, participantId) => {
+    const team = teams.find((t) => t.participant.id === participantId);
+    setPickKey((k) => k + 1);
+    await run(() => tournamentsApi.teamPlayers.patch(tid, p.id, { participant_id: participantId }),
+      `Đã phân ${p.display_name} vào ${team?.participant.team_name || "đội"}`, "Không thể phân đội", true);
+  };
+
+  const patchPlayer = async (p, data, okMsg) => {
     try {
-      const res = await tournamentsApi.teams.patchPlayer(tid, t.participant.id, p.id, data);
-      // Đội trưởng: backend bỏ cờ của người khác trong đội → cập nhật cả đội tại chỗ
-      setTeams((prev) => prev.map((x) => (x.participant.id !== t.participant.id ? x : {
-        ...x,
-        players: x.players.map((y) => (y.id === p.id ? res.data : (data.is_captain ? { ...y, is_captain: false } : y))),
-      })));
+      const res = await tournamentsApi.teamPlayers.patch(tid, p.id, data);
+      const apply = (y) => (y.id === p.id ? res.data : (data.is_captain && y.participant_id === p.participant_id ? { ...y, is_captain: false } : y));
+      setPool((prev) => prev.map(apply));
+      setTeams((prev) => prev.map((x) => ({ ...x, players: x.players.map(apply) })));
       if (okMsg) message.success(okMsg);
     } catch (err) {
       message.error(err?.response?.data?.detail || "Không thể cập nhật VĐV");
     }
   };
 
-  const playerCols = (t) => [
-    {
-      title: "VĐV", dataIndex: "display_name",
-      render: (v, p) => (
-        <span>
-          {p.is_captain && <Tooltip title="Đội trưởng"><StarFilled style={{ color: "#faad14", marginRight: 4 }} /></Tooltip>}
-          {v}
-          {p.player_id && !p.member_id && <Tag color="orange" style={{ marginLeft: 6, fontSize: 11, lineHeight: "16px", padding: "0 5px" }}>Khách</Tag>}
-        </span>
-      ),
-    },
-    {
-      title: "Giới tính", dataIndex: "gender", width: 110,
-      render: (v, p) => canAddPlayers
-        ? <Select size="small" value={v || undefined} placeholder="Chưa khai" options={GENDER_OPTIONS} style={{ width: 96 }}
-            status={v ? undefined : "warning"} onChange={(g) => patchPlayer(t, p, { gender: g })} />
-        : <GenderTag value={v} showEmpty />,
-    },
+  const nameCell = (v, p) => (
+    <span>
+      {p.is_captain && <Tooltip title="Đội trưởng"><StarFilled style={{ color: "#faad14", marginRight: 4 }} /></Tooltip>}
+      {v}
+      {p.player_id && !p.member_id && <Tag color="orange" style={{ marginLeft: 6, fontSize: 11, lineHeight: "16px", padding: "0 5px" }}>Khách</Tag>}
+    </span>
+  );
+  const genderCol = {
+    title: "Giới tính", dataIndex: "gender", width: 110,
+    render: (v, p) => canAddPlayers
+      ? <Select size="small" value={v || undefined} placeholder="Chưa khai" options={GENDER_OPTIONS} style={{ width: 96 }}
+          status={v ? undefined : "warning"} onChange={(g) => patchPlayer(p, { gender: g })} />
+      : <GenderTag value={v} showEmpty />,
+  };
+  const rankCol = {
+    title: "Hạng", dataIndex: "rank", width: 130,
+    render: (v, p) => canAddPlayers
+      ? <Select size="small" value={v || undefined} placeholder="—" allowClear showSearch style={{ width: 118 }}
+          options={[...new Set([...(rankOptions || []), ...(v ? [v] : [])])].map((r) => ({ value: r, label: r }))}
+          onChange={(r) => patchPlayer(p, { rank: r || "" })} />
+      : (v ? <Tag color="purple">{v}</Tag> : <Text type="secondary">—</Text>),
+  };
+
+  // ── Bảng VĐV tham dự (chưa phân đội) ──
+  const poolCols = [
+    { title: "VĐV", dataIndex: "display_name", render: nameCell },
+    genderCol,
+    rankCol,
     ...(canAddPlayers ? [{
-      title: "", width: 140, align: "right",
+      title: "Phân vào đội", width: 200,
+      render: (_, p) => (
+        <Select key={pickKey} size="small" placeholder={teamOptions.length ? "Chọn đội…" : "Chưa có đội"} options={teamOptions} showSearch optionFilterProp="label"
+          disabled={!teamOptions.length} style={{ width: 180 }} onChange={(pid) => handleAssign(p, pid)} />
+      ),
+    }, {
+      title: "", width: 50, align: "right",
+      render: (_, p) => (
+        <Tooltip title="Xoá khỏi giải"><Button size="small" danger icon={<DeleteOutlined />} onClick={() => handleRemoveFromTournament(p)} /></Tooltip>
+      ),
+    }] : []),
+  ];
+
+  const playerCols = (t) => [
+    { title: "VĐV", dataIndex: "display_name", render: nameCell },
+    genderCol,
+    rankCol,
+    ...(canAddPlayers ? [{
+      title: "", width: 110, align: "right",
       render: (_, p) => (
         <Space size={4}>
           {!p.is_captain && (
             <Tooltip title="Đặt làm đội trưởng">
-              <Button size="small" icon={<StarOutlined />} onClick={() => patchPlayer(t, p, { is_captain: true }, "Đã đặt đội trưởng")} />
+              <Button size="small" icon={<StarOutlined />} onClick={() => patchPlayer(p, { is_captain: true }, "Đã đặt đội trưởng")} />
             </Tooltip>
           )}
-          <Tooltip title="Xoá khỏi đội">
-            <Button size="small" danger icon={<DeleteOutlined />} onClick={() => handleRemovePlayer(t, p)} />
+          <Tooltip title="Gỡ về danh sách VĐV tham dự">
+            <Button size="small" icon={<RollbackOutlined />} onClick={() => handleUnassign(t, p)} />
           </Tooltip>
         </Space>
       ),
@@ -217,6 +299,12 @@ export default function TeamRosterPanel({ tournament, canEdit = false, onChanged
             <Alert type="warning" showIcon style={{ marginBottom: 8, padding: "4px 10px" }}
               message={<span style={{ fontSize: 12 }}>{warnings.join(" · ")}</span>} />
           )}
+          {canAddPlayers && !withdrawn && pool.length > 0 && (
+            <Select key={pickKey} size="small" placeholder={`＋ Chọn từ VĐV tham dự (${pool.length})`} showSearch optionFilterProp="label"
+              style={{ width: "100%", marginBottom: 8 }}
+              options={pool.map((x) => ({ value: x.id, label: `${x.display_name}${x.rank ? ` · ${x.rank}` : ""}${x.gender === "male" ? " · Nam" : x.gender === "female" ? " · Nữ" : ""}` }))}
+              onChange={(tpid) => { const x = pool.find((y) => y.id === tpid); if (x) handleAssign(x, p.id); }} />
+          )}
           {players.length === 0 ? (
             <Empty description="Chưa có VĐV" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ margin: "8px 0" }}>
               {canAddPlayers && !withdrawn && (
@@ -225,12 +313,7 @@ export default function TeamRosterPanel({ tournament, canEdit = false, onChanged
             </Empty>
           ) : (
             <ResponsiveTable columns={playerCols(t)} dataSource={players} rowKey="id" size="small" pagination={false}
-              mobileTitle={(x) => (
-                <span>
-                  {x.is_captain && <StarFilled style={{ color: "#faad14", marginRight: 4 }} />}{x.display_name}
-                  {x.player_id && !x.member_id && <Tag color="orange" style={{ marginLeft: 6 }}>Khách</Tag>}
-                </span>
-              )}
+              mobileTitle={(x) => nameCell(x.display_name, x)}
               mobileHideColumns={["VĐV"]} />
           )}
         </Card>
@@ -238,24 +321,74 @@ export default function TeamRosterPanel({ tournament, canEdit = false, onChanged
     );
   };
 
+  const poolG = countGenders(pool);
+  const poolRanks = useMemo(() => {
+    const c = {};
+    pool.forEach((p) => { const k = p.rank || "Chưa xếp hạng"; c[k] = (c[k] || 0) + 1; });
+    return Object.entries(c);
+  }, [pool]);
+
   return (
-    <Card size="small" style={{ marginBottom: 16 }}
-      title={<span><TeamOutlined /> Đội ({teams.length})</span>}
-      extra={canEdit && isDraft && (
-        <Button type="primary" size="small" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>Tạo đội</Button>
-      )}>
-      {loading ? <div style={{ textAlign: "center", padding: 24 }}><Spin /></div>
-        : teams.length === 0 ? (
-          <Empty description={isDraft ? "Chưa có đội — bấm Tạo đội rồi thêm VĐV cho từng đội" : "Chưa có đội"} image={Empty.PRESENTED_IMAGE_SIMPLE}>
-            {canEdit && isDraft && <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>Tạo đội</Button>}
-          </Empty>
+    <>
+      <Card size="small" style={{ marginBottom: 16 }}
+        title={<span><UserOutlined /> VĐV tham dự chưa phân đội ({pool.length})</span>}
+        extra={canAddPlayers && (
+          <Button type="primary" size="small" icon={<UserAddOutlined />} onClick={() => setAddTarget("pool")}>Thêm VĐV</Button>
+        )}>
+        {loading ? <div style={{ textAlign: "center", padding: 16 }}><Spin /></div> : pool.length === 0 ? (
+          <Text type="secondary" style={{ fontSize: 13 }}>
+            {allPlayers.length === 0
+              ? "Bước 1: thêm toàn bộ VĐV tham dự giải (thành viên / khách mời). Bước 2: tạo đội. Bước 3: phân VĐV vào đội (chọn đội trên từng dòng, hoặc chọn từ danh sách ở thẻ đội)."
+              : "Mọi VĐV đã được phân vào đội."}
+          </Text>
         ) : (
-          <Row gutter={[12, 12]}>{teams.map(teamCard)}</Row>
+          <>
+            {status === "active" && (
+              <Alert type="warning" showIcon style={{ marginBottom: 8, padding: "4px 10px" }}
+                message={<span style={{ fontSize: 12 }}>{pool.length} VĐV chưa phân đội — không thi đấu cho tới khi được phân vào một đội.</span>} />
+            )}
+            <div style={{ marginBottom: 8 }}>
+              <Space size={4} wrap>
+                <Tag color="blue">{poolG.male} Nam</Tag><Tag color="magenta">{poolG.female} Nữ</Tag>
+                {poolG.unknown > 0 && <Tag color="warning">{poolG.unknown} chưa khai giới tính</Tag>}
+                {poolRanks.map(([k, n]) => <Tag key={k} color="purple">{k}: {n}</Tag>)}
+              </Space>
+            </div>
+            <ResponsiveTable columns={poolCols} dataSource={pool} rowKey="id" size="small" pagination={false}
+              mobileTitle={(x) => nameCell(x.display_name, x)} mobileHideColumns={["VĐV"]} />
+          </>
         )}
+      </Card>
+
+      <Card size="small" style={{ marginBottom: 16 }}
+        title={<span><TeamOutlined /> Đội ({teams.length})</span>}
+        extra={canEdit && isDraft && (
+          <Space size={4}>
+            <Button type="primary" size="small" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>Tạo đội</Button>
+            <Button size="small" onClick={() => setBulkOpen(true)}>Tạo nhanh N đội</Button>
+          </Space>
+        )}>
+        {loading ? <div style={{ textAlign: "center", padding: 24 }}><Spin /></div>
+          : teams.length === 0 ? (
+            <Empty description={isDraft ? "Chưa có đội — bấm Tạo đội (hoặc Tạo nhanh N đội) rồi phân VĐV vào đội" : "Chưa có đội"} image={Empty.PRESENTED_IMAGE_SIMPLE}>
+              {canEdit && isDraft && (
+                <Space>
+                  <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>Tạo đội</Button>
+                  <Button onClick={() => setBulkOpen(true)}>Tạo nhanh N đội</Button>
+                </Space>
+              )}
+            </Empty>
+          ) : (
+            <Row gutter={[12, 12]}>{teams.map(teamCard)}</Row>
+          )}
+      </Card>
 
       {createOpen && (
         <TeamNameModal title="Tạo đội mới" initial={`Đội ${teams.length + 1}`} okText="Tạo đội" saving={saving}
           onOk={handleCreate} onClose={() => setCreateOpen(false)} />
+      )}
+      {bulkOpen && (
+        <BulkTeamsModal existing={teams.length} saving={saving} onOk={handleBulkCreate} onClose={() => setBulkOpen(false)} />
       )}
       {renameTarget && (
         <TeamNameModal title="Đổi tên đội" initial={renameTarget.participant.team_name} okText="Lưu" saving={saving}
@@ -263,19 +396,22 @@ export default function TeamRosterPanel({ tournament, canEdit = false, onChanged
       )}
       {addTarget && (
         <AddParticipantsModal
-          // Một người chỉ được ở MỘT đội → "đã dùng" = mọi VĐV của MỌI đội (mô phỏng participants {member_id, player_id})
+          // Một người chỉ có một bản ghi trong giải → "đã dùng" = mọi VĐV (đã phân đội lẫn chưa)
           tournament={{ ...tournament, participants: allPlayers.map((p) => ({ member_id: p.member_id, player_id: p.player_id })) }}
-          title={`Thêm VĐV vào đội ${addTarget.participant.team_name}`}
-          inLabel="Đã trong đội"
+          title={addTarget === "pool" ? "Thêm VĐV tham dự giải" : `Thêm VĐV vào đội ${addTarget.participant.team_name}`}
+          inLabel="Đã trong giải"
           entityKey="team"
-          submitFn={(memberIds, playerIds) => tournamentsApi.teams.addPlayers(tid, addTarget.participant.id, { member_ids: memberIds, player_ids: playerIds })}
-          onAdded={loadTeams}
+          submitFn={(memberIds, playerIds) => tournamentsApi.teamPlayers.add(tid, {
+            member_ids: memberIds, player_ids: playerIds,
+            participant_id: addTarget === "pool" ? null : addTarget.participant.id,
+          })}
+          onAdded={() => refresh(true)}
           onClose={() => setAddTarget(null)}
         />
       )}
       {lineupTarget && (
         <StageLineupModal tournament={tournament} team={lineupTarget} canEdit={canEdit} onClose={() => setLineupTarget(null)} />
       )}
-    </Card>
+    </>
   );
 }

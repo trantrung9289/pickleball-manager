@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, AliasChoices, ConfigDict, field_validator
 from typing import Optional, List, Any, Dict
 from datetime import date, datetime
 from decimal import Decimal
@@ -390,12 +390,36 @@ class MatchOut(BaseModel):
     loser_next_match_id: Optional[int] = None
     loser_next_match_slot: Optional[int] = None
     rubber_draw_seed: Optional[str] = None   # giải đồng đội: đã bốc thăm thứ tự trận thành phần chưa
+    rubbers: List["MatchRubberOut"] = []     # giải đồng đội: trận thành phần (relationship selectin) — giải thường: []
     p1: Optional[ParticipantOut] = None
     p2: Optional[ParticipantOut] = None
     winner: Optional[ParticipantOut] = None
 
     class Config:
         from_attributes = True
+
+
+class MatchRubberOut(BaseModel):
+    """Trận thành phần nhúng trong MatchOut/PublicMatchOut (đọc thẳng ORM) — lịch/nhánh hiện chi tiết không cần mở biên bản."""
+    id: int
+    order_index: int
+    code: str
+    label: str
+    side1_players: List[int] = []
+    side2_players: List[int] = []
+    score1: Optional[int] = None
+    score2: Optional[int] = None
+    status: str = "pending"
+    is_walkover: bool = False
+    start1: int = 0
+    start2: int = 0
+
+    @field_validator("side1_players", "side2_players", mode="before")
+    @classmethod
+    def _none_to_list(cls, v):
+        return list(v or [])
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ── Bốc thăm bằng vòng quay ────────────────────────────────
@@ -560,6 +584,21 @@ class PartnerDrawSummaryOut(BaseModel):
         from_attributes = True
 
 
+class TeamPlayerLiteOut(BaseModel):
+    """VĐV của giải đồng đội nhúng trong TournamentOut/PublicTournamentOut (from_attributes trực tiếp từ ORM) —
+    để lịch/nhánh/public tra tên cho trận thành phần mà không gọi thêm API."""
+    id: int
+    participant_id: Optional[int] = None
+    member_id: Optional[int] = None
+    player_id: Optional[int] = None
+    display_name: str
+    gender: Optional[str] = Field(default=None, validation_alias=AliasChoices("gender", "gender_snapshot"))
+    rank: Optional[str] = Field(default=None, validation_alias=AliasChoices("rank", "rank_snapshot"))
+    is_captain: bool = False
+
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+
 class TournamentOut(BaseModel):
     id: int
     name: str
@@ -581,6 +620,8 @@ class TournamentOut(BaseModel):
     draw: Optional[DrawSummaryOut] = None   # phiên bốc thăm mới nhất (property Tournament.draw)
     partner_draw: Optional[PartnerDrawSummaryOut] = None   # phiên ghép đội mới nhất (property Tournament.partner_draw)
     unpaired_count: int = 0                 # số người chưa có đội (giải đôi)
+    team_players: List[TeamPlayerLiteOut] = []   # giải đồng đội: mọi VĐV (participant_id None = chưa phân đội)
+    team_pool_count: int = 0                # giải đồng đội: số VĐV tham dự chưa phân đội
 
     class Config:
         from_attributes = True
@@ -647,6 +688,7 @@ class PublicMatchOut(BaseModel):
     is_walkover: bool = False
     next_match_id: Optional[int] = None
     next_match_slot: Optional[int] = None
+    rubbers: List[MatchRubberOut] = []   # giải đồng đội: trận thành phần (id VĐV → tra PublicTournamentOut.team_players)
     p1: Optional[PublicParticipantOut] = None
     p2: Optional[PublicParticipantOut] = None
     winner: Optional[PublicParticipantOut] = None
@@ -673,6 +715,8 @@ class PublicTournamentOut(BaseModel):
     draw: Optional[DrawSummaryOut] = None   # phiên bốc thăm mới nhất (property Tournament.draw)
     partner_draw: Optional[PartnerDrawSummaryOut] = None   # phiên ghép đội mới nhất
     unpaired_count: int = 0
+    team_players: List[TeamPlayerLiteOut] = []   # chỉ tên/giới tính/hạng — không SĐT
+    team_pool_count: int = 0
 
     class Config:
         from_attributes = True
@@ -821,29 +865,48 @@ class TeamUpdate(BaseModel):
 class TeamPlayersBulkIn(BaseModel):
     member_ids: List[int] = []
     player_ids: List[int] = []
+    participant_id: Optional[int] = None   # endpoint cấp giải: None = thêm vào "VĐV tham dự" (chưa phân đội)
 
 
 class TeamPlayerPatch(BaseModel):
     is_captain: Optional[bool] = None
     gender: Optional[str] = None      # sửa snapshot giới tính khi chưa khai
+    rank: Optional[str] = None        # sửa snapshot hạng ("" → xoá hạng)
+    # Endpoint cấp giải: có mặt trong body → phân vào đội (int) hoặc gỡ về danh sách tham dự (null);
+    # phân biệt "vắng" / null bằng model_fields_set
+    participant_id: Optional[int] = None
 
 
 class TeamPlayerOut(BaseModel):
     id: int
-    participant_id: int
+    participant_id: Optional[int] = None   # None = VĐV tham dự chưa phân đội
     member_id: Optional[int] = None
     player_id: Optional[int] = None
     display_name: str
     gender: Optional[str] = None      # = gender_snapshot
+    rank: Optional[str] = None        # = rank_snapshot
     is_captain: bool = False
 
     class Config:
         from_attributes = True
 
 
+class TeamBulkCreateIn(BaseModel):
+    count: int = Field(ge=1, le=64)
+    prefix: str = Field(default="Đội", max_length=100)
+
+
 class TeamOut(BaseModel):
     participant: ParticipantOut
     players: List[TeamPlayerOut] = []
+
+
+class TeamPlayersAddOut(BaseModel):
+    """Kết quả thêm VĐV cấp giải: vào đội (team) hoặc vào danh sách tham dự (team = None)."""
+    added: int
+    skipped: List[str] = []
+    team: Optional[TeamOut] = None
+    pool_count: int = 0
 
 
 class TeamPlayersBulkOut(BaseModel):

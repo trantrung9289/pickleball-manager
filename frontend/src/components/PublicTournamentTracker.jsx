@@ -1,7 +1,7 @@
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import {
   Select, Tabs, Empty, Spin, Card, Tag, Typography, Alert,
-  Collapse, Divider, Space, Button, Badge, Modal, Form, Input, AutoComplete, message,
+  Collapse, Divider, Space, Button, Badge, Modal, Form, Input, AutoComplete, message, Popover,
 } from "antd";
 import {
   ReloadOutlined, SyncOutlined, TrophyOutlined, EditOutlined, SafetyCertificateOutlined, StarOutlined,
@@ -15,6 +15,8 @@ import PublicPointEventBoard from "./PublicPointEventBoard";
 import { useViewMode } from "../contexts/ViewModeContext";
 import { teamLabel, teamRank } from "../utils/tournamentLabels";
 import { tieScoreText } from "../utils/teamLabels";
+import { indexTeamPlayers } from "../utils/teamFormat";
+import TieRubbersInline from "./team/TieRubbersInline";
 import {
   serverOffset, verifyDraw, verifyPartnerDraw, partnerLabelForStep, partnerDrawFinished, partnerDrawStuck,
   normalizePartnerRules, ranksPhrase, UNRANKED,
@@ -153,8 +155,9 @@ function PublicScoreModal({ match, tid, api, onSaved, onClose }) {
   );
 }
 
-// onOpen (giải đồng đội): bấm vào ô → mở biên bản trận; ô hiện cả tỉ số tạm của trận đang đấu dở
-function BracketCard({ match, onOpen }) {
+// onOpen (giải đồng đội): bấm vào ô → mở biên bản trận; ô hiện cả tỉ số tạm của trận đang đấu dở.
+// renderDetail (giải đồng đội): chi tiết trận thành phần — popover khi rê chuột (desktop), inline dưới thẻ (mobile).
+function BracketCard({ match, onOpen, renderDetail, inlineDetail = false }) {
   const p1 = teamLabel(match?.p1) || (match?.p1_id ? "?" : "BYE");
   const p2 = teamLabel(match?.p2) || (match?.p2_id ? "?" : "BYE");
   const done = match.status === "completed";
@@ -162,8 +165,9 @@ function BracketCard({ match, onOpen }) {
   const inProgress = !done && !!onOpen && tieScoreText(match) != null;
   const showScore = done || inProgress;
   const clickable = !!onOpen && !!match.p1_id && !!match.p2_id;
+  const hasDetail = !!renderDetail && !!match.p1_id && !!match.p2_id && !match.is_walkover;
 
-  return (
+  const card = (
     <Card
       size="small"
       hoverable={clickable}
@@ -197,11 +201,23 @@ function BracketCard({ match, onOpen }) {
           </Text>
         </div>
       )}
+      {hasDetail && inlineDetail && (
+        <div style={{ marginTop: 6, paddingTop: 6, borderTop: "1px dashed #eee" }} onClick={(e) => e.stopPropagation()}>
+          {renderDetail(match)}
+        </div>
+      )}
     </Card>
+  );
+  if (!hasDetail || inlineDetail) return card;
+  return (
+    <Popover content={<div style={{ maxWidth: 560 }}>{renderDetail(match)}</div>} placement="right" mouseEnterDelay={0.25}
+      title={<span style={{ fontSize: 12 }}>{p1} vs {p2}</span>}>
+      {card}
+    </Popover>
   );
 }
 
-function KnockoutBracket({ matches, onOpen }) {
+function KnockoutBracket({ matches, onOpen, renderDetail }) {
   const { isMobileView } = useViewMode();
   const rounds = [...new Set(matches.map(m => m.round_number))].sort((a, b) => a - b);
 
@@ -218,7 +234,7 @@ function KnockoutBracket({ matches, onOpen }) {
             label: <Text strong style={{ color: "#1677ff" }}>{rName} ({done}/{rMatches.length})</Text>,
             children: (
               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                {rMatches.map(m => <BracketCard key={m.id} match={m} onOpen={onOpen} />)}
+                {rMatches.map(m => <BracketCard key={m.id} match={m} onOpen={onOpen} renderDetail={renderDetail} inlineDetail />)}
               </div>
             ),
           };
@@ -239,7 +255,7 @@ function KnockoutBracket({ matches, onOpen }) {
                 {rName}
               </Text>
               <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-                {rMatches.map(m => <BracketCard key={m.id} match={m} onOpen={onOpen} />)}
+                {rMatches.map(m => <BracketCard key={m.id} match={m} onOpen={onOpen} renderDetail={renderDetail} />)}
               </div>
             </div>
           );
@@ -497,6 +513,11 @@ function TournamentContent({ tournament, api, onScored }) {
   const [scoreMatch, setScoreMatch] = useState(null);
   const [tieMatch, setTieMatch] = useState(null);   // giải đồng đội: trận đang mở biên bản
   const isTeam = tournament.team_type === "team";
+  // Giải đồng đội: tên VĐV cho chi tiết trận thành phần (PublicTournamentOut.team_players, poll 12s cập nhật theo)
+  const playersById = useMemo(() => indexTeamPlayers(tournament.team_players), [tournament.team_players]);
+  const renderTieDetail = isTeam
+    ? (m, compact = false) => <TieRubbersInline match={m} rules={tournament.team_rules} playersById={playersById} compact={compact} />
+    : undefined;
 
   const mobileProps = {
     mobileTitle: (m) => {
@@ -508,12 +529,25 @@ function TournamentContent({ tournament, api, onScored }) {
         : live
           ? <span><b style={{ color: "#1677ff" }}> {live}</b> <Tag color="processing" style={{ marginLeft: 4 }}>Đang đấu</Tag></span>
           : <Tag style={{ marginLeft: 4 }}>Chưa đấu</Tag>;
-      return <span>{p1} vs {p2}{score}</span>;
+      return (
+        <span>
+          {p1} vs {p2}{score}
+          {isTeam && m.p1_id && m.p2_id && !m.is_walkover && (
+            <div style={{ marginTop: 6, fontWeight: 400 }}>{renderTieDetail(m)}</div>
+          )}
+        </span>
+      );
     },
     mobileHideColumns: ["Đội 1", "Tỉ số", "Đội 2", "Kết quả"],
-    // Desktop (antd Table): bấm cả dòng cũng mở biên bản; ResponsiveTable chỉ truyền onRow xuống Table
+    // Desktop (antd Table): bấm cả dòng cũng mở biên bản; ResponsiveTable chỉ truyền onRow xuống Table.
+    // Hàng mở rộng (mặc định mở) hiện các trận thành phần ngay trong lịch vòng bảng / vòng loại.
     ...(isTeam ? {
       onRow: (m) => (m.p1_id && m.p2_id ? { onClick: () => setTieMatch(m), style: { cursor: "pointer" } } : {}),
+      expandable: {
+        expandedRowRender: (m) => renderTieDetail(m),
+        rowExpandable: (m) => !!m.p1_id && !!m.p2_id && !m.is_walkover,
+        defaultExpandAllRows: true,
+      },
     } : {}),
   };
 
@@ -545,7 +579,7 @@ function TournamentContent({ tournament, api, onScored }) {
     tabItems.push({
       key: "bracket",
       label: "Sơ đồ đấu",
-      children: <KnockoutBracket matches={matches} onOpen={bracketOpen} />,
+      children: <KnockoutBracket matches={matches} onOpen={bracketOpen} renderDetail={renderTieDetail && ((m) => renderTieDetail(m, true))} />,
     });
     tabItems.push({
       key: "schedule",
@@ -586,7 +620,7 @@ function TournamentContent({ tournament, api, onScored }) {
         label: `Vòng loại (${koMatches.filter(m => m.status === "completed").length}/${koMatches.length})`,
         children: (
           <>
-            <KnockoutBracket matches={koMatches} onOpen={bracketOpen} />
+            <KnockoutBracket matches={koMatches} onOpen={bracketOpen} renderDetail={renderTieDetail && ((m) => renderTieDetail(m, true))} />
             <Divider />
             <RoundedSchedule columns={cols} matches={koMatches} mobileProps={mobileProps} />
           </>

@@ -148,6 +148,8 @@ def _run_migration():
         ("tournaments", "partner_rules", "JSON", None),
         # Bảng clubs — danh sách hạng cấu hình ở cấp CLB (NULL → DEFAULT_RANK_LEVELS)
         ("clubs", "rank_levels", "JSON", None),
+        # Giải đồng đội (2026-10-22): hạng VĐV chụp lúc thêm vào giải (lọc/hiển thị, vòng quay phân đội)
+        ("tournament_team_players", "rank_snapshot", "VARCHAR(50)", None),
     ]
 
     with engine.connect() as conn:
@@ -168,6 +170,36 @@ def _run_migration():
         conn.commit()
 
 _run_migration()
+
+
+def _migrate_team_players_pool() -> None:
+    """2026-10-22: tournament_team_players.participant_id NOT NULL → NULL được phép (VĐV tham dự chưa phân đội).
+    SQLite không sửa được ràng buộc NOT NULL bằng ALTER → dựng lại bảng theo đúng model: đọc toàn bộ dòng,
+    DROP (kèm index cũ), create() từ metadata, chèn lại giữ nguyên id. Không bảng nào tham chiếu FK tới bảng này
+    (biên bản lưu id dạng JSON) nên không cần tắt khoá ngoại. Chạy trong MỘT transaction — lỗi giữa chừng → rollback."""
+    from sqlalchemy import text
+    table = models.TournamentTeamPlayer.__table__
+    with engine.begin() as conn:
+        if not conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name=:t"),
+                            {"t": table.name}).fetchone():
+            return
+        info = conn.execute(text(f"PRAGMA table_info({table.name})")).fetchall()
+        notnull = {r[1]: bool(r[3]) for r in info}
+        if not notnull.get("participant_id", False):
+            return   # đã đúng schema mới (DB tạo sau 2026-10-22 hoặc đã migrate)
+        cols = [c.name for c in table.columns if c.name in notnull]
+        rows = conn.execute(text(f"SELECT {', '.join(cols)} FROM {table.name}")).fetchall()
+        conn.execute(text(f"DROP TABLE {table.name}"))
+        table.create(conn)
+        if rows:
+            from sqlalchemy import Boolean as _Bool
+            bool_cols = {c.name for c in table.columns if isinstance(c.type, _Bool)}
+            conn.execute(table.insert(), [
+                {k: (None if v is None else bool(v)) if k in bool_cols else v for k, v in zip(cols, r)} for r in rows])
+        print(f"[migration] ✅ Dựng lại {table.name}: participant_id cho phép NULL ({len(rows)} dòng giữ nguyên)")
+
+
+_migrate_team_players_pool()
 
 
 # Bảng phẳng có club_id (thứ tự xoá: con trước cha). tournaments/point_events xoá qua ORM để cascade con.
@@ -2772,7 +2804,7 @@ def update_tournament(
     new_fmt = new_fmt.value if hasattr(new_fmt, "value") else new_fmt
     if new_tt == "team" and new_fmt == "individual":
         raise HTTPException(400, "Giải đồng đội không dùng thể thức cá nhân")
-    if new_tt != t.team_type and t.participants:
+    if new_tt != t.team_type and (t.participants or t.team_players):
         raise HTTPException(400, "Đã có đội/người chơi trong giải — xoá hết trước khi đổi loại giải")
     if new_tt == "team" and "team_rules" not in updates and not t.team_rules:
         updates["team_rules"] = normalize_team_rules(None)
@@ -3539,7 +3571,103 @@ def _team_players(db: Session, t: "models.Tournament", participant_ids: Optional
 
 def _team_player_out(tp: "models.TournamentTeamPlayer") -> dict:
     return {"id": tp.id, "participant_id": tp.participant_id, "member_id": tp.member_id, "player_id": tp.player_id,
-            "display_name": tp.display_name, "gender": tp.gender_snapshot, "is_captain": bool(tp.is_captain)}
+            "display_name": tp.display_name, "gender": tp.gender_snapshot, "rank": tp.rank_snapshot,
+            "is_captain": bool(tp.is_captain)}
+
+
+def _team_pool(db: Session, t: "models.Tournament") -> list:
+    """VĐV tham dự chưa phân đội (participant_id NULL)."""
+    return db.query(models.TournamentTeamPlayer).filter(
+        models.TournamentTeamPlayer.tournament_id == t.id,
+        models.TournamentTeamPlayer.participant_id.is_(None)).order_by(models.TournamentTeamPlayer.id).all()
+
+
+def _get_team_player(db: Session, t: "models.Tournament", tpid: int,
+                     participant_id: Optional[int] = None) -> "models.TournamentTeamPlayer":
+    q = db.query(models.TournamentTeamPlayer).filter(
+        models.TournamentTeamPlayer.id == tpid, models.TournamentTeamPlayer.tournament_id == t.id)
+    if participant_id is not None:
+        q = q.filter(models.TournamentTeamPlayer.participant_id == participant_id)
+    tp = q.first()
+    if not tp:
+        raise HTTPException(404, "Không tìm thấy VĐV")
+    return tp
+
+
+def _team_player_rubber_use(db: Session, t: "models.Tournament", tpid: int) -> Optional[str]:
+    """Nhãn trận thành phần đầu tiên có tên VĐV (None = chưa có tên ở biên bản nào)."""
+    used = db.query(models.TournamentTieRubber).join(
+        models.TournamentMatch, models.TournamentMatch.id == models.TournamentTieRubber.match_id
+    ).filter(models.TournamentMatch.tournament_id == t.id).all()
+    for r in used:
+        if tpid in (r.side1_players or []) or tpid in (r.side2_players or []):
+            return r.label
+    return None
+
+
+def _detach_team_player(db: Session, t: "models.Tournament", tp: "models.TournamentTeamPlayer") -> None:
+    """Gỡ VĐV khỏi đội hiện tại (chuẩn bị xoá / về danh sách tham dự / sang đội khác): chặn nếu đã có tên trong
+    biên bản (giữ lịch sử — gỡ khỏi trận trước), bỏ khỏi mọi đội hình đã đăng ký, bỏ cờ đội trưởng."""
+    if tp.participant_id is None:
+        return
+    label = _team_player_rubber_use(db, t, tp.id)
+    if label:
+        raise HTTPException(400, f"VĐV đã có tên trong trận thành phần ({label}) — gỡ khỏi trận trước")
+    for lu in db.query(models.TournamentStageLineup).filter(
+            models.TournamentStageLineup.participant_id == tp.participant_id).all():
+        slots = dict(lu.slots or {})
+        changed = False
+        for k, v in list(slots.items()):
+            if tp.id in (v or []):
+                slots[k] = [x for x in v if x != tp.id]; changed = True
+        if changed:
+            lu.slots = slots
+    tp.is_captain = False
+
+
+def _add_team_people(db: Session, t: "models.Tournament", perms: ClubPermissions, member_ids: list, player_ids: list,
+                     target: Optional["models.TournamentParticipant"]) -> tuple:
+    """Thêm thành viên/khách mời vào giải đồng đội: `target` = đội nhận (None = danh sách VĐV tham dự, chưa phân đội).
+    Một người chỉ có MỘT bản ghi trong giải (điều lệ 5.2): đã ở đội khác → skipped; đang ở danh sách chờ mà
+    target là đội → phân luôn vào đội (tính là added). Chụp giới tính + hạng lúc thêm. Trả (added, skipped)."""
+    member_ids, player_ids = _normalize_people_ids(db, perms.club_id, member_ids, player_ids)
+    existing = _team_players(db, t)
+    by_member = {tp.member_id: tp for tp in existing if tp.member_id}
+    by_player = {tp.player_id: tp for tp in existing if tp.player_id}
+    names = {q.id: (q.team_name or "") for q in t.participants}
+    added, skipped = 0, []
+
+    def _place(tp: Optional["models.TournamentTeamPlayer"], name: str, make) -> None:
+        nonlocal added
+        if tp is None:
+            db.add(make()); added += 1
+            return
+        if tp.participant_id is None and target is not None:
+            tp.participant_id = target.id; added += 1       # từ danh sách chờ vào đội
+        elif tp.participant_id is None:
+            skipped.append(f"{name} (đã trong danh sách VĐV tham dự)")
+        elif target is not None and tp.participant_id == target.id:
+            skipped.append(f"{name} (đã trong đội)")
+        else:
+            skipped.append(f"{name} (đã ở đội {names.get(tp.participant_id, '?')})")
+
+    pid = target.id if target is not None else None
+    for mid in member_ids:
+        m = _get_member_in_club(db, mid, perms.club_id)
+        _place(by_member.get(mid), m.full_name, lambda m=m: models.TournamentTeamPlayer(
+            tournament_id=t.id, participant_id=pid, member_id=m.id, display_name=m.full_name or "",
+            gender_snapshot=m.gender, rank_snapshot=m.rank, created_at=_now_vn()))
+    for plid in player_ids:
+        pl = _get_player_in_club(db, plid, perms.club_id)
+        _place(by_player.get(plid), pl.name, lambda pl=pl: models.TournamentTeamPlayer(
+            tournament_id=t.id, participant_id=pid, player_id=pl.id, display_name=pl.name or "Khách",
+            gender_snapshot=pl.gender, rank_snapshot=pl.rank, created_at=_now_vn()))
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "Danh sách VĐV vừa thay đổi ở máy khác — hãy thử lại")
+    return added, skipped
 
 
 def _team_out(db: Session, t: "models.Tournament", p: "models.TournamentParticipant", public: bool = False) -> dict:
@@ -3831,41 +3959,133 @@ def update_team(tid: int, pid: int, data: schemas.TeamUpdate, db: Session = Depe
 @app.post("/api/tournaments/{tid}/teams/{pid}/players/bulk", response_model=schemas.TeamPlayersBulkOut)
 def add_team_players(tid: int, pid: int, data: schemas.TeamPlayersBulkIn, db: Session = Depends(get_db),
                      perms: ClubPermissions = Depends(get_club_permission)):
-    """Thêm VĐV (thành viên + khách mời) vào đội. Một người chỉ thuộc MỘT đội trong giải (điều lệ 5.2) →
-    người đã ở đội khác → skipped. Cho phép khi Nháp hoặc đang diễn ra (bổ sung VĐV)."""
+    """Thêm VĐV (thành viên + khách mời) thẳng vào đội (= vào danh sách tham dự rồi phân đội ngay). Một người chỉ
+    thuộc MỘT đội trong giải (điều lệ 5.2) → người đã ở đội khác → skipped. Cho phép khi Nháp hoặc đang diễn ra."""
     perms.require_edit()
     t = _get_club_tournament(db, tid, perms)
     _require_team_tournament(t)
     if t.status == models.TournamentStatus.completed:
         raise HTTPException(400, "Giải đã kết thúc")
     p = _get_team(db, t, pid)
-    member_ids, player_ids = _normalize_people_ids(db, perms.club_id, data.member_ids, data.player_ids)
-    existing = _team_players(db, t)
-    by_member = {tp.member_id: tp for tp in existing if tp.member_id}
-    by_player = {tp.player_id: tp for tp in existing if tp.player_id}
-    names = {q.id: (q.team_name or "") for q in t.participants}
-    added, skipped = 0, []
-    for mid in member_ids:
-        m = _get_member_in_club(db, mid, perms.club_id)
-        if mid in by_member:
-            skipped.append(f"{m.full_name} (đã ở đội {names.get(by_member[mid].participant_id, '?')})"); continue
-        db.add(models.TournamentTeamPlayer(tournament_id=t.id, participant_id=p.id, member_id=mid,
-                                           display_name=m.full_name or "", gender_snapshot=m.gender, created_at=_now_vn()))
-        added += 1
-    for plid in player_ids:
-        pl = _get_player_in_club(db, plid, perms.club_id)
-        if plid in by_player:
-            skipped.append(f"{pl.name} (đã ở đội {names.get(by_player[plid].participant_id, '?')})"); continue
-        db.add(models.TournamentTeamPlayer(tournament_id=t.id, participant_id=p.id, player_id=plid,
-                                           display_name=pl.name or "Khách", gender_snapshot=pl.gender, created_at=_now_vn()))
-        added += 1
-    try:
-        db.commit()
-    except IntegrityError:
-        db.rollback()
-        raise HTTPException(409, "Danh sách VĐV vừa thay đổi ở máy khác — hãy thử lại")
+    if p.status == models.ParticipantStatus.withdrawn:
+        raise HTTPException(400, "Đội đã bỏ giải — không thêm VĐV")
+    added, skipped = _add_team_people(db, t, perms, data.member_ids, data.player_ids, p)
     db.refresh(p)
     return {"added": added, "skipped": skipped, "team": _team_out(db, t, p)}
+
+
+# ── VĐV tham dự cấp giải (2026-10-22): danh sách chung chưa phân đội → phân đội tay / vòng quay (đợt 2) ──
+
+@app.get("/api/tournaments/{tid}/team-players", response_model=List[schemas.TeamPlayerOut])
+def list_team_players(tid: int, db: Session = Depends(get_db), perms: ClubPermissions = Depends(get_club_permission)):
+    """Mọi VĐV của giải đồng đội (participant_id None = chưa phân đội)."""
+    perms.require_view()
+    t = _get_club_tournament(db, tid, perms)
+    _require_team_tournament(t)
+    return [_team_player_out(tp) for tp in _team_players(db, t)]
+
+
+@app.post("/api/tournaments/{tid}/team-players/bulk", response_model=schemas.TeamPlayersAddOut)
+def add_tournament_team_players(tid: int, data: schemas.TeamPlayersBulkIn, db: Session = Depends(get_db),
+                                perms: ClubPermissions = Depends(get_club_permission)):
+    """Thêm VĐV vào giải: participant_id None → danh sách "VĐV tham dự" (chưa phân đội); có → vào đội đó."""
+    perms.require_edit()
+    t = _get_club_tournament(db, tid, perms)
+    _require_team_tournament(t)
+    if t.status == models.TournamentStatus.completed:
+        raise HTTPException(400, "Giải đã kết thúc")
+    target = None
+    if data.participant_id is not None:
+        target = _get_team(db, t, data.participant_id)
+        if target.status == models.ParticipantStatus.withdrawn:
+            raise HTTPException(400, "Đội đã bỏ giải — không thêm VĐV")
+    added, skipped = _add_team_people(db, t, perms, data.member_ids, data.player_ids, target)
+    if target is not None:
+        db.refresh(target)
+    return {"added": added, "skipped": skipped, "team": _team_out(db, t, target) if target is not None else None,
+            "pool_count": len(_team_pool(db, t))}
+
+
+@app.patch("/api/tournaments/{tid}/team-players/{tpid}", response_model=schemas.TeamPlayerOut)
+def patch_tournament_team_player(tid: int, tpid: int, data: schemas.TeamPlayerPatch, db: Session = Depends(get_db),
+                                 perms: ClubPermissions = Depends(get_club_permission)):
+    """Sửa VĐV ở cấp giải: phân vào đội / chuyển đội / gỡ về danh sách tham dự (participant_id có mặt trong body),
+    giới tính, hạng, đội trưởng. Gỡ/chuyển đội bị chặn nếu VĐV đã có tên trong biên bản (giữ lịch sử)."""
+    perms.require_edit()
+    t = _get_club_tournament(db, tid, perms)
+    _require_team_tournament(t)
+    if t.status == models.TournamentStatus.completed:
+        raise HTTPException(400, "Giải đã kết thúc")
+    tp = _get_team_player(db, t, tpid)
+    if "participant_id" in data.model_fields_set and data.participant_id != tp.participant_id:
+        if data.participant_id is not None:
+            target = _get_team(db, t, data.participant_id)
+            if target.status == models.ParticipantStatus.withdrawn:
+                raise HTTPException(400, "Đội đã bỏ giải — không thêm VĐV")
+        _detach_team_player(db, t, tp)
+        tp.participant_id = data.participant_id
+    _apply_team_player_patch(db, t, tp, data)
+    db.commit(); db.refresh(tp)
+    return _team_player_out(tp)
+
+
+@app.delete("/api/tournaments/{tid}/team-players/{tpid}", status_code=204)
+def delete_tournament_team_player(tid: int, tpid: int, db: Session = Depends(get_db),
+                                  perms: ClubPermissions = Depends(get_club_permission)):
+    """Xoá VĐV khỏi giải (đang ở đội hay chưa phân đội). Đã có tên trong biên bản → 400."""
+    perms.require_edit()
+    t = _get_club_tournament(db, tid, perms)
+    _require_team_tournament(t)
+    if t.status == models.TournamentStatus.completed:
+        raise HTTPException(400, "Giải đã kết thúc")
+    tp = _get_team_player(db, t, tpid)
+    _detach_team_player(db, t, tp)
+    db.delete(tp); db.commit()
+
+
+@app.post("/api/tournaments/{tid}/teams/bulk", response_model=List[schemas.TeamOut], status_code=201)
+def create_teams_bulk(tid: int, data: schemas.TeamBulkCreateIn, db: Session = Depends(get_db),
+                      perms: ClubPermissions = Depends(get_club_permission)):
+    """Tạo nhanh N đội "<prefix> k" (bỏ qua tên đã có, đánh số tiếp từ số đội hiện tại). Chỉ khi Nháp."""
+    perms.require_edit()
+    t = _get_club_tournament(db, tid, perms)
+    _require_team_tournament(t)
+    if t.status != models.TournamentStatus.draft:
+        raise HTTPException(400, "Chỉ thêm đội khi giải còn Nháp")
+    prefix = (data.prefix or "Đội").strip() or "Đội"
+    existing = {(p.team_name or "").strip().casefold() for p in t.participants}
+    if len(t.participants) + data.count > 128:
+        raise HTTPException(400, "Tối đa 128 đội trong một giải")
+    seed = max((p.seed or 0) for p in t.participants) + 1 if t.participants else 1
+    k = len(t.participants) + 1
+    created = []
+    while len(created) < data.count:
+        name = f"{prefix} {k}"; k += 1
+        if name.casefold() in existing:
+            continue
+        p = models.TournamentParticipant(tournament_id=t.id, team_name=name, seed=seed); seed += 1
+        db.add(p); created.append(p); existing.add(name.casefold())
+    db.commit()
+    for p in created:
+        db.refresh(p)
+    return [_team_out(db, t, p) for p in created]
+
+
+def _apply_team_player_patch(db: Session, t: "models.Tournament", tp: "models.TournamentTeamPlayer",
+                             data: schemas.TeamPlayerPatch) -> None:
+    if data.gender is not None:
+        if data.gender not in ("male", "female", "other"):
+            raise HTTPException(400, "Giới tính không hợp lệ")
+        tp.gender_snapshot = data.gender
+    if data.rank is not None:
+        tp.rank_snapshot = data.rank.strip()[:50] or None
+    if data.is_captain is not None:
+        if tp.participant_id is None and data.is_captain:
+            raise HTTPException(400, "VĐV chưa phân đội — không đặt đội trưởng")
+        if data.is_captain:
+            for o in _team_players(db, t, [tp.participant_id]):
+                o.is_captain = False
+        tp.is_captain = bool(data.is_captain)
 
 
 @app.patch("/api/tournaments/{tid}/teams/{pid}/players/{tpid}", response_model=schemas.TeamPlayerOut)
@@ -3874,20 +4094,8 @@ def patch_team_player(tid: int, pid: int, tpid: int, data: schemas.TeamPlayerPat
     perms.require_edit()
     t = _get_club_tournament(db, tid, perms)
     _require_team_tournament(t)
-    tp = db.query(models.TournamentTeamPlayer).filter(
-        models.TournamentTeamPlayer.id == tpid, models.TournamentTeamPlayer.participant_id == pid,
-        models.TournamentTeamPlayer.tournament_id == t.id).first()
-    if not tp:
-        raise HTTPException(404, "Không tìm thấy VĐV")
-    if data.gender is not None:
-        if data.gender not in ("male", "female", "other"):
-            raise HTTPException(400, "Giới tính không hợp lệ")
-        tp.gender_snapshot = data.gender
-    if data.is_captain is not None:
-        if data.is_captain:
-            for o in _team_players(db, t, [pid]):
-                o.is_captain = False
-        tp.is_captain = bool(data.is_captain)
+    tp = _get_team_player(db, t, tpid, participant_id=pid)
+    _apply_team_player_patch(db, t, tp, data)   # participant_id trong body bị bỏ qua ở endpoint theo đội
     db.commit(); db.refresh(tp)
     return _team_player_out(tp)
 
@@ -3895,32 +4103,16 @@ def patch_team_player(tid: int, pid: int, tpid: int, data: schemas.TeamPlayerPat
 @app.delete("/api/tournaments/{tid}/teams/{pid}/players/{tpid}", status_code=204)
 def remove_team_player(tid: int, pid: int, tpid: int, db: Session = Depends(get_db),
                        perms: ClubPermissions = Depends(get_club_permission)):
+    """Gỡ VĐV khỏi đội → VỀ danh sách VĐV tham dự (không rời giải; xoá hẳn: DELETE /team-players/{tpid})."""
     perms.require_edit()
     t = _get_club_tournament(db, tid, perms)
     _require_team_tournament(t)
-    tp = db.query(models.TournamentTeamPlayer).filter(
-        models.TournamentTeamPlayer.id == tpid, models.TournamentTeamPlayer.participant_id == pid,
-        models.TournamentTeamPlayer.tournament_id == t.id).first()
-    if not tp:
-        raise HTTPException(404, "Không tìm thấy VĐV")
+    tp = _get_team_player(db, t, tpid, participant_id=pid)
     if t.status == models.TournamentStatus.completed:
         raise HTTPException(400, "Giải đã kết thúc")
-    # Đã có tên trong một trận thành phần → không xoá (giữ lịch sử); gỡ khỏi trận trước
-    used = db.query(models.TournamentTieRubber).join(
-        models.TournamentMatch, models.TournamentMatch.id == models.TournamentTieRubber.match_id
-    ).filter(models.TournamentMatch.tournament_id == t.id).all()
-    for r in used:
-        if tpid in (r.side1_players or []) or tpid in (r.side2_players or []):
-            raise HTTPException(400, f"VĐV đã có tên trong trận thành phần ({r.label}) — gỡ khỏi trận trước")
-    for lu in db.query(models.TournamentStageLineup).filter(models.TournamentStageLineup.participant_id == pid).all():
-        slots = dict(lu.slots or {})
-        changed = False
-        for k, v in list(slots.items()):
-            if tpid in (v or []):
-                slots[k] = [x for x in v if x != tpid]; changed = True
-        if changed:
-            lu.slots = slots
-    db.delete(tp); db.commit()
+    _detach_team_player(db, t, tp)
+    tp.participant_id = None
+    db.commit()
 
 
 @app.delete("/api/tournaments/{tid}/teams/{pid}", status_code=204)
@@ -3931,6 +4123,10 @@ def delete_team(tid: int, pid: int, db: Session = Depends(get_db), perms: ClubPe
     if t.status != models.TournamentStatus.draft:
         raise HTTPException(400, "Chỉ xoá đội khi giải còn Nháp")
     p = _get_team(db, t, pid)
+    # VĐV của đội quay về danh sách tham dự (không rời giải) — phân lại vào đội khác / vòng quay
+    for tp in _team_players(db, t, [p.id]):
+        tp.participant_id = None; tp.is_captain = False
+    db.flush()
     db.delete(p); db.commit()
 
 
