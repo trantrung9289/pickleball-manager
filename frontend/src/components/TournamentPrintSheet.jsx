@@ -507,7 +507,7 @@ function CombinedSheet({ tournament, standingsByGroup, isTeam }) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// GIẢI ĐỒNG ĐỘI (team_type="team"): phiếu đăng ký đội hình theo giai đoạn + biên bản trận đồng đội.
+// GIẢI ĐỒNG ĐỘI (team_type="team"): phiếu đăng ký đội hình (tách từng đội × lượt × vòng) + biên bản trận đồng đội.
 // Dữ liệu TUỲ CHỌN do trang quản trị truyền vào: teams (TeamOut[]), lineups ({participant_id: LineupOut[]}),
 // ties ({match_id: TieOut}). Thiếu teams → bỏ qua phiếu đội hình; thiếu ties[mid] → in khung trống theo rules.
 // ══════════════════════════════════════════════════════════════════════════════
@@ -560,8 +560,10 @@ function PlayerCell({ names, size }) {
   );
 }
 
-// ── Trang: PHIẾU ĐĂNG KÝ ĐỘI HÌNH — một trang / đội; mỗi giai đoạn một bảng, điền sẵn nếu đã đăng ký ──
-function TeamLineupSheet({ tournament, rules, team, lineups }) {
+// ── Trang: PHIẾU ĐĂNG KÝ ĐỘI HÌNH — TÁCH RIÊNG từng đội × từng lượt × từng vòng (một trang / trận của đội).
+// Điền sẵn từ đội hình giai đoạn đã đăng ký (lineups), lãnh đội có thể sửa tay cho trận này.
+// Đội chưa có trận (giải Nháp / chưa xếp lịch) → một trang / giai đoạn (lượt) để vẫn tách theo lượt.
+function TeamLineupSheet({ tournament, rules, team, lineups, match, stage, opponent }) {
   const p = team.participant || {};
   const players = [...(team.players || [])].sort((a, b) =>
     (b.is_captain ? 1 : 0) - (a.is_captain ? 1 : 0)
@@ -569,26 +571,43 @@ function TeamLineupSheet({ tournament, rules, team, lineups }) {
   const captain = players.find((x) => x.is_captain);
   const byId = playersById(team);
   const rubbers = templateRubbers(rules);
-  const stages = [...new Set([...stagesForFormat(tournament.format), ...(lineups || []).map((l) => l.stage_key)])];
   const maxSize = Math.max(1, ...rubbers.map((r) => rubberSize(r.code)));
+  const lu = (lineups || []).find((l) => l.stage_key === stage);
+  const slots = lu?.slots || {};
+  const filled = Object.values(slots).some((ids) => (ids || []).length > 0);
+  // round_name của vòng tròn 2 lượt đã mang "Lượt đi – Vòng 1" → bỏ tiền tố lượt vì ô "Lượt" đã ghi riêng
+  const roundText = match
+    ? ((match.round_name || `Vòng ${match.round_number}`).replace(/^Lượt (đi|về)\s*[–-]\s*/i, ""))
+    : "Vòng ______";
+  const opponentName = match ? (opponent ? teamLabel(opponent) : "(chờ xác định)") : "______________________";
 
   return (
     <div className="print-page print-portrait">
       <SheetHeader tournament={tournament} subtitle="PHIẾU ĐĂNG KÝ ĐỘI HÌNH" />
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 12, marginBottom: 6 }}>
-        <div style={{ minWidth: 0 }}>
-          <div style={{ fontSize: 17, fontWeight: 800, wordBreak: "break-word" }}>Đội: {teamLabel(p)}</div>
-          <div style={{ fontSize: 12, color: "#555" }}>
-            {p.group_name ? `Bảng ${p.group_name} · ` : ""}{players.length} VĐV
-            {p.status === "withdrawn" ? " · đã bỏ giải" : ""}
-          </div>
+
+      {/* Khối định danh trận: lượt – vòng – trận – bảng – đối thủ (mỗi trang chỉ một trận) */}
+      <div style={{
+        display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "4px 12px", padding: "8px 12px",
+        border: "1.5px solid #141413", borderRadius: 6, marginBottom: 8, fontSize: 12.5, breakInside: "avoid",
+      }}>
+        <div><span style={{ color: "#666" }}>Lượt:</span> <b>{stageLabel(stage)}</b></div>
+        <div><span style={{ color: "#666" }}>Vòng:</span> <b>{roundText}</b></div>
+        <div><span style={{ color: "#666" }}>Trận:</span> <b>{match ? `#${match.match_number}` : "______"}</b>
+          {match?.group_name ? <span style={{ color: "#666" }}> · Bảng <b style={{ color: "#141413" }}>{match.group_name}</b></span>
+            : p.group_name ? <span style={{ color: "#666" }}> · Bảng <b style={{ color: "#141413" }}>{p.group_name}</b></span> : null}
         </div>
-        <div style={{ fontSize: 12, color: "#555", whiteSpace: "nowrap" }}>
-          Đội trưởng / lãnh đội: <b>{captain?.display_name || "_______________"}</b>
+        <div style={{ gridColumn: "1 / span 2", wordBreak: "break-word" }}>
+          <span style={{ color: "#666" }}>Đội:</span> <b style={{ fontSize: 15 }}>{teamLabel(p)}</b>
+          <span style={{ color: "#666" }}> &nbsp;gặp&nbsp; </span><b style={{ fontSize: 15 }}>{opponentName}</b>
         </div>
+        <div><span style={{ color: "#666" }}>Sân:</span> ______ &nbsp;·&nbsp; <span style={{ color: "#666" }}>Giờ:</span> ______</div>
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, fontSize: 12, color: "#555", marginBottom: 4 }}>
+        <div>{players.length} VĐV{p.status === "withdrawn" ? " · đã bỏ giải" : ""}</div>
+        <div style={{ whiteSpace: "nowrap" }}>Đội trưởng / lãnh đội: <b>{captain?.display_name || "_______________"}</b></div>
       </div>
 
-      <div style={sectionTitleStyle}>Danh sách VĐV</div>
+      <div style={sectionTitleStyle}>Danh sách VĐV đăng ký</div>
       <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
         <colgroup>
           <col style={{ width: 28 }} /><col /><col style={{ width: 70 }} /><col style={{ width: 110 }} />
@@ -619,65 +638,60 @@ function TeamLineupSheet({ tournament, rules, team, lineups }) {
         </tbody>
       </table>
 
-      {stages.map((stage) => {
-        const lu = (lineups || []).find((l) => l.stage_key === stage);
-        const slots = lu?.slots || {};
-        const filled = Object.values(slots).some((ids) => (ids || []).length > 0);
-        return (
-          <div key={stage} style={{ breakInside: "avoid" }}>
-            <div style={sectionTitleStyle}>
-              Đội hình giai đoạn: {stageLabel(stage)}
-              <span style={{ fontWeight: 400, textTransform: "none", letterSpacing: 0, marginLeft: 8, color: "#888" }}>
-                {filled ? (lu?.locked ? "— đã đăng ký, đã khoá" : "— đã đăng ký (điền sẵn)") : "— lãnh đội điền tay"}
-              </span>
-            </div>
-            <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
-              <colgroup>
-                <col style={{ width: 28 }} /><col style={{ width: 150 }} />
-                {Array.from({ length: maxSize }, (_, i) => <col key={i} />)}
-              </colgroup>
-              <thead>
-                <tr>
-                  <th style={thStyle()}>TT</th>
-                  <th style={thStyle("left")}>Thể thức</th>
-                  {Array.from({ length: maxSize }, (_, i) => <th key={i} style={thStyle("left")}>VĐV {i + 1}</th>)}
+      <div style={{ breakInside: "avoid" }}>
+        <div style={sectionTitleStyle}>
+          Đội hình thi đấu trận này
+          <span style={{ fontWeight: 400, textTransform: "none", letterSpacing: 0, marginLeft: 8, color: "#888" }}>
+            {filled
+              ? (lu?.locked ? "— điền sẵn từ đội hình giai đoạn đã khoá" : "— điền sẵn từ đội hình giai đoạn đã đăng ký, có thể sửa tay")
+              : "— lãnh đội điền tay trước giờ thi đấu"}
+          </span>
+        </div>
+        <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
+          <colgroup>
+            <col style={{ width: 28 }} /><col style={{ width: 150 }} />
+            {Array.from({ length: maxSize }, (_, i) => <col key={i} />)}
+          </colgroup>
+          <thead>
+            <tr>
+              <th style={thStyle()}>TT</th>
+              <th style={thStyle("left")}>Thể thức</th>
+              {Array.from({ length: maxSize }, (_, i) => <th key={i} style={thStyle("left")}>VĐV {i + 1}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {rubbers.map((r) => {
+              const names = playerNames(slots[r.label] || [], byId);
+              const size = rubberSize(r.code);
+              return (
+                <tr key={r.order_index} style={{ breakInside: "avoid" }}>
+                  <td style={tdStyle()}>{r.order_index}</td>
+                  <td style={tdStyle("left")}>
+                    {r.label}
+                    <div style={{ fontSize: 11, color: "#888" }}>{rubberCodeLabel(r.code)}</div>
+                  </td>
+                  {Array.from({ length: maxSize }, (_, i) => (
+                    <td key={i} style={tdStyle("left", { height: 36 })}>
+                      {i >= size
+                        ? <span style={{ color: "#bbb" }}>—</span>
+                        : (names[i] || <div style={{ borderBottom: "1px dotted #999", height: 22 }} />)}
+                    </td>
+                  ))}
                 </tr>
-              </thead>
-              <tbody>
-                {rubbers.map((r) => {
-                  const names = playerNames(slots[r.label] || [], byId);
-                  const size = rubberSize(r.code);
-                  return (
-                    <tr key={r.order_index} style={{ breakInside: "avoid" }}>
-                      <td style={tdStyle()}>{r.order_index}</td>
-                      <td style={tdStyle("left")}>
-                        {r.label}
-                        <div style={{ fontSize: 11, color: "#888" }}>{rubberCodeLabel(r.code)}</div>
-                      </td>
-                      {Array.from({ length: maxSize }, (_, i) => (
-                        <td key={i} style={tdStyle("left", { height: 32 })}>
-                          {i >= size
-                            ? <span style={{ color: "#bbb" }}>—</span>
-                            : (names[i] || <div style={{ borderBottom: "1px dotted #999", height: 20 }} />)}
-                        </td>
-                      ))}
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        );
-      })}
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
 
       <div style={{ marginTop: 10, padding: "8px 12px", border: "1.3px dashed #bbb", borderRadius: 6, fontSize: 11.5, color: "#666", lineHeight: 1.6 }}>
         <b style={{ color: "#141413" }}>Ghi chú</b><br />
         Thể thức: {scoringLabel(rules)} · {rules.points_per_rubber} điểm/trận{rules.win_by_two ? ", cách biệt 2" : ""}
         {isCumulative(rules) ? ` · mốc tổng ${rules.target_total} điểm` : ""} · mỗi VĐV tối đa {rules.max_rubbers_per_player} trận
-        thành phần trong một trận đồng đội. Đội hình giai đoạn tự khoá khi giai đoạn đó có trận thành phần đầu tiên được
-        ghi điểm; thay đổi sau đó phải qua ban tổ chức (có ghi nhận lý do).
+        thành phần trong một trận đồng đội. Nộp phiếu cho trọng tài trước giờ thi đấu; đội hình giai đoạn tự khoá khi giai đoạn
+        đó có trận thành phần đầu tiên được ghi điểm, thay đổi sau đó phải qua ban tổ chức (có ghi nhận lý do).
       </div>
-      <SignatureRow labels={["Lãnh đội", "Ban tổ chức"]} />
+      <SignatureRow labels={["Lãnh đội", "Trọng tài", "Ban tổ chức"]} />
     </div>
   );
 }
@@ -815,7 +829,7 @@ function TieSheet({ tournament, rules, match, tie, teamsById, firstLeg }) {
  * (bảng xếp hạng) để nơi gọi biết lúc nào an toàn để trigger window.print().
  *
  * Giải đồng đội (team_type="team") — props tuỳ chọn do trang quản trị truyền thêm:
- *   teams:   TeamOut[]                         → in "Phiếu đăng ký đội hình" (1 trang / đội); thiếu → bỏ qua
+ *   teams:   TeamOut[]                         → in "Phiếu đăng ký đội hình" (1 trang / đội / trận — tách lượt & vòng); thiếu → bỏ qua
  *   lineups: { [participant_id]: LineupOut[] } → điền sẵn đội hình theo giai đoạn (thiếu → ô trống)
  *   ties:    { [match_id]: TieOut }            → điền sẵn biên bản; thiếu → khung trống theo team_rules
  */
@@ -867,6 +881,29 @@ export default function TournamentPrintSheet({ tournament, onReady, teams, lineu
         || a.match_number - b.match_number)
     : [];
   const firstLeg = isTeam ? firstLegRounds(fmt, tournament.matches) : 0;
+  // Phiếu đăng ký đội hình: một trang / đội / trận (tách theo lượt và vòng, thứ tự: vòng bảng → loại trực tiếp,
+  // theo vòng, số trận). Xử thua do bỏ giải không có trận thành phần → không in. Đội chưa có trận → một trang / lượt.
+  const lineupPages = [];
+  if (isTeam) {
+    const sortedMatches = [...(tournament.matches || [])]
+      .filter((m) => !m.is_walkover)
+      .sort((a, b) => Number(a.phase === "knockout") - Number(b.phase === "knockout")
+        || a.round_number - b.round_number
+        || a.match_number - b.match_number);
+    (teams || []).forEach((team) => {
+      const pid = team.participant?.id;
+      if (pid == null || team.participant?.status === "withdrawn") return;
+      const mine = sortedMatches.filter((m) => m.p1_id === pid || m.p2_id === pid);
+      if (mine.length) {
+        mine.forEach((m) => lineupPages.push({
+          team, match: m, stage: stageKeyForMatch(fmt, m, firstLeg),
+          opponent: m.p1_id === pid ? (m.p2 || teamsById[m.p2_id]?.participant) : (m.p1 || teamsById[m.p1_id]?.participant),
+        }));
+      } else {
+        stagesForFormat(fmt).forEach((stage) => lineupPages.push({ team, match: null, stage, opponent: null }));
+      }
+    });
+  }
 
   return (
     <div className="print-sheet-root">
@@ -875,11 +912,11 @@ export default function TournamentPrintSheet({ tournament, onReady, teams, lineu
       {(fmt === "round_robin" || fmt === "round_robin_double" || fmt === "individual") && (
         <RoundRobinSheet tournament={tournament} standings={standings._all} isTeam={isTeam} />
       )}
-      {isTeam && (teams || []).map((t) => (
+      {isTeam && lineupPages.map(({ team, match, stage, opponent }) => (
         <TeamLineupSheet
-          key={`lineup-${t.participant?.id}`}
-          tournament={tournament} rules={rules} team={t}
-          lineups={lineups?.[t.participant?.id]}
+          key={`lineup-${team.participant?.id}-${match ? match.id : stage}`}
+          tournament={tournament} rules={rules} team={team}
+          lineups={lineups?.[team.participant?.id]} match={match} stage={stage} opponent={opponent}
         />
       ))}
       {isTeam && tieMatches.map((m) => (
