@@ -4143,6 +4143,43 @@ def patch_tournament_team_player(tid: int, tpid: int, data: schemas.TeamPlayerPa
     return _team_player_out(tp)
 
 
+@app.post("/api/tournaments/{tid}/team-players/assign", response_model=schemas.TeamPlayersAssignOut)
+def assign_tournament_team_players(tid: int, data: schemas.TeamPlayersAssignIn, db: Session = Depends(get_db),
+                                   perms: ClubPermissions = Depends(get_club_permission)):
+    """PHÂN ĐỘI THỦ CÔNG theo lô (bảng phân đội, 2026-10-23): nhiều VĐV → một/nhiều đội, hoặc gỡ về danh sách
+    tham dự (participant_id null). Nguyên tử: một VĐV không hợp lệ (đã có tên trong biên bản, đội bỏ giải,
+    không thuộc giải) → cả lô bị từ chối, không ghi gì. Cùng ràng buộc với PATCH từng người."""
+    perms.require_edit()
+    t = _get_club_tournament(db, tid, perms)
+    _require_team_tournament(t)
+    if t.status == models.TournamentStatus.completed:
+        raise HTTPException(400, "Giải đã kết thúc")
+    _require_no_open_team_draw(t)
+    seen: set[int] = set()
+    updated: list = []
+    targets: dict[int, "models.TournamentParticipant"] = {}
+    for item in data.assignments:
+        if item.tpid in seen:
+            continue
+        seen.add(item.tpid)
+        tp = _get_team_player(db, t, item.tpid)
+        if item.participant_id == tp.participant_id:
+            updated.append(tp)
+            continue
+        if item.participant_id is not None:
+            target = targets.get(item.participant_id) or _get_team(db, t, item.participant_id)
+            targets[item.participant_id] = target
+            if target.status == models.ParticipantStatus.withdrawn:
+                raise HTTPException(400, f"Đội {target.team_name} đã bỏ giải — không thêm VĐV")
+        _detach_team_player(db, t, tp)   # chặn nếu đã có tên trong biên bản → HTTPException → không commit gì
+        tp.participant_id = item.participant_id
+        updated.append(tp)
+    db.commit()
+    for tp in updated:
+        db.refresh(tp)
+    return {"updated": [_team_player_out(tp) for tp in updated], "pool_count": len(_team_pool(db, t))}
+
+
 @app.delete("/api/tournaments/{tid}/team-players/{tpid}", status_code=204)
 def delete_tournament_team_player(tid: int, tpid: int, db: Session = Depends(get_db),
                                   perms: ClubPermissions = Depends(get_club_permission)):

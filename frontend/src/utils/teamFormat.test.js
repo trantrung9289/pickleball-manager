@@ -6,7 +6,7 @@ import {
   autoLabelRubbers, placeholderLabels, normalizeTeamRules, defaultTeamRules, defaultTargetTotal, rubberTarget,
   stagesForFormat, overLimitIds, appearanceCounts, genderIssue, preferredGenders, teamGenderNeeds,
   teamRosterWarnings, tieScoreLabel, playerIndex, rubberStatusLabel, rubberSize, slotIssueText,
-  indexTeamPlayers, matchRubbersForDisplay, rubberScoreView,
+  indexTeamPlayers, matchRubbersForDisplay, rubberScoreView, distributeEvenly,
 } from "./teamFormat.js";
 
 test("autoLabelRubbers: nhãn trống tự đánh số theo thể thức, bộ đếm tăng cả khi có nhãn tự đặt, trùng nhãn thêm hậu tố", () => {
@@ -151,4 +151,19 @@ test("indexTeamPlayers / matchRubbersForDisplay / rubberScoreView", () => {
   const pa2 = normalizeTeamRules({ scoring: "cumulative", rubbers: [{ code: "MD" }, { code: "MD" }] });
   assert.deepEqual(rubberScoreView({ status: "completed", score1: 18, score2: 22, start1: 11, start2: 7 }, pa2),
     { text: "18 – 22", own: "7 / 15", winner: 2 });
+});
+
+test("distributeEvenly: gán cho đội ít người nhất, hoà thì đội đứng trước", () => {
+  const teams = [
+    { participant: { id: 1 }, players: [{}, {}] },
+    { participant: { id: 2 }, players: [] },
+    { participant: { id: 3 }, players: [{}] },
+  ];
+  assert.deepEqual(distributeEvenly([10, 11, 12, 13], teams), [
+    { tpid: 10, participant_id: 2 },   // 2:0 → 1
+    { tpid: 11, participant_id: 2 },   // đội 2 (1) vẫn ≤ đội 3 (1)? hoà → đội đứng trước trong danh sách là đội 2? không: 1:2, 2:1, 3:1 → đội 2 đứng trước đội 3
+    { tpid: 12, participant_id: 3 },   // 1:2, 2:2, 3:1 → đội 3
+    { tpid: 13, participant_id: 1 },   // 1:2, 2:2, 3:2 → hoà → đội 1
+  ]);
+  assert.deepEqual(distributeEvenly([1], []), []);
 });

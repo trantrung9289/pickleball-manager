@@ -273,3 +273,21 @@ export function rubberScoreView(rubber, rules) {
   const winner = cumulative ? (o1 > o2 ? 1 : o2 > o1 ? 2 : null) : (s1 > s2 ? 1 : s2 > s1 ? 2 : null);
   return { text: `${s1} – ${s2}`, own: cumulative ? `${o1} / ${o2}` : null, winner };
 }
+
+/**
+ * Bảng phân đội thủ công — "Chia đều": lần lượt gán mỗi VĐV đã chọn cho đội đang ÍT người nhất
+ * (hoà → đội đứng trước trong danh sách). teams: TeamOut[] ({participant:{id}, players:[]}).
+ * Trả về [{tpid, participant_id}] cho POST /team-players/assign.
+ */
+export function distributeEvenly(tpids, teams) {
+  const sizes = (teams || []).map((t) => ({ pid: t.participant.id, n: (t.players || []).length }));
+  if (!sizes.length) return [];
+  const out = [];
+  (tpids || []).forEach((tpid) => {
+    let best = 0;
+    for (let i = 1; i < sizes.length; i++) if (sizes[i].n < sizes[best].n) best = i;
+    sizes[best].n += 1;
+    out.push({ tpid, participant_id: sizes[best].pid });
+  });
+  return out;
+}

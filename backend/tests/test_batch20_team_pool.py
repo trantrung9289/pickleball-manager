@@ -188,3 +188,42 @@ def test_migration_rebuilds_table_when_participant_not_null(tmp_path):
     idx = {r[1] for r in con.execute("PRAGMA index_list(tournament_team_players)")}
     assert "ix_tournament_team_players_tournament_id" in idx
     con.close()
+
+
+def test_manual_bulk_assign_is_atomic(client, world, db):
+    """Bảng phân đội thủ công (2026-10-23): POST /team-players/assign — nhiều VĐV → đội / gỡ trong một request;
+    một mục sai → cả lô bị từ chối, không ghi gì."""
+    t = _create_team_tournament(client, world)
+    tid = t["id"]; h = _h(world)
+    _set_genders(db, world)
+    client.post(f"/api/tournaments/{tid}/team-players/bulk",
+                json={"member_ids": [m.id for m in world.members1[:4]]}, headers=h)
+    teams = client.post(f"/api/tournaments/{tid}/teams/bulk", json={"count": 2}, headers=h).json()
+    p1, p2 = teams[0]["participant"]["id"], teams[1]["participant"]["id"]
+    pool = _pool(client, world, tid)
+    a, b, c, d = [x["id"] for x in pool]
+
+    r = client.post(f"/api/tournaments/{tid}/team-players/assign",
+                    json={"assignments": [{"tpid": a, "participant_id": p1}, {"tpid": b, "participant_id": p1},
+                                          {"tpid": c, "participant_id": p2}, {"tpid": a, "participant_id": p1}]}, headers=h)
+    assert r.status_code == 200, r.text
+    assert r.json()["pool_count"] == 1 and len(r.json()["updated"]) == 3     # tpid trùng chỉ tính một lần
+    assert {u["id"]: u["participant_id"] for u in r.json()["updated"]} == {a: p1, b: p1, c: p2}
+
+    # Lô có một mục không thuộc giải → 404 và KHÔNG đổi gì (d vẫn chờ, a vẫn ở đội 1)
+    r = client.post(f"/api/tournaments/{tid}/team-players/assign",
+                    json={"assignments": [{"tpid": d, "participant_id": p2}, {"tpid": 999999, "participant_id": p2}]}, headers=h)
+    assert r.status_code == 404
+    assert [x["id"] for x in _pool(client, world, tid)] == [d]
+    # Chuyển đội + gỡ về danh sách trong cùng lô
+    r = client.post(f"/api/tournaments/{tid}/team-players/assign",
+                    json={"assignments": [{"tpid": a, "participant_id": p2}, {"tpid": b, "participant_id": None}]}, headers=h)
+    assert r.status_code == 200 and r.json()["pool_count"] == 2
+    by_team = {x["participant"]["id"]: [y["id"] for y in x["players"]]
+               for x in client.get(f"/api/tournaments/{tid}/teams", headers=h).json()}
+    assert by_team[p1] == [] and sorted(by_team[p2]) == sorted([a, c])
+    # Rỗng → 422; không có quyền sửa → 403
+    assert client.post(f"/api/tournaments/{tid}/team-players/assign", json={"assignments": []}, headers=h).status_code == 422
+    assert client.post(f"/api/tournaments/{tid}/team-players/assign",
+                       json={"assignments": [{"tpid": d, "participant_id": p1}]},
+                       headers=World.headers(world.viewer1, world.club1)).status_code == 403

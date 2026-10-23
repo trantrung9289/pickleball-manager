@@ -951,6 +951,21 @@ class TeamPlayersAddOut(BaseModel):
     pool_count: int = 0
 
 
+class TeamPlayerAssignItem(BaseModel):
+    tpid: int
+    participant_id: Optional[int] = None   # None = gỡ về danh sách tham dự
+
+
+class TeamPlayersAssignIn(BaseModel):
+    """Phân đội thủ công theo lô (bảng phân đội): nhiều VĐV → đội / gỡ, áp dụng nguyên tử."""
+    assignments: List[TeamPlayerAssignItem] = Field(min_length=1, max_length=500)
+
+
+class TeamPlayersAssignOut(BaseModel):
+    updated: List[TeamPlayerOut]
+    pool_count: int = 0
+
+
 class TeamPlayersBulkOut(BaseModel):
     added: int
     skipped: List[str] = []

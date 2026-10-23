@@ -187,6 +187,7 @@ export const tournamentsApi = {
     list: (tid) => api.get(`/api/tournaments/${tid}/team-players`),                          // → TeamPlayerOut[] (mọi VĐV)
     add: (tid, data) => api.post(`/api/tournaments/${tid}/team-players/bulk`, data),         // {member_ids, player_ids, participant_id?} → {added, skipped, team?, pool_count}
     patch: (tid, tpid, data) => api.patch(`/api/tournaments/${tid}/team-players/${tpid}`, data),   // {participant_id?: int|null, gender?, rank?, is_captain?}
+    assign: (tid, assignments) => api.post(`/api/tournaments/${tid}/team-players/assign`, { assignments }),   // [{tpid, participant_id|null}] nguyên tử → {updated, pool_count}
     remove: (tid, tpid) => api.delete(`/api/tournaments/${tid}/team-players/${tpid}`),        // xoá hẳn khỏi giải
   },
   // Đội hình đăng ký theo giai đoạn (leg1 | leg2 | knockout) — khoá tự động khi giai đoạn có điểm đầu tiên

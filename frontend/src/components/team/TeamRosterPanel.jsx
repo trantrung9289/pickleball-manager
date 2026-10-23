@@ -3,7 +3,7 @@ import {
   Alert, Button, Card, Col, Empty, Input, InputNumber, Modal, Row, Select, Space, Spin, Tag, Tooltip, Typography, message,
 } from "antd";
 import {
-  DeleteOutlined, EditOutlined, GiftOutlined, PlusOutlined, RollbackOutlined, StarFilled, StarOutlined, TeamOutlined,
+  DeleteOutlined, EditOutlined, GiftOutlined, PlusOutlined, RollbackOutlined, StarFilled, StarOutlined, SwapOutlined, TeamOutlined,
   UserAddOutlined, UsergroupAddOutlined, UserOutlined,
 } from "@ant-design/icons";
 import { tournamentsApi } from "../../api";
@@ -12,6 +12,7 @@ import ResponsiveTable from "../ResponsiveTable";
 import GenderTag from "./GenderTag";
 import StageLineupModal from "./StageLineupModal";
 import TeamDrawSetupModal from "./TeamDrawSetupModal";
+import TeamManualAssignModal from "./TeamManualAssignModal";
 import TeamDrawCeremony from "../draw/TeamDrawCeremony";
 import { useRankLevels } from "../../hooks/useRankLevels";
 import { serverOffset } from "../../utils/drawMath";
@@ -83,6 +84,8 @@ export default function TeamRosterPanel({ tournament, canEdit = false, onChanged
   const [teamDraw, setTeamDraw] = useState(null);
   const [drawOpen, setDrawOpen] = useState(false);
   const [drawSetup, setDrawSetup] = useState(false);
+  const [manualOpen, setManualOpen] = useState(false);     // bảng PHÂN ĐỘI THỦ CÔNG theo lô
+  const [manualBusy, setManualBusy] = useState(false);
   const [drawBusy, setDrawBusy] = useState(false);
   const [drawOffset, setDrawOffset] = useState(0);
   const { options: rankOptions } = useRankLevels();
@@ -284,6 +287,23 @@ export default function TeamRosterPanel({ tournament, canEdit = false, onChanged
     await run(() => tournamentsApi.teamPlayers.remove(tid, p.id), "Đã xoá VĐV khỏi giải", "Không thể xoá VĐV", true);
   };
 
+  // Bảng phân đội thủ công: nhiều VĐV → đội / gỡ, một request nguyên tử; modal giữ mở, dữ liệu mới qua props
+  const handleManualApply = async (assignments, okMsg) => {
+    if (!assignments.length) return false;
+    setManualBusy(true);
+    try {
+      await tournamentsApi.teamPlayers.assign(tid, assignments);
+      await refresh(true);
+      if (okMsg) message.success(okMsg);
+      return true;
+    } catch (err) {
+      message.error(err?.response?.data?.detail || "Không thể phân đội");
+      return false;
+    } finally {
+      setManualBusy(false);
+    }
+  };
+
   const handleAssign = async (p, participantId) => {
     const team = teams.find((t) => t.participant.id === participantId);
     setPickKey((k) => k + 1);
@@ -452,6 +472,9 @@ export default function TeamRosterPanel({ tournament, canEdit = false, onChanged
         title={<span><UserOutlined /> VĐV tham dự chưa phân đội ({pool.length})</span>}
         extra={canEdit && status !== "completed" && (
           <Space size={4} wrap>
+            {canAddPlayers && activeTeams.length >= 1 && allPlayers.length > 0 && (
+              <Button size="small" icon={<SwapOutlined />} onClick={() => setManualOpen(true)}>✋ Phân đội (thủ công)</Button>
+            )}
             {canDraw && !drawLocked && (
               <Button size="small" icon={<GiftOutlined />} onClick={() => setDrawSetup(true)}>🎡 Phân đội (vòng quay)</Button>
             )}
@@ -461,8 +484,8 @@ export default function TeamRosterPanel({ tournament, canEdit = false, onChanged
         {loading ? <div style={{ textAlign: "center", padding: 16 }}><Spin /></div> : pool.length === 0 ? (
           <Text type="secondary" style={{ fontSize: 13 }}>
             {allPlayers.length === 0
-              ? "Bước 1: thêm toàn bộ VĐV tham dự giải (thành viên / khách mời). Bước 2: tạo đội. Bước 3: phân VĐV vào đội (chọn đội trên từng dòng, hoặc chọn từ danh sách ở thẻ đội)."
-              : "Mọi VĐV đã được phân vào đội. Gỡ VĐV khỏi đội (nút ↩ trên thẻ đội) để phân lại, kể cả bằng vòng quay."}
+              ? "Bước 1: thêm toàn bộ VĐV tham dự giải (thành viên / khách mời). Bước 2: tạo đội. Bước 3: phân VĐV vào đội — bảng Phân đội (thủ công) chọn nhiều người một lúc, vòng quay theo luật hạng/giới tính, hoặc chọn đội trên từng dòng."
+              : "Mọi VĐV đã được phân vào đội. Mở Phân đội (thủ công) để chuyển/gỡ nhiều người, hoặc gỡ từng VĐV (nút ↩ trên thẻ đội) để phân lại, kể cả bằng vòng quay."}
           </Text>
         ) : (
           <>
@@ -534,6 +557,10 @@ export default function TeamRosterPanel({ tournament, canEdit = false, onChanged
       )}
       {lineupTarget && (
         <StageLineupModal tournament={tournament} team={lineupTarget} canEdit={canEdit} onClose={() => setLineupTarget(null)} />
+      )}
+      {manualOpen && (
+        <TeamManualAssignModal pool={pool} teams={activeTeams} rankOptions={rankOptions} busy={manualBusy}
+          onApply={handleManualApply} onClose={() => setManualOpen(false)} />
       )}
       {drawSetup && (
         <TeamDrawSetupModal tournament={tournament} pool={pool} teams={activeTeams} initialRules={teamDraw?.rules || tournament.team_draw_rules}
