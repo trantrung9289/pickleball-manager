@@ -60,7 +60,7 @@ function SheetHeader({ tournament, subtitle }) {
         <div style={{ fontSize: 12.5, color: "#555", marginTop: 2 }}>Tên giải: {tournament.name}</div>
       </div>
       <div style={{ textAlign: "right", fontSize: 12, color: "#555", lineHeight: 1.6, whiteSpace: "nowrap" }}>
-        Ngày: ____ / ____ / 2026 &nbsp;·&nbsp; Số đội: <b>{tournament.participants.length}</b>
+        Ngày: ____ / ____ / {new Date().getFullYear()} &nbsp;·&nbsp; Số đội: <b>{tournament.participants.length}</b>
         &nbsp;·&nbsp; {TEAM_TYPE_LABEL[tournament.team_type] || "Đấu đơn"}
         {teamCounts ? <>&nbsp;·&nbsp; {teamCounts}</> : null}
         <br />Người ghi: _______________
@@ -571,7 +571,7 @@ function PlayerCell({ names, size }) {
 }
 
 // ── Trang: PHIẾU ĐĂNG KÝ ĐỘI HÌNH — TÁCH RIÊNG từng đội × từng lượt × từng vòng (một trang / trận của đội).
-// Điền sẵn từ đội hình giai đoạn đã đăng ký (lineups), lãnh đội có thể sửa tay cho trận này.
+// Điền sẵn từ đội hình giai đoạn đã đăng ký (lineups), đội trưởng có thể sửa tay cho trận này.
 // Đội chưa có trận (giải Nháp / chưa xếp lịch) → một trang / giai đoạn (lượt) để vẫn tách theo lượt.
 function TeamLineupSheet({ tournament, rules, team, lineups, match, stage, opponent }) {
   const p = team.participant || {};
@@ -614,7 +614,7 @@ function TeamLineupSheet({ tournament, rules, team, lineups, match, stage, oppon
       </div>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 12, fontSize: 12, color: "#555", marginBottom: 4 }}>
         <div>{players.length} VĐV{p.status === "withdrawn" ? " · đã bỏ giải" : ""}</div>
-        <div style={{ whiteSpace: "nowrap" }}>Đội trưởng / lãnh đội: <b>{captain?.display_name || "_______________"}</b></div>
+        <div style={{ whiteSpace: "nowrap" }}>Đội trưởng: <b>{captain?.display_name || "_______________"}</b></div>
       </div>
 
       <div style={sectionTitleStyle}>Danh sách VĐV đăng ký</div>
@@ -654,7 +654,7 @@ function TeamLineupSheet({ tournament, rules, team, lineups, match, stage, oppon
           <span style={{ fontWeight: 400, textTransform: "none", letterSpacing: 0, marginLeft: 8, color: "#888" }}>
             {filled
               ? (lu?.locked ? "— điền sẵn từ đội hình giai đoạn đã khoá" : "— điền sẵn từ đội hình giai đoạn đã đăng ký, có thể sửa tay")
-              : "— lãnh đội điền tay trước giờ thi đấu"}
+              : "— đội trưởng điền tay trước giờ thi đấu"}
           </span>
         </div>
         <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
@@ -701,7 +701,7 @@ function TeamLineupSheet({ tournament, rules, team, lineups, match, stage, oppon
         thành phần trong một trận đồng đội. Nộp phiếu cho trọng tài trước giờ thi đấu; đội hình giai đoạn tự khoá khi giai đoạn
         đó có trận thành phần đầu tiên được ghi điểm, thay đổi sau đó phải qua ban tổ chức (có ghi nhận lý do).
       </div>
-      <SignatureRow labels={["Lãnh đội", "Trọng tài", "Ban tổ chức"]} />
+      <SignatureRow labels={["Đội trưởng đội", "Trọng tài", "Ban tổ chức"]} />
     </div>
   );
 }
@@ -828,7 +828,7 @@ function TieSheet({ tournament, rules, match, tie, teamsById, firstLeg }) {
           : "Cách ghi: điền tỉ số từng trận thành phần; đánh hết các trận dù đã phân định. Hoà số trận → phân định bằng hiệu số điểm nhỏ (tổng điểm ghi − tổng điểm thua); vẫn bằng → đội thắng trận thành phần cuối cùng."}
         {" "}Xử thua: bên vắng / đến trễ nhận 0 − điểm tối đa, ghi "xử thua" ở cột Thắng.
       </div>
-      <SignatureRow labels={[`Lãnh đội ${name1}`, "Trọng tài", `Lãnh đội ${name2}`]} />
+      <SignatureRow labels={[`Đội trưởng đội ${name1}`, "Trọng tài", `Đội trưởng đội ${name2}`]} />
     </div>
   );
 }
