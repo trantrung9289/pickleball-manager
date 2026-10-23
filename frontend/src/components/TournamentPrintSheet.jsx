@@ -9,6 +9,7 @@ import {
   normalizeTeamRules, templateRubbers, isCumulative, scoringLabel, stageLabel, playersById, playerNames,
   rubberCodeLabel, rubberSize, firstLegRounds, stageKeyForMatch, stagesForFormat, genderLabel,
 } from "../utils/teamLabels";
+import { rubberTotals } from "../utils/teamFormat";
 
 // Giống hệt teamLabel/teamRank trong Tournament.jsx và PublicTournamentTracker.jsx (đã trùng lặp
 // sẵn giữa 2 file đó) — giữ nguyên logic để tên hiển thị nhất quán trên toàn hệ thống.
@@ -38,6 +39,14 @@ const BRACKET_MIN_SCALE = 0.5; // dưới mức này chữ quá nhỏ để ghi 
 function SheetHeader({ tournament, subtitle }) {
   // Portal vào document.body vẫn giữ React context → đọc được CLB đang chọn.
   const clubName = useAuth()?.selectedClub?.name;
+  // Giải đồng đội: tổng số trận đồng đội + trận thành phần (cùng cách đếm với thống kê đầu trang giải)
+  let teamCounts = null;
+  if (tournament.team_type === "team") {
+    try {
+      const r = rubberTotals(tournament.matches || [], normalizeTeamRules(tournament.team_rules));
+      teamCounts = `${(tournament.matches || []).length} trận đồng đội · ${r.total} trận thành phần`;
+    } catch { teamCounts = null; }
+  }
   return (
     <div style={{
       display: "flex", justifyContent: "space-between", alignItems: "flex-start",
@@ -53,6 +62,7 @@ function SheetHeader({ tournament, subtitle }) {
       <div style={{ textAlign: "right", fontSize: 12, color: "#555", lineHeight: 1.6, whiteSpace: "nowrap" }}>
         Ngày: ____ / ____ / 2026 &nbsp;·&nbsp; Số đội: <b>{tournament.participants.length}</b>
         &nbsp;·&nbsp; {TEAM_TYPE_LABEL[tournament.team_type] || "Đấu đơn"}
+        {teamCounts ? <>&nbsp;·&nbsp; {teamCounts}</> : null}
         <br />Người ghi: _______________
       </div>
     </div>

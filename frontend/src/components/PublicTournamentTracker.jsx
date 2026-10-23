@@ -16,7 +16,7 @@ import PublicPointEventBoard from "./PublicPointEventBoard";
 import { useViewMode } from "../contexts/ViewModeContext";
 import { teamLabel, teamRank } from "../utils/tournamentLabels";
 import { tieScoreText } from "../utils/teamLabels";
-import { indexTeamPlayers } from "../utils/teamFormat";
+import { indexTeamPlayers, normalizeTeamRules, rubberTotals } from "../utils/teamFormat";
 import TieRubbersInline from "./team/TieRubbersInline";
 import {
   serverOffset, verifyDraw, verifyPartnerDraw, partnerLabelForStep, partnerDrawFinished, partnerDrawStuck,
@@ -510,6 +510,14 @@ function TournamentContent({ tournament, api, onScored }) {
   const koMatches = matches.filter(m => m.phase === "knockout");
   const groups = [...new Set((tournament.participants || []).map(p => p.group_name).filter(Boolean))].sort();
   const doneCount = matches.filter(m => m.status === "completed").length;
+  // Giải đồng đội: nhãn tab kèm số trận thành phần đã đấu / tổng (ví dụ "2/6 trận · 5/18 trận thành phần")
+  const countLabel = (() => {
+    if (tournament.team_type !== "team") return `${doneCount}/${matches.length}`;
+    try {
+      const r = rubberTotals(matches, normalizeTeamRules(tournament.team_rules));
+      return `${doneCount}/${matches.length} trận · ${r.done}/${r.total} trận thành phần`;
+    } catch { return `${doneCount}/${matches.length}`; }
+  })();
   const groupDoneCount = groupMatches.filter(m => m.status === "completed").length;
   const [scoreMatch, setScoreMatch] = useState(null);
   const [tieMatch, setTieMatch] = useState(null);   // giải đồng đội: trận đang mở biên bản
@@ -564,7 +572,7 @@ function TournamentContent({ tournament, api, onScored }) {
   if (fmt === "round_robin" || fmt === "round_robin_double" || fmt === "individual") {
     tabItems.push({
       key: "schedule",
-      label: `Lịch thi đấu (${doneCount}/${matches.length})`,
+      label: `Lịch thi đấu (${countLabel})`,
       children: <RoundedSchedule columns={cols} matches={matches} mobileProps={mobileProps} />,
     });
     if (fmt === "round_robin" || fmt === "round_robin_double") {
@@ -584,7 +592,7 @@ function TournamentContent({ tournament, api, onScored }) {
     });
     tabItems.push({
       key: "schedule",
-      label: `Danh sách trận (${doneCount}/${matches.length})`,
+      label: `Danh sách trận (${countLabel})`,
       children: <RoundedSchedule columns={cols} matches={matches} mobileProps={mobileProps} />,
     });
   }

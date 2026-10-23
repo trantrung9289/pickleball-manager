@@ -31,7 +31,7 @@ import { useAuth } from "../context/AuthContext";
 import { useRankLevels } from "../hooks/useRankLevels";
 import { buildRealBracketNodes, computeBracketGeometry, findThirdPlaceMatch } from "../utils/bracketLayout";
 import { teamLabel, teamRank } from "../utils/tournamentLabels";
-import { TEAM_TYPE_LABELS, defaultTeamRules, normalizeTeamRules, tieScoreLabel, indexTeamPlayers } from "../utils/teamFormat";
+import { TEAM_TYPE_LABELS, defaultTeamRules, normalizeTeamRules, tieScoreLabel, indexTeamPlayers, rubberTotals } from "../utils/teamFormat";
 import {
   DRAW_FORMATS, serverOffset, normalizeRank, UNRANKED, partnerPlan, normalizePartnerRules, ranksLabel,
 } from "../utils/drawMath";
@@ -1868,12 +1868,20 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated, autoOpenAdd
   };
 
   const fmt = tournament.format;
-  const matches = tournament.matches || [];
+  const matches = useMemo(() => tournament.matches || [], [tournament.matches]);
   const isTeam = tournament.team_type === "team";
   // Giải đồng đội: bấm vào trận (lịch / bảng / nhánh) mở biên bản trận thay vì ô nhập tỉ số
   const openMatch = isTeam ? setTieMatch : setScoreMatch;
   // Giải đồng đội: tên VĐV cho chi tiết trận thành phần (TournamentOut.team_players) + hàm vẽ chi tiết dùng chung lịch/nhánh
   const playersById = useMemo(() => indexTeamPlayers(tournament.team_players), [tournament.team_players]);
+  // Giải đồng đội: tổng số TRẬN THÀNH PHẦN (ngoài số trận đồng đội) cho 3 ô thống kê đầu trang
+  const rubberStats = useMemo(() => {
+    if (!isTeam) return null;
+    try { return rubberTotals(matches, normalizeTeamRules(tournament.team_rules)); } catch { return null; }
+  }, [isTeam, matches, tournament.team_rules]);
+  const rubberNote = (text) => rubberStats && (
+    <Text type="secondary" style={{ fontSize: 12, display: "block", marginTop: 2 }}>{text}</Text>
+  );
   const renderTieDetail = isTeam
     ? (m, compact = false) => <TieRubbersInline match={m} rules={tournament.team_rules} playersById={playersById} compact={compact} />
     : undefined;
@@ -1896,6 +1904,10 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated, autoOpenAdd
   const koMatches = matches.filter(m => m.phase === "knockout");
   const groups = [...new Set(tournament.participants.map(p => p.group_name).filter(Boolean))].sort();
   const doneCount = matches.filter(m => m.status === "completed").length;
+  // Nhãn tab lịch/danh sách trận: giải đồng đội kèm số trận thành phần đã đấu / tổng
+  const countLabel = rubberStats
+    ? `${doneCount}/${matches.length} trận · ${rubberStats.done}/${rubberStats.total} trận thành phần`
+    : `${doneCount}/${matches.length}`;
   const groupDoneCount = groupMatches.filter(m => m.status === "completed").length;
   const allGroupDone = groupMatches.length > 0 && groupDoneCount === groupMatches.length;
 
@@ -2083,7 +2095,7 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated, autoOpenAdd
   if (fmt === "round_robin" || fmt === "round_robin_double" || fmt === "individual") {
     tabItems.push({
       key: "schedule",
-      label: `Lịch thi đấu (${doneCount}/${matches.length})`,
+      label: `Lịch thi đấu (${countLabel})`,
       children: <RoundedSchedule columns={matchTableCols} matches={matches} mobileProps={matchTableMobileProps} />,
     });
     if (fmt === "round_robin" || fmt === "round_robin_double") {
@@ -2103,7 +2115,7 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated, autoOpenAdd
     });
     tabItems.push({
       key: "schedule",
-      label: `Danh sách trận (${doneCount}/${matches.length})`,
+      label: `Danh sách trận (${countLabel})`,
       children: <RoundedSchedule columns={matchTableCols} matches={matches} mobileProps={matchTableMobileProps} />,
     });
   }
@@ -2285,18 +2297,21 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated, autoOpenAdd
         </Col>
         <Col xs={6}>
           <Card size="small">
-            <Statistic title="Tổng trận" value={matches.length} />
+            <Statistic title={isTeam ? "Tổng trận đồng đội" : "Tổng trận"} value={matches.length} />
+            {rubberStats && rubberNote(`${rubberStats.total} trận thành phần${rubberStats.perTie ? ` (${rubberStats.perTie}/trận)` : ""}`)}
           </Card>
         </Col>
         <Col xs={6}>
           <Card size="small">
             <Statistic title="Đã thi đấu" value={doneCount} styles={{ content: { color: "#52c41a" } }} />
+            {rubberStats && rubberNote(`${rubberStats.done} trận thành phần`)}
           </Card>
         </Col>
         <Col xs={6}>
           <Card size="small">
             <Statistic title="Còn lại" value={matches.length - doneCount}
               styles={{ content: { color: matches.length - doneCount > 0 ? "#faad14" : "#52c41a" } }} />
+            {rubberStats && rubberNote(`${rubberStats.remaining} trận thành phần`)}
           </Card>
         </Col>
       </Row>

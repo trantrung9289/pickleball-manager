@@ -6,7 +6,7 @@ import {
   autoLabelRubbers, placeholderLabels, normalizeTeamRules, defaultTeamRules, defaultTargetTotal, rubberTarget,
   stagesForFormat, overLimitIds, appearanceCounts, genderIssue, preferredGenders, teamGenderNeeds,
   teamRosterWarnings, tieScoreLabel, playerIndex, rubberStatusLabel, rubberSize, slotIssueText,
-  indexTeamPlayers, matchRubbersForDisplay, rubberScoreView, distributeEvenly,
+  indexTeamPlayers, matchRubbersForDisplay, rubberScoreView, distributeEvenly, rubberTotals,
 } from "./teamFormat.js";
 
 test("autoLabelRubbers: nhãn trống tự đánh số theo thể thức, bộ đếm tăng cả khi có nhãn tự đặt, trùng nhãn thêm hậu tố", () => {
@@ -166,4 +166,17 @@ test("distributeEvenly: gán cho đội ít người nhất, hoà thì đội đ
     { tpid: 13, participant_id: 1 },   // 1:2, 2:2, 3:2 → hoà → đội 1
   ]);
   assert.deepEqual(distributeEvenly([1], []), []);
+});
+
+test("rubberTotals: trận chưa mở biên bản đếm theo thể thức, trận kết thúc chỉ đếm đã đấu, xử thua = 0", () => {
+  const rules = { rubbers: [{ code: "MD" }, { code: "WD" }, { code: "XD" }] };
+  const done = (s1, s2) => ({ status: "completed", score1: s1, score2: s2 });
+  const matches = [
+    { status: "pending", rubbers: [] },                                               // 3 theo thể thức
+    { status: "in_progress", rubbers: [done(11, 5), { status: "pending" }, { status: "pending" }] },  // 3, đã 1
+    { status: "completed", rubbers: [done(11, 5), done(11, 7)] },                      // PA2 kết thúc sớm: 2/2
+    { status: "completed", is_walkover: true, rubbers: [] },                           // bỏ qua
+  ];
+  assert.deepEqual(rubberTotals(matches, rules), { total: 8, done: 3, remaining: 5, perTie: 3 });
+  assert.deepEqual(rubberTotals([], rules), { total: 0, done: 0, remaining: 0, perTie: 3 });
 });

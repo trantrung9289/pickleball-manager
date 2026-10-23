@@ -291,3 +291,24 @@ export function distributeEvenly(tpids, teams) {
   });
   return out;
 }
+
+/**
+ * Tổng số TRẬN THÀNH PHẦN của giải đồng đội (thống kê đầu trang / nhãn tab / tiêu đề bản in).
+ * - Trận chưa kết thúc: đếm số trận thành phần đã có (biên bản đã mở) hoặc số trận theo thể thức (chưa mở biên bản).
+ * - Trận đã kết thúc: chỉ đếm trận thành phần đã đấu (PA2 chạm mốc sớm → các trận còn lại không đấu, không tính "còn lại").
+ * - Xử thua do bỏ giải (is_walkover): không có trận thành phần → 0.
+ * Trả { total, done, remaining, perTie }.
+ */
+export function rubberTotals(matches, rules) {
+  const perTie = (rules?.rubbers || []).length;
+  let total = 0;
+  let done = 0;
+  (matches || []).forEach((m) => {
+    if (m.is_walkover) return;
+    const rs = m.rubbers || [];
+    const d = rs.filter((r) => r.status === "completed").length;
+    done += d;
+    total += m.status === "completed" ? d : Math.max(rs.length, perTie);
+  });
+  return { total, done, remaining: total - done, perTie };
+}
