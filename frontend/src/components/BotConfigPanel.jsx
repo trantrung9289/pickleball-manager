@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import {
   Card, Input, Button, message, Space, Typography, Tree,
-  Switch, Table, Modal, DatePicker, Spin, Tag, Divider, Tooltip,
+  Switch, Table, Modal, DatePicker, Spin, Tag, Divider, Tooltip, Alert,
 } from "antd";
 import { SaveOutlined, ReloadOutlined, BellOutlined, EyeOutlined, SendOutlined, TeamOutlined } from "@ant-design/icons";
 import dayjs from "dayjs";
@@ -73,6 +73,7 @@ export default function BotConfigPanel() {
   const [saving, setSaving]             = useState(false);
   const [welcomeMsg, setWelcomeMsg]     = useState("👋 Xin chào! Tôi là Bot quản lý CLB {club_name} của các bạn, chúc các bạn có một buổi thể thao vui vẻ!");
   const [checkedKeys, setCheckedKeys]   = useState(ALL_KEYS);
+  const [clubBotEnabled, setClubBotEnabled] = useState(true);   // cờ cấp CLB do quản trị hệ thống đặt
 
   const [feeTypes, setFeeTypes]             = useState([]);
   const [savingFeeType, setSavingFeeType]   = useState(null);
@@ -92,6 +93,7 @@ export default function BotConfigPanel() {
       if (!res.ok) throw new Error(res.status);
       const data = await res.json();
       if (data.welcome_message !== undefined) setWelcomeMsg(data.welcome_message);
+      if (data.club_bot_enabled !== undefined) setClubBotEnabled(!!data.club_bot_enabled);
       if (data.menu_config) {
         const cfg = JSON.parse(data.menu_config);
         let keys = cfg.checkedKeys ?? ALL_KEYS;
@@ -253,6 +255,11 @@ export default function BotConfigPanel() {
 
   return (
     <div style={{ maxWidth: 580 }}>
+      {!clubBotEnabled && (
+        <Alert type="warning" showIcon style={{ marginBottom: 16 }}
+          message="CLB chưa được cấp quyền dùng Bot Telegram"
+          description="Quản trị hệ thống chưa bật Bot cho CLB này: không tài khoản nào đăng nhập được Bot và không ai nhận nhắc phí, dù bật ở bảng Tài khoản bên dưới. Liên hệ quản trị hệ thống để được cấp." />
+      )}
       <Card title="Tin nhắn chào mừng" size="small" style={{ marginBottom: 16 }}>
         <Text type="secondary" style={{ display: "block", marginBottom: 8, fontSize: 12 }}>
           Hiển thị khi thành viên gõ /start lần đầu

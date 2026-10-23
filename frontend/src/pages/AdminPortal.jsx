@@ -43,6 +43,35 @@ export default function AdminPortal({ onBack }) {
   const loadClubs = async () => { const { data } = await adminApi.listClubs(); setClubs(data); };
   const loadMemberships = async () => { const { data } = await adminApi.listMemberships(); setMemberships(data); };
 
+  // Quyền dùng Bot Telegram: cấp CLB (clubs.bot_enabled) và theo tài khoản (club_memberships.bot_enabled).
+  // Superuser không vướng luật "không tự tắt mình" của club admin.
+  const [togglingClubBot, setTogglingClubBot] = useState(null);
+  const [togglingMemberBot, setTogglingMemberBot] = useState(null);
+  const handleToggleClubBot = async (club, checked) => {
+    setTogglingClubBot(club.id);
+    try {
+      await adminApi.updateClub(club.id, { bot_enabled: checked });
+      message.success(checked ? `Đã cấp quyền dùng Bot cho ${club.name}` : `Đã tắt Bot của ${club.name}`);
+      await loadClubs();
+    } catch (e) {
+      message.error(e.response?.data?.detail || "Lỗi cập nhật quyền Bot của CLB");
+    } finally {
+      setTogglingClubBot(null);
+    }
+  };
+  const handleToggleMemberBot = async (m, checked) => {
+    setTogglingMemberBot(m.id);
+    try {
+      await adminApi.updateMembership(m.id, { bot_enabled: checked });
+      message.success(checked ? "Đã bật Bot cho tài khoản" : "Đã tắt Bot cho tài khoản");
+      await loadMemberships();
+    } catch (e) {
+      message.error(e.response?.data?.detail || "Lỗi cập nhật quyền Bot của tài khoản");
+    } finally {
+      setTogglingMemberBot(null);
+    }
+  };
+
   useEffect(() => {
     // loadUsers/loadClubs/loadMemberships setState sau await bên trong nhưng được gọi
     // trực tiếp (không phải trong .then) nên lint coi là "đồng bộ"; giữ tách riêng để
@@ -258,6 +287,18 @@ export default function AdminPortal({ onBack }) {
     { title: "Địa chỉ", dataIndex: "address", render: v => v || "—" },
     { title: "Email", dataIndex: "email", render: v => v || "—" },
     {
+      title: "Bot Telegram", width: 110, align: "center",
+      render: (_, r) => (
+        <Tooltip title={r.bot_enabled !== false
+          ? "CLB được dùng Bot Telegram — tắt để mọi tài khoản của CLB không vào được Bot và không nhận nhắc phí"
+          : "CLB chưa được cấp quyền dùng Bot Telegram"}>
+          <Switch size="small" checked={r.bot_enabled !== false}
+            loading={togglingClubBot === r.id}
+            onChange={(checked) => handleToggleClubBot(r, checked)} />
+        </Tooltip>
+      ),
+    },
+    {
       title: "Tài khoản quản trị",
       render: (_, r) => {
         const admins = getClubAdmins(r.id);
@@ -361,6 +402,32 @@ export default function AdminPortal({ onBack }) {
               </Space>
             </div>
           ))}
+        </div>
+      ),
+    },
+    {
+      title: "Bot",
+      width: 70,
+      align: "center",
+      render: (_, g) => (
+        <div>
+          {g.members.map((m, i) => {
+            const clubOff = g.club.bot_enabled === false;
+            return (
+              <div key={m.id} style={{
+                height: ROW_H, display: "flex", alignItems: "center", justifyContent: "center",
+                borderTop: i > 0 ? "1px dashed rgba(0,0,0,0.06)" : "none",
+              }}>
+                <Tooltip title={clubOff
+                  ? "CLB chưa được cấp quyền dùng Bot (bật ở mục Câu lạc bộ)"
+                  : (m.bot_enabled !== false ? "Tài khoản được dùng Bot ở CLB này" : "Tài khoản bị tắt Bot ở CLB này")}>
+                  <Switch size="small" checked={!clubOff && m.bot_enabled !== false} disabled={clubOff}
+                    loading={togglingMemberBot === m.id}
+                    onChange={(checked) => handleToggleMemberBot(m, checked)} />
+                </Tooltip>
+              </div>
+            );
+          })}
         </div>
       ),
     },

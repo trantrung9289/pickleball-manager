@@ -208,6 +208,15 @@ def _required_key(callback_data: str) -> str | None:
 _bot_allowed: dict[int, bool] = {}
 
 
+def _membership_bot_ok(m: dict | None) -> bool:
+    """Tài khoản được dùng bot ở CLB này khi CẢ cờ theo tài khoản (club admin đặt) lẫn cờ cấp CLB
+    (superuser đặt, `club.bot_enabled`) đều bật. Thiếu trường (backend cũ) → coi như bật."""
+    if not m:
+        return False
+    club = m.get("club") or {}
+    return bool(m.get("bot_enabled", True)) and bool(club.get("bot_enabled", True))
+
+
 def _enabled_keys(user_id: int) -> set[str] | None:
     """Tập key đang bật theo cấu hình CLB; None = chưa có cấu hình → mọi thứ bật.
     Cấu hình lưu trước version 2 chưa biết key Sửa/Xóa GD → coi như bật để không
@@ -249,14 +258,15 @@ async def fetch_and_cache_menu_cfg(user_id: int, token: str, club_id: int):
     try:
         memberships = await call_backend("get", "/api/my-memberships", token=token)
         mine = next((m for m in memberships if m.get("club_id") == club_id), None)
-        _bot_allowed[user_id] = bool(mine.get("bot_enabled", True)) if mine else False
+        _bot_allowed[user_id] = _membership_bot_ok(mine)
     except Exception as e:
         logger.warning(f"check bot_enabled lỗi user {user_id}: {e}")  # giữ giá trị cũ, không khoá oan
 
 
 BOT_DISABLED_TEXT = (
     "🚫 Tài khoản của bạn chưa được cấp quyền dùng Bot ở CLB này.\n"
-    "Liên hệ quản trị CLB để được bật (Cài đặt Telegram Bot → Tài khoản được dùng Bot)."
+    "Liên hệ quản trị CLB để được bật (Cài đặt Telegram Bot → Tài khoản được dùng Bot), "
+    "hoặc quản trị hệ thống nếu CLB chưa được cấp quyền dùng Bot."
 )
 
 
@@ -354,8 +364,16 @@ async def _after_login(update: Update, user_id: int, session: dict):
     if not memberships:
         await reply(update, "❌ Tài khoản chưa được thêm vào CLB nào.")
         return
-    # Chỉ giữ CLB mà club admin đã cấp quyền dùng bot (mặc định bật)
-    memberships = [m for m in memberships if m.get("bot_enabled", True)]
+    # Chỉ giữ CLB được dùng bot: cờ theo tài khoản (club admin) VÀ cờ cấp CLB (superuser) cùng bật
+    memberships = [m for m in memberships if _membership_bot_ok(m)]
+    # Cache CLB hợp lệ luôn được làm mới ở MỌI nhánh (kể cả 0/1 CLB) — callback `club:` đối chiếu cache
+    # này, nên nút CLB cũ còn trong lịch sử chat không lọt qua sau khi CLB đó bị tắt bot.
+    if not hasattr(_after_login, "_club_cache"):
+        _after_login._club_cache = {}
+    _after_login._club_cache[user_id] = {
+        str(m["club_id"]): m["club"]["name"] if m.get("club") else f"CLB #{m['club_id']}"
+        for m in memberships
+    }
     if not memberships:
         await reply(update, BOT_DISABLED_TEXT)
         return
@@ -372,13 +390,6 @@ async def _after_login(update: Update, user_id: int, session: dict):
         [("🏸 " + m["club"]["name"], f"club:{m['club_id']}")]
         for m in memberships if m.get("club")
     ]
-    # Lưu tên CLB vào cache để dùng khi callback
-    if not hasattr(_after_login, "_club_cache"):
-        _after_login._club_cache = {}
-    _after_login._club_cache[user_id] = {
-        str(m["club_id"]): m["club"]["name"]
-        for m in memberships if m.get("club")
-    }
     await reply(update, "Chọn CLB muốn làm việc:", kb(*rows))
 
 
@@ -409,6 +420,11 @@ async def show_main_menu(update: Update, session: dict, club_name: str):
     club_id = _user_club.get(user_id)
     if club_id:
         await fetch_and_cache_menu_cfg(user_id, session["token"], club_id)
+    if _bot_allowed.get(user_id) is False:
+        # Cờ vừa đọc lại báo tắt (tài khoản hoặc cả CLB) → không hiện menu của CLB này nữa
+        _user_club.pop(user_id, None)
+        await reply(update, BOT_DISABLED_TEXT)
+        return
 
     # Hiện tin nhắn chào mừng một lần duy nhất sau khi vào CLB
     # Dùng send_new_message (không edit) để tin nhắn không bị ghi đè bởi menu

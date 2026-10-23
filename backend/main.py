@@ -145,6 +145,8 @@ def _run_migration():
         # Bảng club_memberships — club admin bật/tắt quyền dùng bot Telegram cho từng tài khoản
         # (mặc định bật để không ảnh hưởng người đang dùng)
         ("club_memberships", "bot_enabled", "BOOLEAN DEFAULT 1 NOT NULL", None),
+        # Bảng clubs — superuser cấp/tắt quyền dùng bot Telegram cho CẢ CLB (mặc định bật, không khoá CLB đang dùng)
+        ("clubs", "bot_enabled", "BOOLEAN DEFAULT 1 NOT NULL", None),
         # Bảng tournaments — quy tắc ghép ĐỒNG ĐỘI cho vòng quay ghép đội (giải đôi)
         ("tournaments", "partner_rules", "JSON", None),
         # Bảng clubs — danh sách hạng cấu hình ở cấp CLB (NULL → DEFAULT_RANK_LEVELS)
@@ -672,6 +674,7 @@ def admin_create_membership(payload: schemas.MembershipCreate, db: Session = Dep
         user_id=payload.user_id, club_id=payload.club_id, role=role,
         can_view=payload.can_view, can_create=payload.can_create,
         can_edit=payload.can_edit, can_delete=payload.can_delete,
+        bot_enabled=payload.bot_enabled,
     )
     db.add(m); db.commit(); db.refresh(m)
     return m
@@ -682,7 +685,7 @@ def admin_update_membership(mid: int, payload: schemas.MembershipUpdate, db: Ses
     if not m: raise HTTPException(404, "Không tìm thấy phân quyền")
     if payload.role and payload.role in models.UserRole.__members__:
         m.role = models.UserRole(payload.role)
-    for field in ["can_view", "can_create", "can_edit", "can_delete"]:
+    for field in ["can_view", "can_create", "can_edit", "can_delete", "bot_enabled"]:
         val = getattr(payload, field)
         if val is not None: setattr(m, field, val)
     db.commit(); db.refresh(m)
@@ -5906,7 +5909,10 @@ def get_bot_config(
         if not membership:
             raise HTTPException(403, "Không có quyền truy cập CLB này")
     rows = db.query(models.BotConfig).filter(models.BotConfig.club_id == x_club_id).all()
-    return {r.key: r.value for r in rows}
+    out = {r.key: r.value for r in rows}
+    club = db.query(models.Club).filter(models.Club.id == x_club_id).first()
+    out["club_bot_enabled"] = bool(club.bot_enabled) if club else False   # cờ cấp CLB do superuser đặt
+    return out
 
 
 @app.put("/api/bot-config")
@@ -5947,6 +5953,12 @@ def _check_internal_secret(x_internal_secret: str = Header(None)):
         raise HTTPException(403, "Forbidden")
 
 
+def _club_bot_enabled(db: Session, club_id: int) -> bool:
+    """Cờ cấp CLB (superuser đặt ở AdminPortal). CLB không tồn tại → False."""
+    club = db.query(models.Club).filter(models.Club.id == club_id).first()
+    return bool(club and club.bot_enabled)
+
+
 @app.patch("/api/my-memberships/telegram-chat-id")
 def save_telegram_chat_id(
     body: dict,
@@ -5963,6 +5975,9 @@ def save_telegram_chat_id(
     ).first()
     if not membership:
         raise HTTPException(404, "Không tìm thấy membership")
+    if not _club_bot_enabled(db, perms.club_id):
+        # Superuser chưa cấp quyền dùng bot cho CLB → không tài khoản nào liên kết được Telegram ở CLB này
+        raise HTTPException(403, "CLB chưa được cấp quyền dùng bot Telegram")
     if not membership.bot_enabled:
         # Chỉ bot gọi endpoint này — chặn ở đây để tài khoản bị tắt bot không liên kết được
         # Telegram (và do đó không lọt vào danh sách nhận nhắc phí)
@@ -5982,6 +5997,8 @@ def _build_reminder_data(month: int, year: int, db: Session):
     result = []
     for ft in fee_types:
         club_id = ft.club_id
+        if not _club_bot_enabled(db, club_id):
+            continue   # superuser tắt bot cho cả CLB → không nhắc phí qua Telegram
         paid_ids = set(
             r[0] for r in db.query(models.Transaction.member_id).filter(
                 models.Transaction.club_id == club_id,

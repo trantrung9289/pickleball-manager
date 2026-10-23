@@ -130,6 +130,9 @@ class Club(Base):
     # Danh sách hạng của CLB (dùng chung cho Thành viên, Khách mời, quy tắc ghép đội).
     # NULL → dùng DEFAULT_RANK_LEVELS (main.py). "Chưa xếp hạng" là hạng ngầm định, KHÔNG nằm trong danh sách.
     rank_levels = Column(JSON, nullable=True)
+    # Superuser cấp/tắt quyền dùng bot Telegram cho CẢ CLB (mặc định bật). Tắt → mọi tài khoản của CLB
+    # không vào được bot ở CLB này, không liên kết Telegram, không nhận nhắc phí — bất kể cờ theo tài khoản.
+    bot_enabled = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime, server_default=func.now())
 
 

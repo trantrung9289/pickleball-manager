@@ -93,3 +93,81 @@ def test_disabled_admin_excluded_from_fee_reminders(client, world):
                      headers=_h(admin1b, world.club1))
     assert r.status_code == 200
     assert 777 not in chat_ids()
+
+
+# ── Superuser: cờ cấp CLB (clubs.bot_enabled) + bật/tắt theo tài khoản không vướng luật tự tắt (2026-10-23) ──
+def _su_headers(world):
+    from conftest import models, create_access_token
+    su = models.User(username="root9", full_name="Root", password_hash="x",
+                     role=models.UserRole.admin, is_superuser=True)
+    world.db.add(su); world.db.commit()
+    return {"Authorization": f"Bearer {create_access_token({'sub': su.username})}"}
+
+
+def test_superuser_toggles_membership_bot_flag_even_for_sole_admin(client, world):
+    su = _su_headers(world)
+    rows = client.get("/api/admin/memberships", params={"club_id": world.club1.id}, headers=su).json()
+    admin1_m = next(m for m in rows if m["user_id"] == world.admin1.id)
+    assert admin1_m["bot_enabled"] is True
+    # admin1 là admin duy nhất của CLB 1 và không tự tắt được (400) — superuser thì được
+    r = client.put(f"/api/admin/memberships/{admin1_m['id']}", json={"bot_enabled": False}, headers=su)
+    assert r.status_code == 200 and r.json()["bot_enabled"] is False
+    mine = client.get("/api/my-memberships", headers=_h(world.admin1, world.club1)).json()
+    assert next(m for m in mine if m["club_id"] == world.club1.id)["bot_enabled"] is False
+    assert client.patch("/api/my-memberships/telegram-chat-id", json={"chat_id": 1},
+                        headers=_h(world.admin1, world.club1)).status_code == 403
+    # PUT chỉ đổi quyền, không đụng cờ bot (trường vắng mặt)
+    r = client.put(f"/api/admin/memberships/{admin1_m['id']}", json={"can_delete": False}, headers=su)
+    assert r.json()["bot_enabled"] is False and r.json()["can_delete"] is False
+    r = client.put(f"/api/admin/memberships/{admin1_m['id']}", json={"bot_enabled": True}, headers=su)
+    assert r.json()["bot_enabled"] is True
+    # Gán mới có thể tắt bot ngay từ đầu
+    r = client.post("/api/admin/memberships", json={"user_id": world.admin2.id, "club_id": world.club1.id,
+                                                   "role": "admin", "bot_enabled": False}, headers=su)
+    assert r.status_code == 200 and r.json()["bot_enabled"] is False
+    # Không phải superuser → 403
+    assert client.put(f"/api/admin/memberships/{admin1_m['id']}", json={"bot_enabled": False},
+                      headers=_h(world.admin1, world.club1)).status_code == 403
+
+
+def test_club_bot_flag_blocks_link_reminders_and_is_exposed_to_bot(client, world):
+    su = _su_headers(world)
+    clubs = {c["id"]: c for c in client.get("/api/admin/clubs", headers=su).json()}
+    assert clubs[world.club1.id]["bot_enabled"] is True      # mặc định bật cho CLB đang có
+    # admin1 liên kết Telegram + bật nhắc phí khi CLB còn được dùng bot
+    assert client.patch("/api/my-memberships/telegram-chat-id", json={"chat_id": 888},
+                        headers=_h(world.admin1, world.club1)).status_code == 200
+    assert client.put(f"/api/fee-types/{world.fee1.id}", json={"remind_enabled": True},
+                      headers=_h(world.admin1, world.club1)).status_code == 200
+
+    def preview_chat_ids():
+        r = client.get("/api/fee-reminders/preview", params={"month": 1, "year": 2030},
+                       headers=_h(world.admin1, world.club1))
+        assert r.status_code == 200, r.text
+        return [cid for item in r.json() for cid in item.get("admin_chat_ids", [])]
+    assert 888 in preview_chat_ids()
+
+    # Superuser tắt bot cho cả CLB 1
+    r = client.put(f"/api/admin/clubs/{world.club1.id}", json={"bot_enabled": False}, headers=su)
+    assert r.status_code == 200 and r.json()["bot_enabled"] is False
+    # Bot đọc /api/my-memberships: cờ tài khoản vẫn bật nhưng club.bot_enabled = False → bot ẩn CLB
+    mine = next(m for m in client.get("/api/my-memberships", headers=_h(world.admin1, world.club1)).json()
+                if m["club_id"] == world.club1.id)
+    assert mine["bot_enabled"] is True and mine["club"]["bot_enabled"] is False
+    # Liên kết Telegram bị chặn, nhắc phí bỏ qua CLB, panel thấy cờ
+    assert client.patch("/api/my-memberships/telegram-chat-id", json={"chat_id": 888},
+                        headers=_h(world.admin1, world.club1)).status_code == 403
+    assert 888 not in preview_chat_ids()
+    cfg = client.get("/api/bot-config", headers=_h(world.admin1, world.club1)).json()
+    assert cfg["club_bot_enabled"] is False
+    # CLB 2 không ảnh hưởng
+    mine2 = client.get("/api/my-memberships", headers=_h(world.admin2, world.club2)).json()
+    assert mine2[0]["club"]["bot_enabled"] is True
+    # PUT CLB không gửi cờ → giữ nguyên; bật lại → liên kết được
+    assert client.put(f"/api/admin/clubs/{world.club1.id}", json={"address": "x"}, headers=su).json()["bot_enabled"] is False
+    client.put(f"/api/admin/clubs/{world.club1.id}", json={"bot_enabled": True}, headers=su)
+    assert client.patch("/api/my-memberships/telegram-chat-id", json={"chat_id": 888},
+                        headers=_h(world.admin1, world.club1)).status_code == 200
+    # CLB tạo mới mặc định bật
+    r = client.post("/api/admin/clubs", json={"name": "New Club", "sport": "Tennis"}, headers=su)
+    assert r.status_code == 200 and r.json()["bot_enabled"] is True

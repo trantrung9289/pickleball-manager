@@ -27,6 +27,7 @@ class ClubUpdate(BaseModel):
     address: Optional[str] = None
     phone: Optional[str] = None
     email: Optional[str] = None
+    bot_enabled: Optional[bool] = None   # superuser cấp/tắt quyền dùng bot Telegram cho cả CLB
 
 class ClubOut(BaseModel):
     id: int
@@ -37,6 +38,7 @@ class ClubOut(BaseModel):
     address: Optional[str] = None
     phone: Optional[str] = None
     email: Optional[str] = None
+    bot_enabled: bool = True
     class Config:
         from_attributes = True
 
@@ -85,6 +87,7 @@ class MembershipCreate(BaseModel):
     can_create: bool = False
     can_edit: bool = False
     can_delete: bool = False
+    bot_enabled: bool = True
 
 class MembershipUpdate(BaseModel):
     role: Optional[str] = None
@@ -92,6 +95,7 @@ class MembershipUpdate(BaseModel):
     can_create: Optional[bool] = None
     can_edit: Optional[bool] = None
     can_delete: Optional[bool] = None
+    bot_enabled: Optional[bool] = None   # superuser bật/tắt bot theo tài khoản, không vướng luật "không tự tắt mình"
 
 class MembershipOut(BaseModel):
     id: int
