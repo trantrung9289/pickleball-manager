@@ -1,14 +1,10 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { createPortal } from "react-dom";
 import {
-  Button, Space, Tag, Modal, Form, Input, Select, message, Typography, Row, Col, Card, Steps, InputNumber, Tabs, Badge, Empty, Divider, Alert, Checkbox, Collapse, AutoComplete, Switch, Tooltip, Popover,
+  Button, Space, Tag, Modal, Form, Input, Select, message, Typography, Row, Col, Card, Steps, InputNumber, Tabs, Badge, Empty, Divider, Alert, Checkbox, Collapse, AutoComplete, Switch, Tooltip, Popover, Dropdown,
 } from "antd";
 import {
-  PlusOutlined, ThunderboltOutlined, TrophyOutlined,
-  EditOutlined, DeleteOutlined, ReloadOutlined,
-  CheckCircleOutlined, SaveOutlined, ArrowRightOutlined,
-  UserOutlined, TeamOutlined, UserAddOutlined, PrinterOutlined, GiftOutlined, WarningOutlined, DownloadOutlined,
-  SettingOutlined, StarOutlined, FileTextOutlined, HistoryOutlined, UsergroupAddOutlined,
+  PlusOutlined, ThunderboltOutlined, TrophyOutlined, EditOutlined, DeleteOutlined, ReloadOutlined, CheckCircleOutlined, SaveOutlined, ArrowRightOutlined, UserOutlined, TeamOutlined, UserAddOutlined, PrinterOutlined, GiftOutlined, WarningOutlined, DownloadOutlined, SettingOutlined, StarOutlined, FileTextOutlined, HistoryOutlined, UsergroupAddOutlined, ArrowLeftOutlined, MoreOutlined,
 } from "@ant-design/icons";
 import dayjs from "dayjs";
 import { tournamentsApi, pointEventsApi, membersApi, playersApi } from "../api";
@@ -2239,91 +2235,101 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated, autoOpenAdd
 
   return (
     <div>
-      <Row justify="space-between" align="middle" style={{ marginBottom: 16 }}>
-        <Space wrap>
-          <Button onClick={onBack}>← Quay lại</Button>
-          <Title level={4} style={{ margin: 0 }}>{tournament.name}</Title>
-          <Badge status={STATUS_MAP[tournament.status]?.color} text={STATUS_MAP[tournament.status]?.label} />
-          <Tag color={FORMAT_MAP[fmt]?.color}>{FORMAT_MAP[fmt]?.label}</Tag>
-          {teamTypeTag(tournament.team_type)}
-          {isTeam && tournament.team_rules && (
-            <Tag color="purple">{tournament.team_rules.scoring === "cumulative" ? "PA2 · nối tiếp" : "PA1 · theo trận"} · {(tournament.team_rules.rubbers || []).length} trận thành phần</Tag>
-          )}
-          <Button size="small" icon={<EditOutlined />} onClick={() => {
-            editForm.setFieldsValue({ name: tournament.name, description: tournament.description });
-            setEditNameModal(true);
-          }}>Sửa tên</Button>
-          {isTeam && (
-            <Button size="small" icon={<HistoryOutlined />} onClick={() => setLogsOpen(true)}>Nhật ký</Button>
-          )}
-          <Button size="small" icon={<EditOutlined />} onClick={() => setScorePinModal(true)}>
-            Đặt/Đổi mã PIN
-          </Button>
-          {tournament.public_scoring_enabled
-            ? <Tag color="success">Public: đang bật</Tag>
-            : <Tag>Public: đang tắt</Tag>}
-        </Space>
-        <Space wrap>
-          {tournament.status === "draft" && (
-            <>
-              <Button icon={<EditOutlined />} onClick={() => setEditSetupModal(true)}>Sửa cài đặt</Button>
-              <Tooltip title={startBlockedReason}>
-                <Button type="primary" icon={<ThunderboltOutlined />} disabled={!!startBlockedReason}
-                  onClick={() => handleStatusChange("active")}>
-                  Bắt đầu giải
-                </Button>
-              </Tooltip>
-            </>
-          )}
-          {tournament.status === "active" && (
-            <>
-              {(fmt === "knockout" || fmt === "combined") && (
-                <Button icon={<SettingOutlined />} onClick={() => setActiveSettingsOpen(true)}>Cài đặt</Button>
+      {/* Lớp 3 (2026-10-26): header gọn kiểu macOS — hàng 1 tên + chip trạng thái/thể thức, hàng 2 tối đa 3 nút chính
+          theo trạng thái giải + menu "Thêm" gom hành động phụ (sửa tên, PIN, nhật ký, Excel, làm mới...) */}
+      <div style={{ marginBottom: 16 }}>
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
+          <Button icon={<ArrowLeftOutlined />} onClick={onBack} style={{ flex: "none" }}>Quay lại</Button>
+          <div style={{ flex: "1 1 260px", minWidth: 0 }}>
+            <Space size={8} wrap align="center">
+              <Title level={4} style={{ margin: 0 }}>{tournament.name}</Title>
+              <StatusChip tone={tournament.status === "active" ? "ok" : tournament.status === "completed" ? "neutral" : "info"}
+                dot={tournament.status === "active"} pulse={tournament.status === "active"} size="md">
+                {STATUS_MAP[tournament.status]?.label}
+              </StatusChip>
+            </Space>
+            <Space size={6} wrap style={{ marginTop: 4 }}>
+              <StatusChip tone="neutral">{FORMAT_MAP[fmt]?.label}</StatusChip>
+              <StatusChip tone="neutral">{TEAM_TYPE_LABELS[tournament.team_type] || tournament.team_type}</StatusChip>
+              {isTeam && tournament.team_rules && (
+                <StatusChip tone="neutral">{tournament.team_rules.scoring === "cumulative" ? "PA2 · nối tiếp" : "PA1 · theo trận"} · {(tournament.team_rules.rubbers || []).length} trận thành phần</StatusChip>
               )}
-              <Button icon={<CheckCircleOutlined />} onClick={() => handleStatusChange("completed")}>
-                Kết thúc giải
-              </Button>
-            </>
-          )}
-          <Button icon={<ReloadOutlined />} onClick={reload}>Làm mới</Button>
-          {matches.length > 0 && (
-            <Button icon={<PrinterOutlined />} loading={printing} onClick={handlePrintClick}>
-              In bảng thi đấu
-            </Button>
-          )}
-          {tournament.status !== "draft" && (
-            <Button icon={<DownloadOutlined />} onClick={async () => {
-              try {
-                const res = await tournamentsApi.exportExcel(tournament.id);
-                const url = URL.createObjectURL(new Blob([res.data]));
-                const a = document.createElement("a"); a.href = url; a.download = `ket-qua-${tournament.name || "giai"}.xlsx`; a.click();
-                URL.revokeObjectURL(url);
-              } catch { message.error("Không xuất được file Excel"); }
+              <StatusChip tone={tournament.public_scoring_enabled ? "ok" : "neutral"}>
+                {tournament.public_scoring_enabled ? "Nhập điểm public: bật" : "Nhập điểm public: tắt"}
+              </StatusChip>
+            </Space>
+          </div>
+          <Space wrap style={{ flex: "none" }}>
+            {tournament.status === "draft" && (
+              <>
+                <Button icon={<EditOutlined />} onClick={() => setEditSetupModal(true)}>Sửa cài đặt</Button>
+                <Tooltip title={startBlockedReason}>
+                  <Button type="primary" icon={<ThunderboltOutlined />} disabled={!!startBlockedReason}
+                    onClick={() => handleStatusChange("active")}>
+                    Bắt đầu giải
+                  </Button>
+                </Tooltip>
+              </>
+            )}
+            {tournament.status === "active" && (
+              <>
+                {canDraw && (
+                  <Button type="primary" icon={<GiftOutlined />} loading={drawBusy} onClick={handleOpenDraw}>
+                    🎡 Bốc thăm
+                  </Button>
+                )}
+                {matches.length === 0 && (
+                  <Button type={canDraw ? "default" : "primary"} icon={<ThunderboltOutlined />} loading={generating}
+                    onClick={() => handleGenerate(true)}>
+                    {fmt === "combined" ? "Sinh lịch vòng bảng" : "Random & Sinh lịch"}
+                  </Button>
+                )}
+                {matches.length > 0 && (
+                  <Button icon={<PrinterOutlined />} loading={printing} onClick={handlePrintClick}>In bảng thi đấu</Button>
+                )}
+                <Button icon={<CheckCircleOutlined />} onClick={() => handleStatusChange("completed")}>Kết thúc giải</Button>
+              </>
+            )}
+            {tournament.status === "completed" && matches.length > 0 && (
+              <Button icon={<PrinterOutlined />} loading={printing} onClick={handlePrintClick}>In bảng thi đấu</Button>
+            )}
+            <Dropdown trigger={["click"]} menu={{
+              items: [
+                { key: "rename", icon: <EditOutlined />, label: "Sửa tên / mô tả" },
+                { key: "pin", icon: <EditOutlined />, label: "Đặt / đổi mã PIN nhập điểm" },
+                ...(isTeam ? [{ key: "logs", icon: <HistoryOutlined />, label: "Nhật ký thao tác" }] : []),
+                ...(tournament.status === "active" && (fmt === "knockout" || fmt === "combined") ? [{ key: "active_settings", icon: <SettingOutlined />, label: "Cài đặt tranh giải 3" }] : []),
+                ...(tournament.status === "active" && matches.length > 0 ? [{ key: "regen", icon: <ThunderboltOutlined />, label: fmt === "combined" ? "Sinh lại lịch vòng bảng" : "Sinh lại lịch (ngẫu nhiên)" }] : []),
+                ...(tournament.status === "active" && fmt !== "combined" ? [{ key: "regen_keep", icon: <ThunderboltOutlined />, label: "Sinh lịch (giữ thứ tự)" }] : []),
+                ...(tournament.status !== "draft" ? [{ key: "excel", icon: <DownloadOutlined />, label: "Xuất Excel kết quả" }] : []),
+                ...(matches.length > 0 && tournament.status === "draft" ? [{ key: "print", icon: <PrinterOutlined />, label: "In bảng thi đấu" }] : []),
+                { type: "divider" },
+                { key: "reload", icon: <ReloadOutlined />, label: "Làm mới dữ liệu" },
+              ],
+              onClick: async ({ key }) => {
+                if (key === "rename") { editForm.setFieldsValue({ name: tournament.name, description: tournament.description }); setEditNameModal(true); }
+                if (key === "pin") setScorePinModal(true);
+                if (key === "logs") setLogsOpen(true);
+                if (key === "active_settings") setActiveSettingsOpen(true);
+                if (key === "regen") handleGenerate(true);
+                if (key === "regen_keep") handleGenerate(false);
+                if (key === "print") handlePrintClick();
+                if (key === "reload") reload();
+                if (key === "excel") {
+                  try {
+                    const res = await tournamentsApi.exportExcel(tournament.id);
+                    const url = URL.createObjectURL(new Blob([res.data]));
+                    const a = document.createElement("a"); a.href = url; a.download = `ket-qua-${tournament.name || "giai"}.xlsx`; a.click();
+                    URL.revokeObjectURL(url);
+                  } catch { message.error("Không xuất được file Excel"); }
+                }
+              },
             }}>
-              Xuất Excel
-            </Button>
-          )}
-          {tournament.status === "active" && (
-            <>
-              {canDraw && (
-                <Button type="primary" icon={<GiftOutlined />} loading={drawBusy} onClick={handleOpenDraw}>
-                  🎡 Bốc thăm
-                </Button>
-              )}
-              {/* Khi có nút Bốc thăm, nút sinh lịch ngẫu nhiên lùi xuống type mặc định */}
-              <Button type={canDraw ? "default" : "primary"} icon={<ThunderboltOutlined />} loading={generating}
-                onClick={() => handleGenerate(true)}>
-                {fmt === "combined" ? "Sinh lịch vòng bảng" : "Random & Sinh lịch"}
-              </Button>
-              {fmt !== "combined" && (
-                <Button icon={<ThunderboltOutlined />} loading={generating} onClick={() => handleGenerate(false)}>
-                  Sinh lịch (giữ thứ tự)
-                </Button>
-              )}
-            </>
-          )}
-        </Space>
-      </Row>
+              <Button icon={<MoreOutlined />}>Thêm</Button>
+            </Dropdown>
+          </Space>
+        </div>
+      </div>
 
       {/* Phiên bốc thăm đang dở (sau F5 hoặc đã bấm Đóng overlay) — cho phép mở lại hoặc huỷ */}
       {pendingDraw && !drawOpen && (

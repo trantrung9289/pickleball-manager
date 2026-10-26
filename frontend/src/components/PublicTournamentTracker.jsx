@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import {
-  Select, Tabs, Empty, Spin, Card, Tag, Typography, Alert, Collapse, Divider, Space, Button, Badge, Modal, Form, Input, AutoComplete, message, Popover, Checkbox, Row, Col,
+  Select, Tabs, Empty, Spin, Card, Tag, Typography, Alert, Collapse, Divider, Space, Button, Modal, Form, Input, AutoComplete, message, Popover, Checkbox, Row, Col,
 } from "antd";
 import {
   ReloadOutlined, SyncOutlined, TrophyOutlined, EditOutlined, SafetyCertificateOutlined, StarOutlined,
@@ -1383,7 +1383,9 @@ export default function PublicTournamentTracker({ api }) {
 
   return (
     <div>
-      <Space wrap style={{ marginBottom: 16, width: "100%", justifyContent: "space-between" }}>
+      {/* Lớp 3 (mẫu FIS): thanh chọn giải + trạng thái trực tiếp DÍNH đầu trang khi cuộn, nền surface + viền mờ */}
+      <div style={{ position: "sticky", top: 0, zIndex: 20, background: "var(--surface)", margin: "-8px -8px 12px", padding: "8px 8px 6px", borderBottom: "1px solid var(--line)" }}>
+      <Space wrap style={{ marginBottom: 8, width: "100%", justifyContent: "space-between" }}>
         <Select
           value={selectedKey}
           onChange={setSelectedKey}
@@ -1432,24 +1434,26 @@ export default function PublicTournamentTracker({ api }) {
           Làm mới
         </Button>
       </Space>
+      {!isEventSelected && tournament && (
+        <div style={{ marginBottom: 2 }}>
+          <StatusChip tone={anyLive ? "info" : tournament.status === "active" ? "ok" : "neutral"} dot={anyLive || tournament.status === "active"} pulse={anyLive || tournament.status === "active"} size="md">
+            {isPartnerLive || isTeamDrawLive
+              ? `Đang theo dõi ${isTeamDrawLive ? "phân đội" : "ghép đội"} trực tiếp · ${DRAW_POLL_MS / 1000}s`
+              : isLive
+                ? `Đang theo dõi bốc thăm trực tiếp · ${DRAW_POLL_MS / 1000}s`
+                : tournament.status === "active"
+                  ? `Đang xem trực tiếp · cập nhật mỗi ${POLL_MS / 1000}s`
+                  : `Tự động cập nhật mỗi ${POLL_MS / 1000}s`}
+          </StatusChip>
+        </div>
+      )}
+      </div>
 
       {isEventSelected ? (
         // key theo id → đổi sự kiện là remount sạch (state điểm/lịch sử không lẫn giữa 2 sự kiện)
         <PublicPointEventBoard key={selectedEventId} api={api} eventId={selectedEventId} refreshKey={boardRefreshKey} />
       ) : tournament && (
         <>
-          <Space style={{ marginBottom: 12 }}>
-            <Badge status={anyLive || tournament.status === "active" ? "processing" : "default"} />
-            <Text type="secondary">
-              {isPartnerLive || isTeamDrawLive
-                ? `Đang theo dõi ${isTeamDrawLive ? "phân đội" : "ghép đội"} trực tiếp (cập nhật ${DRAW_POLL_MS / 1000}s)`
-                : isLive
-                  ? `Đang theo dõi bốc thăm trực tiếp (cập nhật ${DRAW_POLL_MS / 1000}s)`
-                  : tournament.status === "active"
-                    ? `Đang xem trực tiếp · cập nhật mỗi ${POLL_MS / 1000}s`
-                    : `Tự động cập nhật mỗi ${POLL_MS / 1000}s`}
-            </Text>
-          </Space>
 
           {showPartnerCeremony && (
             <Card size="small" title="🎡 Lễ ghép đội trực tiếp" style={{ marginBottom: 16 }}>
