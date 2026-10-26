@@ -1,7 +1,6 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import {
-  Select, Tabs, Empty, Spin, Card, Tag, Typography, Alert,
-  Collapse, Divider, Space, Button, Badge, Modal, Form, Input, AutoComplete, message, Popover,
+  Select, Tabs, Empty, Spin, Card, Tag, Typography, Alert, Collapse, Divider, Space, Button, Badge, Modal, Form, Input, AutoComplete, message, Popover, Checkbox,
 } from "antd";
 import {
   ReloadOutlined, SyncOutlined, TrophyOutlined, EditOutlined, SafetyCertificateOutlined, StarOutlined,
@@ -17,6 +16,8 @@ import { useViewMode } from "../contexts/ViewModeContext";
 import { teamLabel, teamRank } from "../utils/tournamentLabels";
 import { tieScoreText } from "../utils/teamLabels";
 import { indexTeamPlayers, normalizeTeamRules, rubberTotals } from "../utils/teamFormat";
+import TeamOverviewPanel from "./team/TeamOverviewPanel";
+import TeamStatsTable from "./team/TeamStatsTable";
 import TieRubbersInline from "./team/TieRubbersInline";
 import {
   serverOffset, verifyDraw, verifyPartnerDraw, partnerLabelForStep, partnerDrawFinished, partnerDrawStuck,
@@ -269,11 +270,18 @@ function KnockoutBracket({ matches, onOpen, renderDetail }) {
 function RoundedSchedule({ matches, columns, mobileProps }) {
   const rounds = [...new Set(matches.map(m => m.round_number))].sort((a, b) => a - b);
   const roundCols = columns.filter(c => c.dataIndex !== "round_name");
+  // Mẫu FIS: lọc nhanh các vòng còn thiếu kết quả
+  const [onlyPending, setOnlyPending] = useState(false);
+  const byRound = rounds.map(r => ({ r, rMatches: matches.filter(m => m.round_number === r) }));
+  const visible = onlyPending ? byRound.filter(({ rMatches }) => !rMatches.every(m => m.status === "completed")) : byRound;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      {rounds.map(r => {
-        const rMatches = matches.filter(m => m.round_number === r);
+      {rounds.length > 1 && (
+        <Checkbox checked={onlyPending} onChange={(e) => setOnlyPending(e.target.checked)}>Chỉ hiện vòng chưa đủ kết quả</Checkbox>
+      )}
+      {onlyPending && visible.length === 0 && <Alert type="success" showIcon message="Mọi vòng đã đủ kết quả." />}
+      {visible.map(({ r, rMatches }) => {
         const rName = rMatches[0]?.round_name || `Vòng ${r}`;
         const done = rMatches.filter(m => m.status === "completed").length;
         return (
@@ -281,7 +289,9 @@ function RoundedSchedule({ matches, columns, mobileProps }) {
             key={r}
             size="small"
             title={<Text strong style={{ color: "#1677ff" }}>{rName}</Text>}
-            extra={<Tag color={done === rMatches.length ? "success" : "default"}>{done}/{rMatches.length}</Tag>}
+            extra={done === rMatches.length
+              ? <Tag color="success">Đã đủ kết quả · {done}/{rMatches.length}</Tag>
+              : <Tag color="default">{done}/{rMatches.length}</Tag>}
           >
             <ResponsiveTable
               columns={roundCols}
@@ -567,6 +577,16 @@ function TournamentContent({ tournament, api, onScored }) {
   );
   const bracketOpen = isTeam ? setTieMatch : undefined;
   const tabItems = [];
+  // Giải đồng đội đã có lịch: tab Tổng quan đứng đầu (mẫu FIS) — dùng chung component với trang quản trị
+  const teamRulesNorm = isTeam ? (() => { try { return normalizeTeamRules(tournament.team_rules); } catch { return null; } })() : null;
+  const fetchStandings = useCallback((g) => api.tournaments.standings(tournament.id, g || undefined), [api, tournament.id]);
+  if (isTeam && teamRulesNorm && matches.length > 0) {
+    tabItems.push({
+      key: "overview",
+      label: "Tổng quan",
+      children: <TeamOverviewPanel tournament={tournament} rules={teamRulesNorm} fetchStandings={fetchStandings} onOpenMatch={setTieMatch} isPublic />,
+    });
+  }
 
   // round_robin_double (vòng tròn hai lượt) trước đây bị bỏ sót → trang public không có lịch/BXH (lỗi có sẵn)
   if (fmt === "round_robin" || fmt === "round_robin_double" || fmt === "individual") {
@@ -644,6 +664,10 @@ function TournamentContent({ tournament, api, onScored }) {
       label: `Đội (${(tournament.participants || []).length})`,
       children: <TeamsPanel api={api} tid={tournament.id} participantCount={(tournament.participants || []).length} />,
     });
+  }
+
+  if (isTeam && teamRulesNorm && matches.length > 0) {
+    tabItems.push({ key: "team-stats", label: "Thống kê", children: <TeamStatsTable tournament={tournament} rules={teamRulesNorm} /> });
   }
 
   return (
@@ -1392,7 +1416,9 @@ export default function PublicTournamentTracker({ api }) {
                 ? `Đang theo dõi ${isTeamDrawLive ? "phân đội" : "ghép đội"} trực tiếp (cập nhật ${DRAW_POLL_MS / 1000}s)`
                 : isLive
                   ? `Đang theo dõi bốc thăm trực tiếp (cập nhật ${DRAW_POLL_MS / 1000}s)`
-                  : `Tự động cập nhật mỗi ${POLL_MS / 1000}s`}
+                  : tournament.status === "active"
+                    ? `Đang xem trực tiếp · cập nhật mỗi ${POLL_MS / 1000}s`
+                    : `Tự động cập nhật mỗi ${POLL_MS / 1000}s`}
             </Text>
           </Space>
 

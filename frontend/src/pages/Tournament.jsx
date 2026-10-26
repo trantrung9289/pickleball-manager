@@ -32,6 +32,8 @@ import { useRankLevels } from "../hooks/useRankLevels";
 import { buildRealBracketNodes, computeBracketGeometry, findThirdPlaceMatch } from "../utils/bracketLayout";
 import { teamLabel, teamRank } from "../utils/tournamentLabels";
 import { TEAM_TYPE_LABELS, defaultTeamRules, normalizeTeamRules, tieScoreLabel, indexTeamPlayers, rubberTotals } from "../utils/teamFormat";
+import TeamOverviewPanel from "../components/team/TeamOverviewPanel";
+import TeamStatsTable from "../components/team/TeamStatsTable";
 import {
   DRAW_FORMATS, serverOffset, normalizeRank, UNRANKED, partnerPlan, normalizePartnerRules, ranksLabel,
 } from "../utils/drawMath";
@@ -917,10 +919,18 @@ function RoundedSchedule({ matches, columns, mobileProps }) {
     rMatches: mainMatches.filter(m => m.round_number === r),
   }));
   if (thirdPlace) groups.push({ key: "third-place", rMatches: [thirdPlace] });
+  // Mẫu FIS: lọc nhanh các vòng còn thiếu kết quả khi điều hành ngày thi đấu
+  const [onlyPending, setOnlyPending] = useState(false);
+  const isRoundDone = (rMatches) => rMatches.length > 0 && rMatches.every(m => m.status === "completed");
+  const visible = onlyPending ? groups.filter(g => !isRoundDone(g.rMatches)) : groups;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      {groups.map(({ key, rMatches }) => {
+      {groups.length > 1 && (
+        <Checkbox checked={onlyPending} onChange={(e) => setOnlyPending(e.target.checked)}>Chỉ hiện vòng chưa đủ kết quả</Checkbox>
+      )}
+      {onlyPending && visible.length === 0 && <Alert type="success" showIcon message="Mọi vòng đã đủ kết quả." />}
+      {visible.map(({ key, rMatches }) => {
         const rName = rMatches[0]?.round_name || `Vòng ${key}`;
         const done = rMatches.filter(m => m.status === "completed").length;
         return (
@@ -928,7 +938,9 @@ function RoundedSchedule({ matches, columns, mobileProps }) {
             key={key}
             size="small"
             title={<Text strong style={{ color: key === "third-place" ? "#d48806" : "#1677ff" }}>{rName}</Text>}
-            extra={<Tag color={done === rMatches.length ? "success" : "default"}>{done}/{rMatches.length}</Tag>}
+            extra={done === rMatches.length
+              ? <Tag color="success">Đã đủ kết quả · {done}/{rMatches.length}</Tag>
+              : <Tag color="default">{done}/{rMatches.length}</Tag>}
           >
             <ResponsiveTable
               columns={roundCols}
@@ -2013,6 +2025,16 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated, autoOpenAdd
   };
 
   const tabItems = [];
+  // Giải đồng đội đã có lịch: tab Tổng quan (tiến độ, cặp đấu chưa xong, dẫn đầu, thể thức) đứng đầu — mẫu FIS
+  const teamRulesNorm = isTeam ? (() => { try { return normalizeTeamRules(tournament.team_rules); } catch { return null; } })() : null;
+  const fetchStandings = useCallback((g) => tournamentsApi.standings(tournament.id, g || undefined), [tournament.id]);
+  if (isTeam && teamRulesNorm && matches.length > 0) {
+    tabItems.push({
+      key: "overview",
+      label: "Tổng quan",
+      children: <TeamOverviewPanel tournament={tournament} rules={teamRulesNorm} fetchStandings={fetchStandings} onOpenMatch={setTieMatch} />,
+    });
+  }
 
   if (isTeam) {
     // Giải đồng đội: tab "Đội" (đội, VĐV, đội hình, bỏ giải) thay cho tab "Người chơi"
@@ -2175,6 +2197,10 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated, autoOpenAdd
         ),
       });
     }
+  }
+
+  if (isTeam && teamRulesNorm && matches.length > 0) {
+    tabItems.push({ key: "team-stats", label: "Thống kê", children: <TeamStatsTable tournament={tournament} rules={teamRulesNorm} /> });
   }
 
   return (
