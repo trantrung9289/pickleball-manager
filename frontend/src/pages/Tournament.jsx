@@ -10,7 +10,7 @@ import {
   PlusOutlined, ThunderboltOutlined, TrophyOutlined,
   EditOutlined, DeleteOutlined, ReloadOutlined,
   CheckCircleOutlined, SaveOutlined, ArrowRightOutlined,
-  UserOutlined, TeamOutlined, UserAddOutlined, PrinterOutlined, GiftOutlined, WarningOutlined,
+  UserOutlined, TeamOutlined, UserAddOutlined, PrinterOutlined, GiftOutlined, WarningOutlined, DownloadOutlined,
   SettingOutlined, StarOutlined, FileTextOutlined, HistoryOutlined, UsergroupAddOutlined,
 } from "@ant-design/icons";
 import dayjs from "dayjs";
@@ -2307,6 +2307,18 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated, autoOpenAdd
           {matches.length > 0 && (
             <Button icon={<PrinterOutlined />} loading={printing} onClick={handlePrintClick}>
               In bảng thi đấu
+            </Button>
+          )}
+          {tournament.status !== "draft" && (
+            <Button icon={<DownloadOutlined />} onClick={async () => {
+              try {
+                const res = await tournamentsApi.exportExcel(tournament.id);
+                const url = URL.createObjectURL(new Blob([res.data]));
+                const a = document.createElement("a"); a.href = url; a.download = `ket-qua-${tournament.name || "giai"}.xlsx`; a.click();
+                URL.revokeObjectURL(url);
+              } catch { message.error("Không xuất được file Excel"); }
+            }}>
+              Xuất Excel
             </Button>
           )}
           {tournament.status === "active" && (

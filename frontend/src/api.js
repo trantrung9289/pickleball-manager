@@ -121,6 +121,7 @@ export const playersApi = {
 };
 
 export const tournamentsApi = {
+  exportExcel: (tid) => api.get(`/api/tournaments/${tid}/export.xlsx`, { responseType: "blob" }),   // kết quả giải (mẫu FIS)
   list: () => api.get("/api/tournaments"),
   get: (id) => api.get(`/api/tournaments/${id}`),
   create: (data) => api.post("/api/tournaments", data),
@@ -188,6 +189,8 @@ export const tournamentsApi = {
     add: (tid, data) => api.post(`/api/tournaments/${tid}/team-players/bulk`, data),         // {member_ids, player_ids, participant_id?} → {added, skipped, team?, pool_count}
     patch: (tid, tpid, data) => api.patch(`/api/tournaments/${tid}/team-players/${tpid}`, data),   // {participant_id?: int|null, gender?, rank?, is_captain?}
     assign: (tid, assignments) => api.post(`/api/tournaments/${tid}/team-players/assign`, { assignments }),   // [{tpid, participant_id|null}] nguyên tử → {updated, pool_count}
+    importTemplate: () => api.get("/api/team-import/template", { responseType: "blob" }),
+    importExcel: (tid, file) => { const f = new FormData(); f.append("file", file); return api.post(`/api/tournaments/${tid}/team-players/import`, f, { headers: { "Content-Type": "multipart/form-data" } }); },
     remove: (tid, tpid) => api.delete(`/api/tournaments/${tid}/team-players/${tpid}`),        // xoá hẳn khỏi giải
   },
   // Đội hình đăng ký theo giai đoạn (leg1 | leg2 | knockout) — khoá tự động khi giai đoạn có điểm đầu tiên

@@ -4220,6 +4220,247 @@ def assign_tournament_team_players(tid: int, data: schemas.TeamPlayersAssignIn, 
     return {"updated": [_team_player_out(tp) for tp in updated], "pool_count": len(_team_pool(db, t))}
 
 
+# ── Mẫu FIS đợt 5 (2026-10-26): nhập đội + VĐV cấp giải từ Excel, xuất kết quả giải ra Excel ──
+TEAM_IMPORT_HEADERS = ["Đội", "Họ và tên", "Giới tính", "Hạng", "Mã TV", "SĐT"]
+
+
+@app.get("/api/team-import/template")
+def team_import_template(perms: ClubPermissions = Depends(get_club_permission)):
+    """File mẫu nhập VĐV giải đồng đội: mỗi dòng một VĐV; cột Đội trống = vào danh sách chưa phân đội.
+    Khớp người theo Mã TV → SĐT → họ tên (duy nhất trong CLB); không khớp → tạo khách mời."""
+    perms.require_view()
+    wb = openpyxl.Workbook(); ws = wb.active; ws.title = "VĐV"
+    ws.append(TEAM_IMPORT_HEADERS)
+    for c in ws[1]:
+        c.font = Font(bold=True); c.fill = PatternFill("solid", fgColor="DDEBF7")
+    ws.append(["Đội A", "Nguyễn Văn An", "Nam", "B", "TV0001", ""])
+    ws.append(["Đội A", "Trần Thị Bình", "Nữ", "C", "", "0901234567"])
+    ws.append(["", "Lê Văn Chờ", "Nam", "", "", ""])
+    for col, w in zip("ABCDEF", (16, 28, 12, 10, 12, 16)):
+        ws.column_dimensions[col].width = w
+    ws2 = wb.create_sheet("Hướng dẫn")
+    for line in (
+        "Mỗi dòng một VĐV. Cột Đội: tên đội (tự tạo nếu chưa có khi giải còn Nháp); để trống → vào danh sách VĐV tham dự chưa phân đội.",
+        "Khớp thành viên theo Mã TV, không có thì theo SĐT, không có thì theo họ tên (phải duy nhất trong CLB).",
+        "Không khớp ai → tạo KHÁCH MỜI mới với tên / giới tính / hạng / SĐT trong file.",
+        "Giới tính: Nam / Nữ (hoặc male / female). Hạng: theo danh sách hạng của CLB (để trống = chưa xếp hạng).",
+        "Người đã có trong giải → bỏ qua (không nhân đôi). Giới tính / hạng trong file ghi đè bản chụp của VĐV trong giải nếu có điền.",
+    ):
+        ws2.append([line])
+    ws2.column_dimensions["A"].width = 120
+    buf = io.BytesIO(); wb.save(buf); buf.seek(0)
+    return StreamingResponse(buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                             headers={"Content-Disposition": "attachment; filename=mau_nhap_vdv_giai_dong_doi.xlsx"})
+
+
+@app.post("/api/tournaments/{tid}/team-players/import")
+def import_team_players_excel(tid: int, file: UploadFile = File(...), db: Session = Depends(get_db),
+                              perms: ClubPermissions = Depends(get_club_permission)):
+    """Nhập đội + VĐV cho giải đồng đội từ Excel (mẫu /api/team-import/template). Đội chưa có → tạo (chỉ khi Nháp);
+    người khớp thành viên theo Mã TV → SĐT → tên duy nhất, không khớp → tạo khách mời. Dùng lại _add_team_people
+    (một người một bản ghi/giải). Trả thống kê + danh sách dòng lỗi."""
+    perms.require_edit()
+    t = _get_club_tournament(db, tid, perms)
+    _require_team_tournament(t)
+    if t.status == models.TournamentStatus.completed:
+        raise HTTPException(400, "Giải đã kết thúc")
+    _require_no_open_team_draw(t)
+    if not (file.filename or "").lower().endswith((".xlsx", ".xls")):
+        raise HTTPException(400, "Chỉ chấp nhận file .xlsx hoặc .xls")
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(file.file.read()), data_only=True)
+    except Exception:
+        raise HTTPException(400, "File Excel không hợp lệ hoặc bị lỗi")
+    ws = wb.active
+    rows = list(ws.iter_rows(min_row=2, values_only=True))
+
+    def clean(v):
+        return str(v).strip() if v is not None and str(v).strip() != "" else None
+
+    errors: list = []
+    guests_created = 0
+    teams_created: list = []
+    # Gom theo đội: {team_key: {"name": str|None, "members": [...], "players": [...], "overrides": {("m"|"p", id): (gender, rank)}}}
+    groups: dict = {}
+    club_members = db.query(models.Member).filter(models.Member.club_id == perms.club_id).all()
+    by_code = {(m.member_code or "").strip().casefold(): m for m in club_members if m.member_code}
+    by_phone: dict = {}
+    for m in club_members:
+        if m.phone:
+            by_phone.setdefault(m.phone.strip(), []).append(m)
+    by_name: dict = {}
+    for m in club_members:
+        by_name.setdefault((m.full_name or "").strip().casefold(), []).append(m)
+    club_players = db.query(models.Player).filter(models.Player.club_id == perms.club_id, models.Player.member_id.is_(None)).all()
+    guest_by_name: dict = {}
+    for p in club_players:
+        guest_by_name.setdefault((p.name or "").strip().casefold(), []).append(p)
+
+    for i, row in enumerate(rows, start=2):
+        if not row or not any(v is not None and str(v).strip() for v in row):
+            continue
+        row = list(row) + [None] * (6 - len(row))
+        team_name = clean(row[0]); full_name = clean(row[1]); gender = _parse_gender(clean(row[2]))
+        rank = clean(row[3]); code = clean(row[4]); phone = clean(row[5])
+        if not full_name:
+            errors.append({"row": i, "reason": "Thiếu họ và tên"}); continue
+        member = None
+        if code:
+            member = by_code.get(code.casefold())
+            if member is None:
+                errors.append({"row": i, "reason": f"Không có thành viên mã '{code}'"}); continue
+        if member is None and phone and len(by_phone.get(phone, [])) == 1:
+            member = by_phone[phone][0]
+        if member is None:
+            cands = by_name.get(full_name.casefold(), [])
+            if len(cands) == 1:
+                member = cands[0]
+            elif len(cands) > 1:
+                errors.append({"row": i, "reason": f"Có {len(cands)} thành viên cùng tên '{full_name}' — điền Mã TV hoặc SĐT"}); continue
+        key = (team_name or "").casefold()
+        g = groups.setdefault(key, {"name": team_name, "members": [], "players": [], "overrides": {}})
+        def _merge_override(key_, gender_, rank_):
+            prev = g["overrides"].get(key_, (None, None))
+            g["overrides"][key_] = (gender_ or prev[0], rank_ or prev[1])   # dòng trùng không xoá giá trị đã điền
+
+        if member is not None:
+            g["members"].append(member.id); _merge_override(("m", member.id), gender, rank)
+            continue
+        # Khách mời: dùng lại khách cùng tên (và cùng SĐT nếu file có SĐT), không thì tạo mới
+        guest = None
+        for cand in guest_by_name.get(full_name.casefold(), []):
+            if not phone or (cand.phone or "").strip() == phone:
+                guest = cand; break
+        if guest is None:
+            guest = models.Player(name=full_name, phone=phone, gender=gender, rank=rank or "Chưa xếp hạng", club_id=perms.club_id)
+            db.add(guest); db.flush()
+            guest_by_name.setdefault(full_name.casefold(), []).append(guest)
+            guests_created += 1
+        g["players"].append(guest.id); _merge_override(("p", guest.id), gender, rank)
+
+    added_total, skipped_total = 0, []
+    for key, g in groups.items():
+        target = None
+        if g["name"]:
+            target = next((p for p in t.participants if (p.team_name or "").strip().casefold() == key), None)
+            if target is None:
+                if t.status != models.TournamentStatus.draft:
+                    errors.append({"row": None, "reason": f"Đội '{g['name']}' chưa có — giải đã bắt đầu, không tạo thêm đội"})
+                    continue
+                seed = max([p.seed or 0 for p in t.participants] + [0]) + 1
+                target = models.TournamentParticipant(tournament_id=t.id, team_name=g["name"].strip(), seed=seed)
+                db.add(target); db.flush(); db.refresh(t)
+                teams_created.append(g["name"].strip())
+        added, skipped = _add_team_people(db, t, perms, g["members"], g["players"], target)
+        added_total += added; skipped_total += skipped
+        # Ghi đè giới tính / hạng từ file (nếu có điền) lên bản chụp trong giải
+        for (kind, pid_), (gender, rank) in g["overrides"].items():
+            if gender is None and rank is None:
+                continue
+            q = db.query(models.TournamentTeamPlayer).filter(models.TournamentTeamPlayer.tournament_id == t.id)
+            tp = (q.filter(models.TournamentTeamPlayer.member_id == pid_) if kind == "m"
+                  else q.filter(models.TournamentTeamPlayer.player_id == pid_)).first()
+            if tp is not None:
+                if gender: tp.gender_snapshot = gender
+                if rank: tp.rank_snapshot = rank[:50]
+        db.commit()
+    db.refresh(t)
+    return {"added": added_total, "skipped": skipped_total, "teams_created": teams_created, "guests_created": guests_created,
+            "errors": errors, "pool_count": len(_team_pool(db, t)), "team_count": len([p for p in t.participants])}
+
+
+@app.get("/api/tournaments/{tid}/export.xlsx")
+def export_tournament_excel(tid: int, db: Session = Depends(get_db), perms: ClubPermissions = Depends(get_club_permission)):
+    """Xuất kết quả giải ra Excel (mẫu FIS): Tổng quan, Đội & VĐV (giải đồng đội), Trận đấu (+ trận thành phần),
+    Xếp hạng từng bảng (kèm thể loại với giải đồng đội)."""
+    perms.require_view()
+    t = _get_club_tournament(db, tid, perms)
+    is_team = t.team_type == "team"
+    rules = _team_rules(t) if is_team else None
+    wb = openpyxl.Workbook()
+    bold = Font(bold=True)
+
+    def header(ws, cols):
+        ws.append(cols)
+        for c in ws[ws.max_row]:
+            c.font = bold; c.fill = PatternFill("solid", fgColor="DDEBF7")
+
+    def pname(p):
+        if p is None:
+            return ""
+        return p.team_name or (p.member.full_name if p.member else "") or (p.player.name if getattr(p, "player", None) else "")
+
+    ws = wb.active; ws.title = "Tổng quan"
+    ws.append(["Giải", t.name]); ws.append(["Thể thức", t.format.value]); ws.append(["Loại", t.team_type])
+    ws.append(["Trạng thái", t.status.value]); ws.append(["Số đội", len(t.participants)]); ws.append(["Số trận", len(t.matches)])
+    if rules:
+        ws.append(["Trận thành phần", ", ".join(r["label"] for r in rules["rubbers"])])
+        if rules.get("knockout_rubbers"):
+            ws.append(["Trận thành phần vòng loại", ", ".join(r["label"] for r in rules["knockout_rubbers"])])
+        ws.append(["Cách tính", rules["scoring"]]); ws.append(["Xếp hạng", rules.get("ranking", "tie_points")])
+        ws.append(["Điểm/trận", rules["points_per_rubber"]])
+    ws.column_dimensions["A"].width = 26; ws.column_dimensions["B"].width = 60
+
+    if is_team:
+        ws2 = wb.create_sheet("Đội & VĐV")
+        header(ws2, ["Đội", "Bảng", "Họ và tên", "Giới tính", "Hạng", "Đội trưởng", "Loại"])
+        names = {p.id: p for p in t.participants}
+        for tp in _team_players(db, t):
+            p = names.get(tp.participant_id)
+            ws2.append([pname(p) if p else "(chưa phân đội)", (p.group_name if p else "") or "", tp.display_name,
+                        {"male": "Nam", "female": "Nữ"}.get(tp.gender_snapshot, tp.gender_snapshot or ""), tp.rank_snapshot or "",
+                        "x" if tp.is_captain else "", "Khách mời" if tp.player_id and not tp.member_id else "Thành viên"])
+        for col, w in zip("ABCDEFG", (18, 8, 28, 10, 10, 10, 12)):
+            ws2.column_dimensions[col].width = w
+
+    ws3 = wb.create_sheet("Trận đấu")
+    cols = ["Giai đoạn", "Bảng", "Vòng", "Trận #", "Đội 1", "Tỉ số 1", "Tỉ số 2", "Đội 2", "Trạng thái", "Ghi chú BTC"]
+    if is_team:
+        cols += ["Trận thành phần", "Sân", "VĐV đội 1", "Điểm 1", "Điểm 2", "VĐV đội 2"]
+    header(ws3, cols)
+    tp_name = {tp.id: tp.display_name for tp in _team_players(db, t)} if is_team else {}
+    for m in sorted(t.matches, key=lambda x: (x.phase == "knockout", x.group_name or "", x.round_number, x.match_number)):
+        base = ["Loại trực tiếp" if m.phase == "knockout" else "Vòng bảng", m.group_name or "", m.round_name or f"Vòng {m.round_number}",
+                m.match_number, pname(m.p1), m.score1, m.score2, pname(m.p2),
+                m.status.value if hasattr(m.status, "value") else str(m.status), m.btc_note or ""]
+        if not is_team or not m.rubbers:
+            ws3.append(base); continue
+        for r in sorted(m.rubbers, key=lambda x: x.order_index):
+            ws3.append(base + [r.label, r.court or "", " / ".join(tp_name.get(i, str(i)) for i in (r.side1_players or [])),
+                               r.score1, r.score2, " / ".join(tp_name.get(i, str(i)) for i in (r.side2_players or []))])
+    for col, w in zip("ABCDEFGHIJKLMNOP", (14, 6, 18, 7, 20, 7, 7, 20, 11, 30, 16, 6, 30, 7, 7, 30)):
+        ws3.column_dimensions[col].width = w
+
+    ws4 = wb.create_sheet("Xếp hạng")
+    group_matches = [m for m in t.matches if m.phase == "group"]
+    gnames = sorted(set(p.group_name for p in t.participants if p.group_name)) or [None]
+    labels = [r["label"] for r in rules["rubbers"]] if rules else []
+    for g in gnames:
+        ws4.append([f"Bảng {g}" if g else "Bảng xếp hạng"]); ws4[ws4.max_row][0].font = bold
+        parts = [p for p in t.participants if g is None or p.group_name == g]
+        ms = [m for m in group_matches if g is None or m.group_name == g]
+        rows = _team_standings_rows(db, t, ms, parts, g, None)
+        cols4 = ["#", "Đội", "Trận", "Thắng", "Thua"] + (["HS trận", "HS điểm", "Điểm ghi", "Điểm mất"] + [f"{lb} (T-B)" for lb in labels] if is_team else ["BT", "BB", "Hiệu số"]) + ["Điểm", "Cần bốc thăm"]
+        header(ws4, cols4)
+        for r in rows:
+            line = [r["rank"], r.get("team_name") or r.get("full_name"), r["played"], r["won"], r["lost"]]
+            if is_team:
+                bc = (r.get("breakdown") or {}).get("by_category") or {}
+                line += [r.get("rubber_diff", 0), r.get("pts_diff", 0), r.get("pts_for", 0), r.get("pts_against", 0)]
+                line += [f"{bc[lb]['won']}-{bc[lb]['lost']}" if lb in bc and bc[lb]["played"] else "" for lb in labels]
+            else:
+                line += [r.get("goals_for", 0), r.get("goals_against", 0), r.get("goal_diff", 0)]
+            line += [r["points"], "x" if r.get("needs_draw") else ""]
+            ws4.append(line)
+        ws4.append([])
+    ws4.column_dimensions["B"].width = 26
+
+    buf = io.BytesIO(); wb.save(buf); buf.seek(0)
+    safe = "".join(ch if (ch.isascii() and ch.isalnum()) else "_" for ch in (t.name or "giai"))[:40] or "giai"   # header HTTP chỉ nhận latin-1
+    return StreamingResponse(buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                             headers={"Content-Disposition": f"attachment; filename=ket_qua_{safe}.xlsx"})
+
+
 @app.delete("/api/tournaments/{tid}/team-players/{tpid}", status_code=204)
 def delete_tournament_team_player(tid: int, tpid: int, db: Session = Depends(get_db),
                                   perms: ClubPermissions = Depends(get_club_permission)):

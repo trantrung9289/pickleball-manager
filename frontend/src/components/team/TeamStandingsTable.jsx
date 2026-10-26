@@ -7,7 +7,8 @@
  * Props: { tournament, rules, group?, fetchStandings(group, leg) → Promise, onOpenMatch?(match) }
  */
 import { useEffect, useMemo, useState } from "react";
-import { Segmented, Space, Table, Tag, Tooltip, Typography } from "antd";
+import { Button, Segmented, Space, Table, Tag, Tooltip, Typography } from "antd";
+import { PrinterOutlined } from "@ant-design/icons";
 
 const { Text } = Typography;
 const LEG_LABEL = { leg1: "Lượt đi", leg2: "Lượt về", knockout: "Loại trực tiếp" };
@@ -106,6 +107,30 @@ export default function TeamStandingsTable({ tournament, rules, group, fetchStan
       : []),
   ];
 
+  // In riêng bảng xếp hạng (mẫu FIS "In bảng xếp hạng"): mở cửa sổ mới chỉ có bảng này rồi gọi in
+  const printStandings = () => {
+    const esc = (v) => String(v ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+    const head = ["#", "Đội", "T.đấu", "Thắng", ...labels, "HS trận", "HS điểm", "Đ.ghi", "Đ.mất", ...(ranking === "tie_points" ? ["Điểm"] : [])];
+    const body = rows.map((r) => {
+      const cats = labels.map((lb) => { const c = r.breakdown?.by_category?.[lb]; return c && c.played ? `${c.won}–${c.lost}` : "–"; });
+      const sg = (v) => (v > 0 ? `+${v}` : (v ?? 0));
+      return [r.rank, `${r.team_name || r.full_name}${r.needs_draw ? " (tie-break)" : ""}`, r.played,
+        ranking === "point_diff" ? `${r.won}/${r.played}` : r.won, ...cats, sg(r.rubber_diff), sg(r.pts_diff), r.pts_for, r.pts_against,
+        ...(ranking === "tie_points" ? [r.points] : [])];
+    });
+    const title = `${tournament.name || "Giải đấu"} — Bảng xếp hạng${group ? ` bảng ${group}` : ""}${leg ? ` (${leg === "leg1" ? "lượt đi" : "lượt về"})` : ""}`;
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title>
+<style>body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;padding:16px;color:#141413}h2{margin:0 0 4px}p{margin:0 0 10px;color:#555;font-size:12px}
+table{border-collapse:collapse;width:100%}th,td{border:1px solid #bbb;padding:5px 7px;font-size:12.5px;text-align:center}th{background:#eef3f8}td:nth-child(2){text-align:left;font-weight:600}
+@media print{body{padding:0}}</style></head><body><h2>${esc(title)}</h2>
+<p>${ranking === "point_diff" ? "Xếp theo tổng hiệu số điểm trận thành phần → điểm ghi → đối đầu." : "Xếp theo điểm bảng (1 điểm/trận đồng đội thắng) rồi tie-break điều lệ."} Cột thể loại: trận thành phần thắng–thua. In lúc ${new Date().toLocaleString("vi-VN")}.</p>
+<table><thead><tr>${head.map((h) => `<th>${esc(h)}</th>`).join("")}</tr></thead><tbody>${body.map((r) => `<tr>${r.map((c) => `<td>${esc(c)}</td>`).join("")}</tr>`).join("")}</tbody></table>
+<script>window.onload=function(){window.print();}</script></body></html>`;
+    const w = window.open("", "_blank");
+    if (!w) return;
+    w.document.open(); w.document.write(html); w.document.close();
+  };
+
   return (
     <div>
       <Space wrap style={{ marginBottom: 8, justifyContent: "space-between", width: "100%" }}>
@@ -115,10 +140,13 @@ export default function TeamStandingsTable({ tournament, rules, group, fetchStan
             : "Xếp theo điểm bảng (1 điểm/trận đồng đội thắng) rồi tie-break điều lệ. Cột thể loại: trận thành phần thắng–thua."}
           {" "}Bấm vào hàng để xem từng cặp đấu.
         </Text>
-        {twoLegs && (
-          <Segmented size="small" value={leg || "all"} onChange={(v) => setLeg(v === "all" ? null : v)}
-            options={[{ label: "Cả giải", value: "all" }, { label: "Lượt đi", value: "leg1" }, { label: "Lượt về", value: "leg2" }]} />
-        )}
+        <Space size={6}>
+          {twoLegs && (
+            <Segmented size="small" value={leg || "all"} onChange={(v) => setLeg(v === "all" ? null : v)}
+              options={[{ label: "Cả giải", value: "all" }, { label: "Lượt đi", value: "leg1" }, { label: "Lượt về", value: "leg2" }]} />
+          )}
+          <Button size="small" icon={<PrinterOutlined />} onClick={printStandings} disabled={!rows.length}>In BXH</Button>
+        </Space>
       </Space>
       <Table columns={cols} dataSource={rows} rowKey="participant_id" size="small" pagination={false}
         scroll={{ x: "max-content" }}

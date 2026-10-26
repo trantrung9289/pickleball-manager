@@ -4,7 +4,7 @@ import {
 } from "antd";
 import {
   DeleteOutlined, EditOutlined, GiftOutlined, PlusOutlined, RollbackOutlined, StarFilled, StarOutlined, SwapOutlined, TeamOutlined,
-  UserAddOutlined, UsergroupAddOutlined, UserOutlined,
+  UserAddOutlined, UsergroupAddOutlined, UserOutlined, UploadOutlined,
 } from "@ant-design/icons";
 import { tournamentsApi } from "../../api";
 import { AddParticipantsModal } from "../AddParticipantsModal";
@@ -13,6 +13,7 @@ import GenderTag from "./GenderTag";
 import StageLineupModal from "./StageLineupModal";
 import TeamDrawSetupModal from "./TeamDrawSetupModal";
 import TeamManualAssignModal from "./TeamManualAssignModal";
+import TeamImportModal from "./TeamImportModal";
 import TeamDrawCeremony from "../draw/TeamDrawCeremony";
 import { useRankLevels } from "../../hooks/useRankLevels";
 import { serverOffset } from "../../utils/drawMath";
@@ -85,6 +86,7 @@ export default function TeamRosterPanel({ tournament, canEdit = false, onChanged
   const [drawOpen, setDrawOpen] = useState(false);
   const [drawSetup, setDrawSetup] = useState(false);
   const [manualOpen, setManualOpen] = useState(false);     // bảng PHÂN ĐỘI THỦ CÔNG theo lô
+  const [importOpen, setImportOpen] = useState(false);     // nhập đội + VĐV từ Excel (mẫu FIS)
   const [manualBusy, setManualBusy] = useState(false);
   const [drawBusy, setDrawBusy] = useState(false);
   const [drawOffset, setDrawOffset] = useState(0);
@@ -478,6 +480,7 @@ export default function TeamRosterPanel({ tournament, canEdit = false, onChanged
               <Button size="small" icon={<GiftOutlined />} onClick={() => setDrawSetup(true)}>🎡 Phân đội (vòng quay)</Button>
             )}
             <Button type="primary" size="small" icon={<UserAddOutlined />} disabled={drawLocked} onClick={() => setAddTarget("pool")}>Thêm VĐV</Button>
+            <Button size="small" icon={<UploadOutlined />} disabled={drawLocked} onClick={() => setImportOpen(true)}>Nhập Excel</Button>
           </Space>
         )}>
         {loading ? <div style={{ textAlign: "center", padding: 16 }}><Spin /></div> : pool.length === 0 ? (
@@ -556,6 +559,9 @@ export default function TeamRosterPanel({ tournament, canEdit = false, onChanged
       )}
       {lineupTarget && (
         <StageLineupModal tournament={tournament} team={lineupTarget} canEdit={canEdit} onClose={() => setLineupTarget(null)} />
+      )}
+      {importOpen && (
+        <TeamImportModal tid={tid} onDone={() => refresh(true)} onClose={() => setImportOpen(false)} />
       )}
       {manualOpen && (
         <TeamManualAssignModal pool={pool} teams={activeTeams} rankOptions={rankOptions} busy={manualBusy}
