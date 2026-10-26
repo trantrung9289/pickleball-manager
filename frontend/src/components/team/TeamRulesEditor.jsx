@@ -129,6 +129,17 @@ export default function TeamRulesEditor({ value, onChange, disabled = false }) {
         </Space>
       </div>
 
+      <Space size={6} wrap style={{ marginBottom: 8 }}>
+        <Text>Sĩ số đội tối đa</Text>
+        <InputNumber min={1} max={99} placeholder="—" value={rules.max_male ?? null} disabled={disabled} style={{ width: 64 }}
+          addonAfter="Nam" onChange={(v) => emit({ max_male: v || null })} />
+        <InputNumber min={1} max={99} placeholder="—" value={rules.max_female ?? null} disabled={disabled} style={{ width: 64 }}
+          addonAfter="Nữ" onChange={(v) => emit({ max_female: v || null })} />
+        <InputNumber min={1} max={199} placeholder="—" value={rules.max_players ?? null} disabled={disabled} style={{ width: 70 }}
+          addonAfter="tổng" onChange={(v) => emit({ max_players: v || null })} />
+        <Tooltip title="Để trống = không giới hạn. Vượt sĩ số chỉ CẢNH BÁO trên thẻ đội (bộ đếm 7/8 Nam, 2/2 Nữ), không chặn"><Text type="secondary">?</Text></Tooltip>
+      </Space>
+
       {scoring === "cumulative" && (
         <Space size={6} wrap style={{ marginBottom: 4 }}>
           <Text>Mốc tổng (PA2)</Text>

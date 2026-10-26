@@ -6,7 +6,7 @@ import {
   autoLabelRubbers, placeholderLabels, normalizeTeamRules, defaultTeamRules, defaultTargetTotal, rubberTarget,
   stagesForFormat, overLimitIds, appearanceCounts, genderIssue, preferredGenders, teamGenderNeeds,
   teamRosterWarnings, tieScoreLabel, playerIndex, rubberStatusLabel, rubberSize, slotIssueText,
-  indexTeamPlayers, matchRubbersForDisplay, rubberScoreView, distributeEvenly, rubberTotals,
+  indexTeamPlayers, matchRubbersForDisplay, rubberScoreView, distributeEvenly, rubberTotals, rosterCountText,
 } from "./teamFormat.js";
 
 test("autoLabelRubbers: nhãn trống tự đánh số theo thể thức, bộ đếm tăng cả khi có nhãn tự đặt, trùng nhãn thêm hậu tố", () => {
@@ -179,4 +179,17 @@ test("rubberTotals: trận chưa mở biên bản đếm theo thể thức, tr�
   ];
   assert.deepEqual(rubberTotals(matches, rules), { total: 8, done: 3, remaining: 5, perTie: 3 });
   assert.deepEqual(rubberTotals([], rules), { total: 0, done: 0, remaining: 0, perTie: 3 });
+});
+
+test("sĩ số đội tối đa (mẫu FIS): chuẩn hoá null/số, cảnh báo vượt trần, chữ đếm n/N", () => {
+  const r = normalizeTeamRules({ max_male: "8", max_female: 2, max_players: "", rubbers: [{ code: "MD" }] });
+  assert.deepEqual([r.max_male, r.max_female, r.max_players], [8, 2, null]);
+  assert.deepEqual([normalizeTeamRules(null).max_male, normalizeTeamRules({ max_male: 0 }).max_male, normalizeTeamRules({ max_male: "x" }).max_male], [null, null, null]);
+  const rules = normalizeTeamRules({ max_male: 1, max_female: 1, max_players: 2, rubbers: [{ code: "XD" }] });
+  const players = [{ gender: "male" }, { gender: "male" }, { gender: "female" }];
+  const w = teamRosterWarnings(rules, players);
+  assert.ok(w.some((x) => x.startsWith("Vượt sĩ số Nam: tối đa 1, hiện có 2")));
+  assert.ok(w.some((x) => x.startsWith("Vượt sĩ số đội: tối đa 2, hiện có 3")));
+  assert.equal(rosterCountText(rules, players), "3/2 VĐV · 2/1 Nam · 1/1 Nữ");
+  assert.equal(rosterCountText(normalizeTeamRules(null), [{ gender: "male" }, {}]), "2 VĐV · 1 Nam · 0 Nữ · 1 chưa khai");
 });

@@ -54,6 +54,7 @@ export default function TieRubbersInline({ match, rules, playersById, compact = 
               <Text type="secondary" style={{ fontSize: fs - 1 }}>{template ? "" : `${r.order_index}. `}</Text>
               <Text strong style={{ fontSize: fs }}>{r.label}</Text>
               {r.label !== rubberName(r.code) && !compact && <Text type="secondary" style={{ fontSize: 11 }}> ({rubberName(r.code)})</Text>}
+              {r.court && <Tag color="geekblue" style={{ marginLeft: 6, fontSize: 11, lineHeight: "18px", padding: "0 5px" }}>Sân {r.court}</Tag>}
             </span>,
             <Names key={`${r.id}-1`} ids={r.side1_players} byId={playersById} win={sv.winner === 1} align="left" />,
             <span key={`${r.id}-s`} style={{ textAlign: "center", whiteSpace: "nowrap", minWidth: 48 }}>
@@ -67,6 +68,9 @@ export default function TieRubbersInline({ match, rules, playersById, compact = 
           ];
         })}
       </div>
+      {!compact && match?.btc_note && (
+        <Text type="secondary" style={{ display: "block", marginTop: 6, fontSize: 12 }}>📝 Ghi chú BTC: {match.btc_note}</Text>
+      )}
     </div>
   );
 }

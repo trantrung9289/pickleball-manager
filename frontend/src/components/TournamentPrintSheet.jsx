@@ -786,7 +786,7 @@ function TieSheet({ tournament, rules, match, tie, teamsById, firstLeg }) {
                 <td style={tdStyle()}>{r.order_index}</td>
                 <td style={tdStyle("left")}>
                   {r.label}
-                  <div style={{ fontSize: 11, color: "#888" }}>{rubberCodeLabel(r.code)}</div>
+                  <div style={{ fontSize: 11, color: "#888" }}>{rubberCodeLabel(r.code)}{r.court ? ` · Sân ${r.court}` : ""}</div>
                 </td>
                 <td style={tdStyle("left")}><PlayerCell names={playerNames(r.side1_players, byId)} size={rubberSize(r.code)} /></td>
                 <td style={tdStyle("left")}><PlayerCell names={playerNames(r.side2_players, byId)} size={rubberSize(r.code)} /></td>
@@ -821,6 +821,11 @@ function TieSheet({ tournament, rules, match, tie, teamsById, firstLeg }) {
       <div style={{ fontSize: 12, marginTop: 8 }}>
         Đội thắng: <b>{winnerName || "____________________"}</b>
         {finished && res?.detail ? <span style={{ color: "#555" }}> — {res.detail}</span> : null}
+      </div>
+      <div style={{ fontSize: 12, marginTop: 6 }}>
+        Ghi chú BTC: {match.btc_note
+          ? <span style={{ whiteSpace: "pre-wrap" }}>{match.btc_note}</span>
+          : <span style={{ display: "inline-block", width: "70%", borderBottom: "1px dotted #999", height: 14, verticalAlign: "bottom" }} />}
       </div>
       <div style={{ fontSize: 11.5, color: "#666", marginTop: 6, lineHeight: 1.6 }}>
         {cumulative

@@ -57,6 +57,7 @@ function RubberRow({ r, byId, overLimit, cumulative, isNext }) {
           <Text type="secondary" style={{ fontWeight: 400 }}>({rubberCodeLabel(r.code)})</Text>
         </Text>
         <Space size={4}>
+          {r.court && <Tag color="geekblue" style={{ margin: 0 }}>Sân {r.court}</Tag>}
           {r.is_walkover && <Tag color="warning" style={{ margin: 0 }}>Xử thua</Tag>}
           <Tag color={done ? "success" : isNext ? "processing" : "default"} style={{ margin: 0 }}>
             {done ? "Đã đấu" : isNext ? "Tiếp theo" : rubberStatusLabel(r)}
@@ -240,8 +241,12 @@ export default function PublicTieBoard({ api, tid, match, tournament, onClose, o
           </div>
           {overLimit.length > 0 && (
             <Text type="warning" style={{ fontSize: 12, display: "block", marginTop: 8 }}>
-              In đậm: VĐV được xếp quá {rules.max_rubbers_per_player} trận thành phần trong trận này.
+              ⚠ {overLimit.map((id) => byId[id]?.display_name || `#${id}`).join(", ")} được xếp quá {rules.max_rubbers_per_player} trận thành phần trong trận đồng đội này (in đậm).
             </Text>
+          )}
+          {tie.match?.btc_note && (
+            <Alert type="info" showIcon style={{ marginTop: 10 }} message="Ghi chú BTC"
+              description={<span style={{ whiteSpace: "pre-wrap" }}>{tie.match.btc_note}</span>} />
           )}
           <div style={{ marginTop: 10, textAlign: "center" }}>
             <Badge status={live ? "processing" : "default"} />

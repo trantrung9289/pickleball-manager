@@ -998,6 +998,15 @@ def normalize_team_rules(raw: Optional[Dict]) -> Dict:
         max_per = max(1, int(raw.get("max_rubbers_per_player") or 2))
     except (TypeError, ValueError):
         max_per = 2
+
+    def _cap(key: str):
+        # Sĩ số đội tối đa (mẫu FIS "8 nam 2 nữ"): None = không giới hạn; chỉ CẢNH BÁO ở UI, không chặn
+        try:
+            v = int(raw.get(key)) if raw.get(key) not in (None, "") else None
+        except (TypeError, ValueError):
+            v = None
+        return v if v and v >= 1 else None
+
     return {
         "scoring": scoring,
         "rubbers": rubbers,
@@ -1006,6 +1015,9 @@ def normalize_team_rules(raw: Optional[Dict]) -> Dict:
         "target_total": target_total,
         "max_rubbers_per_player": max_per,
         "play_all": bool(raw.get("play_all", True)),
+        "max_male": _cap("max_male"),
+        "max_female": _cap("max_female"),
+        "max_players": _cap("max_players"),
     }
 
 

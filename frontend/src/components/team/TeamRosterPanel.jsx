@@ -16,7 +16,7 @@ import TeamManualAssignModal from "./TeamManualAssignModal";
 import TeamDrawCeremony from "../draw/TeamDrawCeremony";
 import { useRankLevels } from "../../hooks/useRankLevels";
 import { serverOffset } from "../../utils/drawMath";
-import { GENDER_OPTIONS, countGenders, normalizeTeamRules, teamRosterWarnings } from "../../utils/teamFormat";
+import { GENDER_OPTIONS, countGenders, normalizeTeamRules, rosterCountText, teamRosterWarnings } from "../../utils/teamFormat";
 
 const { Text } = Typography;
 
@@ -391,7 +391,6 @@ export default function TeamRosterPanel({ tournament, canEdit = false, onChanged
     const players = t.players || [];
     const withdrawn = p.status === "withdrawn";
     const warnings = teamRosterWarnings(rules, players);
-    const g = countGenders(players);
     return (
       <Col xs={24} lg={12} key={p.id}>
         <Card size="small" style={{ height: "100%", borderColor: withdrawn ? "#ffccc7" : undefined }}
@@ -401,7 +400,7 @@ export default function TeamRosterPanel({ tournament, canEdit = false, onChanged
               {p.group_name && <Tag>Bảng {p.group_name}</Tag>}
               {withdrawn && <Tag color="error">Đã bỏ giải</Tag>}
               <Text type="secondary" style={{ fontSize: 12, fontWeight: 400 }}>
-                {players.length} VĐV · {g.male} Nam · {g.female} Nữ{g.unknown ? ` · ${g.unknown} chưa khai` : ""}
+                {rosterCountText(rules, players)}
               </Text>
             </Space>
           }

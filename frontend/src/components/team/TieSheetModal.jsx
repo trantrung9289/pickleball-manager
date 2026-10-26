@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Button, Card, Col, Dropdown, InputNumber, Modal, Row, Space, Spin, Tag, Typography, message } from "antd";
+import { Alert, Button, Card, Col, Dropdown, Input, InputNumber, Modal, Row, Space, Spin, Tag, Typography, message } from "antd";
 import { DeleteOutlined, GiftOutlined, SaveOutlined, StopOutlined } from "@ant-design/icons";
 import { tournamentsApi } from "../../api";
 import { useViewMode } from "../../contexts/ViewModeContext";
@@ -47,6 +47,9 @@ export default function TieSheetModal({ tournament, match, canEdit = false, onCl
   const [busy, setBusy] = useState(null);        // rid đang thao tác | "draw"
   const [inputs, setInputs] = useState({});      // rid → {s1, s2}
   const [pendingSides, setPendingSides] = useState({});   // `${rid}:${side}` → ids đang chọn dở (chưa đủ người)
+  const [courts, setCourts] = useState({});               // rid → sân đang gõ (lưu khi rời ô / Enter) — mẫu FIS
+  const [note, setNote] = useState("");                   // ghi chú BTC đang gõ
+  const [noteDirty, setNoteDirty] = useState(false);
   const onUpdatedRef = useRef(onUpdated);
   useEffect(() => { onUpdatedRef.current = onUpdated; }, [onUpdated]);
   const tid = tournament.id, mid = match.id;
@@ -55,13 +58,15 @@ export default function TieSheetModal({ tournament, match, canEdit = false, onCl
     setTie(next);
     setInputs(initInputs(next));
     setPendingSides({});
+    setCourts({});
+    setNote(next?.match?.btc_note || ""); setNoteDirty(false);
     if (notify) onUpdatedRef.current && onUpdatedRef.current(next);
   }, []);
 
   useEffect(() => {
     let cancelled = false;
     tournamentsApi.tie.get(tid, mid)
-      .then((r) => { if (!cancelled) { setTie(r.data); setInputs(initInputs(r.data)); } })
+      .then((r) => { if (!cancelled) { setTie(r.data); setInputs(initInputs(r.data)); setNote(r.data?.match?.btc_note || ""); } })
       .catch((err) => { if (!cancelled) message.error(err?.response?.data?.detail || "Không tải được biên bản"); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
@@ -89,6 +94,13 @@ export default function TieSheetModal({ tournament, match, canEdit = false, onCl
       message.error(err?.response?.data?.detail || "Thao tác không thành công");
     } finally { setBusy(null); }
   };
+
+  const saveCourt = (r) => {
+    const v = courts[r.id];
+    if (v === undefined || (v || "").trim() === (r.court || "")) return;
+    run(r.id, () => tournamentsApi.tie.setCourt(tid, mid, r.id, v.trim()), v.trim() ? `${r.label}: sân ${v.trim()}` : `${r.label}: đã xoá sân`);
+  };
+  const saveNote = () => run("note", () => tournamentsApi.tie.setNote(tid, mid, note), "Đã lưu ghi chú BTC");
 
   const handleDraw = async () => {
     const ok = await confirm({
@@ -204,9 +216,20 @@ export default function TieSheetModal({ tournament, match, canEdit = false, onCl
             <Text strong>{r.label}</Text>
             <Tag style={{ margin: 0 }}>{rubberName(r.code)}</Tag>
             <Tag color={statusColor} style={{ margin: 0 }}>{rubberStatusLabel(r, finished)}</Tag>
+            {!editable && r.court && <Tag color="geekblue" style={{ margin: 0 }}>Sân {r.court}</Tag>}
           </Space>
         }
-        extra={<Text type="secondary" style={{ fontSize: 12 }}>{unitHint}</Text>}>
+        extra={
+          <Space size={6}>
+            {editable && (
+              <Input size="small" placeholder="Sân" allowClear style={{ width: 86 }} maxLength={30}
+                value={courts[r.id] ?? r.court ?? ""} disabled={busy === r.id}
+                onChange={(e) => setCourts((p) => ({ ...p, [r.id]: e.target.value }))}
+                onBlur={() => saveCourt(r)} onPressEnter={(e) => e.target.blur()} />
+            )}
+            <Text type="secondary" style={{ fontSize: 12 }}>{unitHint}</Text>
+          </Space>
+        }>
         <Row gutter={[12, 8]}>
           <Col xs={24} md={12}>{sideBlock(r, 1, g)}</Col>
           <Col xs={24} md={12}>{sideBlock(r, 2, g)}</Col>
@@ -298,7 +321,10 @@ export default function TieSheetModal({ tournament, match, canEdit = false, onCl
               description={
                 <ul style={{ margin: 0, paddingLeft: 18 }}>
                   {over.size > 0 && (
-                    <li>Vượt tối đa {rules.max_rubbers_per_player} trận/VĐV: {[...over].map((id) => `${playerById[id]?.display_name || id} (${counts[id]} trận)`).join(", ")}</li>
+                    <li>
+                      {[...over].map((id) => `${playerById[id]?.display_name || id} đánh ${counts[id]} trận`).join("; ")} trong trận đồng đội này
+                      {" "}(tối đa {rules.max_rubbers_per_player} trận/VĐV).
+                    </li>
                   )}
                   {(tie.warnings || []).map((w, i) => <li key={i}>{w}</li>)}
                 </ul>
@@ -314,6 +340,17 @@ export default function TieSheetModal({ tournament, match, canEdit = false, onCl
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             {rubbers.map(rubberCard)}
           </div>
+
+          {/* Ghi chú BTC (mẫu FIS): tự do, hiện cả trên public / lịch / bản in */}
+          <Card size="small" title="Ghi chú BTC" style={{ marginTop: 12 }}
+            extra={editable && noteDirty && <Button type="primary" size="small" loading={busy === "note"} onClick={saveNote}>Lưu ghi chú</Button>}>
+            {editable ? (
+              <Input.TextArea rows={2} maxLength={1000} showCount placeholder="Ví dụ: đội 2 đến trễ 15 phút, xử thua trận 1; đổi sân 3 → 5 vì mưa…"
+                value={note} onChange={(e) => { setNote(e.target.value); setNoteDirty(true); }} />
+            ) : (
+              <Text style={{ whiteSpace: "pre-wrap" }}>{tie.match?.btc_note || <Text type="secondary">Không có</Text>}</Text>
+            )}
+          </Card>
 
           <Text type="secondary" style={{ display: "block", marginTop: 12, fontSize: 12 }}>
             Đội hình {STAGE_LABELS[tie.stage_key]}: {t1} {tie.lineup1?.locked ? "đã khoá" : "chưa khoá"} · {t2} {tie.lineup2?.locked ? "đã khoá" : "chưa khoá"}

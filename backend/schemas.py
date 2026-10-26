@@ -384,6 +384,7 @@ class MatchOut(BaseModel):
     phase: str
     p1_id: Optional[int] = None
     p2_id: Optional[int] = None
+    btc_note: Optional[str] = None     # ghi chú BTC (giải đồng đội)
     score1: Optional[int] = None
     score2: Optional[int] = None
     winner_id: Optional[int] = None
@@ -415,6 +416,7 @@ class MatchRubberOut(BaseModel):
     score2: Optional[int] = None
     status: str = "pending"
     is_walkover: bool = False
+    court: Optional[str] = None
     start1: int = 0
     start2: int = 0
 
@@ -722,6 +724,7 @@ class PublicMatchOut(BaseModel):
     phase: str
     p1_id: Optional[int] = None
     p2_id: Optional[int] = None
+    btc_note: Optional[str] = None     # ghi chú BTC (giải đồng đội)
     score1: Optional[int] = None
     score2: Optional[int] = None
     winner_id: Optional[int] = None
@@ -993,6 +996,11 @@ class LineupOut(BaseModel):
 class RubberPlayersIn(BaseModel):
     side1_players: Optional[List[int]] = None
     side2_players: Optional[List[int]] = None
+    court: Optional[str] = None       # sân thi đấu ("" → xoá); đổi được cả khi trận đã có điểm
+
+
+class MatchNoteIn(BaseModel):
+    note: Optional[str] = Field(default=None, max_length=1000)   # ghi chú BTC cho trận đồng đội (null/"" → xoá)
 
 
 class RubberScoreIn(BaseModel):
@@ -1017,6 +1025,7 @@ class RubberOut(BaseModel):
     is_walkover: bool = False
     start1: int = 0
     start2: int = 0
+    court: Optional[str] = None
     target: int = 0                   # mốc điểm của trận thành phần này (PA2: cộng dồn)
 
 

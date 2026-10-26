@@ -204,6 +204,8 @@ export const tournamentsApi = {
     score: (tid, mid, rid, data) => api.post(`/api/tournaments/${tid}/matches/${mid}/tie/rubbers/${rid}/score`, data),  // {score1, score2}
     walkover: (tid, mid, rid, data) => api.post(`/api/tournaments/${tid}/matches/${mid}/tie/rubbers/${rid}/walkover`, data),   // {side: 1|2} bên THUA
     resetScore: (tid, mid, rid) => api.delete(`/api/tournaments/${tid}/matches/${mid}/tie/rubbers/${rid}/score`),
+    setCourt: (tid, mid, rid, court) => api.put(`/api/tournaments/${tid}/matches/${mid}/tie/rubbers/${rid}`, { court }),   // sân thi đấu (đổi được khi đã có điểm)
+    setNote: (tid, mid, note) => api.put(`/api/tournaments/${tid}/matches/${mid}/tie/note`, { note }),                     // ghi chú BTC cho trận đồng đội
   },
   // Nhật ký thao tác giải đồng đội (mở khoá đội hình, đổi VĐV, điểm, xử thua, bốc thăm) — mới nhất trước
   teamLogs: (tid, limit = 200) => api.get(`/api/tournaments/${tid}/team-logs`, { params: { limit } }),

@@ -343,6 +343,8 @@ class TournamentMatch(Base):
     loser_next_match_slot = Column(Integer, nullable=True)  # 1 or 2
     # Giải đồng đội: seed xáo thứ tự trận thành phần của trận này (NULL = chưa bốc thăm thứ tự)
     rubber_draw_seed = Column(String(64), nullable=True)
+    # Giải đồng đội: ghi chú của BTC cho trận này (xử thua, đổi sân, sự cố...) — hiện cả trên public (mẫu FIS)
+    btc_note = Column(Text, nullable=True)
 
     tournament = relationship("Tournament", back_populates="matches")
     rubbers = relationship("TournamentTieRubber", back_populates="match", cascade="all, delete-orphan",
@@ -641,6 +643,7 @@ class TournamentTieRubber(Base):
     is_walkover = Column(Boolean, default=False, nullable=False)
     start1 = Column(Integer, default=0, nullable=False)     # điểm xuất phát (PA2 cộng dồn); PA1 luôn 0
     start2 = Column(Integer, default=0, nullable=False)
+    court = Column(String(30), nullable=True)               # sân thi đấu của trận thành phần (mẫu FIS, 2026-10-26)
     created_at = Column(DateTime, nullable=True)
 
     match = relationship("TournamentMatch", back_populates="rubbers")

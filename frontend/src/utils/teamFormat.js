@@ -102,7 +102,16 @@ export function normalizeTeamRules(raw) {
     target_total,
     max_rubbers_per_player: Math.max(1, toInt(r.max_rubbers_per_player, 2) || 2),
     play_all: r.play_all === undefined ? true : !!r.play_all,
+    // Sĩ số đội tối đa (mẫu FIS "8 nam 2 nữ"): null = không giới hạn; chỉ cảnh báo, không chặn — như backend
+    max_male: capOrNull(r.max_male),
+    max_female: capOrNull(r.max_female),
+    max_players: capOrNull(r.max_players),
   };
+}
+function capOrNull(v) {
+  if (v === null || v === undefined || v === "") return null;
+  const n = parseInt(v, 10);
+  return Number.isFinite(n) && n >= 1 ? n : null;
 }
 
 /** Quy tắc khởi tạo cho editor (nhãn để trống để người dùng thấy placeholder tự đánh số). */
@@ -207,7 +216,21 @@ export function teamRosterWarnings(rules, players) {
   if (have.male < need.male) out.push(`Thiếu VĐV Nam: cần tối thiểu ${need.male}, hiện có ${have.male}`);
   if (have.female < need.female) out.push(`Thiếu VĐV Nữ: cần tối thiểu ${need.female}, hiện có ${have.female}`);
   if (have.unknown > 0) out.push(`${have.unknown} VĐV chưa khai giới tính`);
+  // Sĩ số tối đa theo luật giải (null = không giới hạn)
+  if (rules?.max_male && have.male > rules.max_male) out.push(`Vượt sĩ số Nam: tối đa ${rules.max_male}, hiện có ${have.male}`);
+  if (rules?.max_female && have.female > rules.max_female) out.push(`Vượt sĩ số Nữ: tối đa ${rules.max_female}, hiện có ${have.female}`);
+  const total = (players || []).length;
+  if (rules?.max_players && total > rules.max_players) out.push(`Vượt sĩ số đội: tối đa ${rules.max_players}, hiện có ${total}`);
   return out;
+}
+
+/** Chữ sĩ số đội kiểu FIS: "3 VĐV · 2/8 Nam · 1/2 Nữ" (có trần) hoặc "3 VĐV · 2 Nam · 1 Nữ" (không trần). */
+export function rosterCountText(rules, players) {
+  const g = countGenders(players);
+  const n = (players || []).length;
+  const part = (have, cap, label) => (cap ? `${have}/${cap} ${label}` : `${have} ${label}`);
+  const head = rules?.max_players ? `${n}/${rules.max_players} VĐV` : `${n} VĐV`;
+  return `${head} · ${part(g.male, rules?.max_male, "Nam")} · ${part(g.female, rules?.max_female, "Nữ")}${g.unknown ? ` · ${g.unknown} chưa khai` : ""}`;
 }
 
 /**

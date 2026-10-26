@@ -135,6 +135,9 @@ def _run_migration():
         ("players", "gender", "VARCHAR(10)", None),
         ("tournaments", "team_rules", "JSON", None),
         ("tournament_matches", "rubber_draw_seed", "VARCHAR(64)", None),
+        # Mẫu FIS (2026-10-26): ghi chú BTC cho trận đồng đội + sân cho từng trận thành phần
+        ("tournament_matches", "btc_note", "TEXT", None),
+        ("tournament_tie_rubbers", "court", "VARCHAR(30)", None),
         # Bảng tournament_participants — trạng thái bỏ giải giữa chừng
         ("tournament_participants", "status", "VARCHAR(20) DEFAULT 'active' NOT NULL", None),
         # Bảng tournament_matches — thắng do đối thủ bỏ giải (walkover) + định tuyến người thua
@@ -3570,7 +3573,7 @@ def _rubber_dicts(match: "models.TournamentMatch") -> list:
         "id": r.id, "order_index": r.order_index, "code": r.code, "label": r.label,
         "side1_players": list(r.side1_players or []), "side2_players": list(r.side2_players or []),
         "score1": r.score1, "score2": r.score2, "status": r.status, "is_walkover": bool(r.is_walkover),
-        "start1": r.start1 or 0, "start2": r.start2 or 0,
+        "start1": r.start1 or 0, "start2": r.start2 or 0, "court": r.court,
     } for r in sorted(match.rubbers, key=lambda x: x.order_index)]
 
 
@@ -4550,6 +4553,15 @@ def set_rubber_players(tid: int, mid: int, rid: int, data: schemas.RubberPlayers
     m = _get_tie_match(db, t, mid)
     _require_tie_playable(t, m)
     r = _get_rubber(m, rid)
+    if data.court is not None:
+        # Sân thi đấu (mẫu FIS): đổi được cả khi đã có điểm, chỉ ghi log khi thật sự đổi
+        new_court = (data.court or "").strip()[:30] or None
+        if new_court != r.court:
+            r.court = new_court
+            _team_log(db, t, "court", f"{r.label}: sân {new_court or '—'}", _perm_actor_name(db, perms), match_id=m.id)
+        if data.side1_players is None and data.side2_players is None:
+            db.commit(); db.expire(m, ["rubbers"])
+            return _tie_out(db, t, m)
     if r.status == "completed":
         raise HTTPException(400, "Trận thành phần đã có điểm — xoá điểm trước khi đổi VĐV")
     g = _gender_map(db, t)
@@ -4569,6 +4581,23 @@ def set_rubber_players(tid: int, mid: int, rid: int, data: schemas.RubberPlayers
         else: r.side2_players = players
     _team_log(db, t, "rubber_players", f"Đổi VĐV {r.label}", _perm_actor_name(db, perms), match_id=m.id)
     db.commit(); db.expire(m, ["rubbers"])
+    return _tie_out(db, t, m)
+
+
+@app.put("/api/tournaments/{tid}/matches/{mid}/tie/note", response_model=schemas.TieOut)
+def set_tie_note(tid: int, mid: int, data: schemas.MatchNoteIn, db: Session = Depends(get_db),
+                 perms: ClubPermissions = Depends(get_club_permission)):
+    """Ghi chú BTC cho một trận đồng đội (mẫu FIS): tự do, hiện ở biên bản admin, public, lịch và bản in.
+    Không bị chặn bởi trạng thái trận (ghi được cả khi trận đã kết thúc / xử thua) — chỉ cần quyền sửa."""
+    perms.require_edit()
+    t = _get_club_tournament(db, tid, perms)
+    _require_team_tournament(t)
+    m = _get_tie_match(db, t, mid)
+    note = (data.note or "").strip() or None
+    if note != m.btc_note:
+        m.btc_note = note
+        _team_log(db, t, "note", f"Ghi chú BTC: {(note or '(xoá)')[:120]}", _perm_actor_name(db, perms), match_id=m.id)
+        db.commit()
     return _tie_out(db, t, m)
 
 
