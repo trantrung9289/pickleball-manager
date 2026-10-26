@@ -1,8 +1,6 @@
 import { useState, useEffect } from "react";
 import {
-  Layout, Menu, Typography, theme, Row, Col, Button, Modal,
-  Form, Input, Switch, Select, Space, Tag, Popconfirm, message,
-  Avatar, Dropdown, Tooltip, Checkbox, Alert,
+  Layout, Menu, Typography, theme, Row, Col, Button, Modal, Form, Input, Switch, Select, Space, Tag, Popconfirm, message, Avatar, Dropdown, Tooltip, Checkbox, Alert, ColorPicker,
 } from "antd";
 import {
   TeamOutlined, TrophyOutlined, LinkOutlined, LogoutOutlined,
@@ -728,6 +726,10 @@ export default function AdminPortal({ onBack }) {
               </Form.Item>
             </Col>
           </Row>
+          <Form.Item name="brand_color" label="Màu thương hiệu" extra="Để trống = màu mặc định của hệ thống. Club admin cũng tự đổi được trong menu tài khoản."
+            getValueFromEvent={(c) => (c ? `#${c.toHex().slice(0, 6).toUpperCase()}` : null)}>
+            <ColorPicker format="hex" disabledAlpha allowClear />
+          </Form.Item>
           <Form.Item name="address" label="Địa chỉ">
             <Input placeholder="Số nhà, đường, quận..." />
           </Form.Item>

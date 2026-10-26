@@ -1,15 +1,13 @@
-import React, { useState, lazy, Suspense } from "react";
+import React, { useState, useEffect, lazy, Suspense } from "react";
 import {
   Layout, Menu, Typography, theme, Row, Spin,
   Avatar, Dropdown, Space, Result, Button, Drawer,
 } from "antd";
 import {
-  DashboardOutlined, TeamOutlined, DollarOutlined,
-  SwapOutlined, BarChartOutlined, TrophyOutlined,
-  UserOutlined, LogoutOutlined, LockOutlined, RobotOutlined,
-  UserAddOutlined,
+  DashboardOutlined, TeamOutlined, DollarOutlined, SwapOutlined, BarChartOutlined, TrophyOutlined, UserOutlined, LogoutOutlined, LockOutlined, RobotOutlined, UserAddOutlined, BgColorsOutlined,
 } from "@ant-design/icons";
 import { AuthProvider, useAuth } from "./context/AuthContext";
+import BrandColorModal from "./components/BrandColorModal";
 import { ViewModeProvider, useViewMode } from "./contexts/ViewModeContext";
 import { useAppTheme, THEMES } from "./contexts/ThemeContext";
 import ViewModeSwitcher from "./components/ViewModeSwitcher";
@@ -71,7 +69,11 @@ function NoMembership({ onLogout }) {
 }
 
 function AppShell() {
-  const { user, initialized, loading, memberships, selectedMembership, selectedClub, perms, logout, selectClub } = useAuth();
+  const { user, initialized, loading, memberships, selectedMembership, selectedClub, perms, logout, selectClub, refreshAll } = useAuth();
+  const { setBrandColor } = useAppTheme();
+  const [brandOpen, setBrandOpen] = useState(false);   // modal màu thương hiệu CLB (lớp 1 giao diện)
+  // Màu thương hiệu theo CLB đang chọn — về mặc định khi chưa chọn / đăng xuất
+  useEffect(() => { setBrandColor(selectedClub?.brand_color || null); }, [selectedClub?.brand_color, setBrandColor]);
   const [current, setCurrent] = useState("dashboard");
   const [mode, setMode] = useState(null); // null | "admin" | "member"
   const [moreOpen, setMoreOpen] = useState(false);
@@ -165,6 +167,7 @@ function AppShell() {
       },
       { type: "divider" },
       { key: "bot_config", label: "Cài đặt Telegram Bot", icon: <RobotOutlined /> },
+      ...(perms.canEdit ? [{ key: "brand", label: "Màu thương hiệu CLB", icon: <BgColorsOutlined /> }] : []),
       ...(memberships.length > 1 ? [{ key: "switch_club", label: "Đổi câu lạc bộ", icon: <SwapOutlined /> }] : []),
       { key: "logout", label: "Đăng xuất", icon: <LogoutOutlined />, danger: true },
     ],
@@ -172,6 +175,7 @@ function AppShell() {
       if (key === "logout") { logout(); setMode(null); }
       if (key === "switch_club") { selectClub(null); }
       if (key === "bot_config") { setBotDrawerOpen(true); }
+      if (key === "brand") { setBrandOpen(true); }
     },
   };
 
@@ -252,6 +256,11 @@ function AppShell() {
           </Suspense>
         </Content>
       </Layout>
+
+      {brandOpen && (
+        <BrandColorModal club={selectedClub} onClose={() => setBrandOpen(false)}
+          onSaved={async () => { setBrandOpen(false); await refreshAll?.(); }} />
+      )}
 
       {/* Bottom navigation + sheet "Thêm" — chỉ trên mobile */}
       {isMobileView && (

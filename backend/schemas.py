@@ -28,6 +28,7 @@ class ClubUpdate(BaseModel):
     phone: Optional[str] = None
     email: Optional[str] = None
     bot_enabled: Optional[bool] = None   # superuser cấp/tắt quyền dùng bot Telegram cho cả CLB
+    brand_color: Optional[str] = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")   # màu thương hiệu
 
 class ClubOut(BaseModel):
     id: int
@@ -39,8 +40,13 @@ class ClubOut(BaseModel):
     phone: Optional[str] = None
     email: Optional[str] = None
     bot_enabled: bool = True
+    brand_color: Optional[str] = None     # "#RRGGBB" | None = mặc định
     class Config:
         from_attributes = True
+
+
+class ClubAppearanceIn(BaseModel):
+    brand_color: Optional[str] = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")   # None/"" → về mặc định
 
 class LoginRequest(BaseModel):
     username: str

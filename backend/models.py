@@ -130,6 +130,9 @@ class Club(Base):
     # Danh sách hạng của CLB (dùng chung cho Thành viên, Khách mời, quy tắc ghép đội).
     # NULL → dùng DEFAULT_RANK_LEVELS (main.py). "Chưa xếp hạng" là hạng ngầm định, KHÔNG nằm trong danh sách.
     rank_levels = Column(JSON, nullable=True)
+    # Màu thương hiệu của CLB ("#RRGGBB") — lớp 1 đổi giao diện 2026-10-26: NULL = xanh lá mặc định; frontend tự
+    # tối màu cho đủ tương phản và sinh bản nhạt làm nền chip (utils/color.js)
+    brand_color = Column(String(9), nullable=True)
     # Superuser cấp/tắt quyền dùng bot Telegram cho CẢ CLB (mặc định bật). Tắt → mọi tài khoản của CLB
     # không vào được bot ở CLB này, không liên kết Telegram, không nhận nhắc phí — bất kể cờ theo tài khoản.
     bot_enabled = Column(Boolean, default=True, nullable=False)

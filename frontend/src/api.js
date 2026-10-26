@@ -39,6 +39,7 @@ export const authApi = {
   me: () => api.get("/api/auth/me"),
   getClub: () => api.get("/api/club"),
   updateClub: (data) => api.put("/api/club", data),
+  updateAppearance: (data) => api.put("/api/club/appearance", data),   // {brand_color: "#RRGGBB" | null} — CLB đang chọn
   myMemberships: () => api.get("/api/my-memberships"),
   // Cấu hình danh sách hạng của CLB (dùng chung Thành viên / Khách mời / quy tắc ghép đội)
   rankLevels: () => api.get("/api/club/rank-levels"),

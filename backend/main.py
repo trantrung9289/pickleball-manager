@@ -152,6 +152,7 @@ def _run_migration():
         ("club_memberships", "bot_enabled", "BOOLEAN DEFAULT 1 NOT NULL", None),
         # Bảng clubs — superuser cấp/tắt quyền dùng bot Telegram cho CẢ CLB (mặc định bật, không khoá CLB đang dùng)
         ("clubs", "bot_enabled", "BOOLEAN DEFAULT 1 NOT NULL", None),
+        ("clubs", "brand_color", "VARCHAR(9)", None),
         # Bảng tournaments — quy tắc ghép ĐỒNG ĐỘI cho vòng quay ghép đội (giải đôi)
         ("tournaments", "partner_rules", "JSON", None),
         # Bảng clubs — danh sách hạng cấu hình ở cấp CLB (NULL → DEFAULT_RANK_LEVELS)
@@ -715,6 +716,19 @@ def my_memberships(
     return db.query(models.ClubMembership).filter(
         models.ClubMembership.user_id == current_user.id,
     ).all()
+
+
+@app.put("/api/club/appearance", response_model=schemas.ClubOut)
+def set_club_appearance(data: schemas.ClubAppearanceIn, db: Session = Depends(get_db),
+                        perms: ClubPermissions = Depends(get_club_permission)):
+    """Club admin đổi màu thương hiệu của CLB ĐANG CHỌN (X-Club-ID). null → về màu mặc định của hệ thống."""
+    perms.require_edit()
+    club = db.query(models.Club).filter(models.Club.id == perms.club_id).first()
+    if not club:
+        raise HTTPException(404, "Không tìm thấy CLB")
+    club.brand_color = data.brand_color.upper() if data.brand_color else None
+    db.commit(); db.refresh(club)
+    return club
 
 
 # ── Club admin: cấp quyền dùng bot Telegram cho từng tài khoản trong CLB ──

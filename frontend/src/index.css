@@ -1,9 +1,11 @@
+@import "./fonts.css";
+
 * { box-sizing: border-box; }
 
 body {
-  background: #f0f2f5;
+  background: var(--bg, #F5F6F8);
   margin: 0;
-  font-family: 'Outfit', system-ui, -apple-system, sans-serif;
+  font-family: 'Be Vietnam Pro', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   scroll-behavior: smooth;
@@ -56,13 +58,9 @@ body {
   top: 70px !important;
 }
 
-/* Gói 2 — Hover lift cho card, transitions cho interactive elements */
+/* Lớp 1 (2026-10-26, kiểu macOS): KHÔNG nhấc thẻ khi rê chuột — thẻ là vật chứa, không phải nút; chuyển động chỉ còn fade ngắn */
 .ant-card {
-  transition: box-shadow 0.2s ease, transform 0.2s ease;
-}
-.ant-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 6px 20px rgba(0, 60, 30, 0.1) !important;
+  transition: border-color 0.15s ease;
 }
 
 /* Button active/press feedback */
@@ -76,14 +74,16 @@ body {
 /* Focus ring rõ ràng cho keyboard nav */
 .ant-btn:focus-visible,
 .ant-input:focus-visible,
-.ant-select-selector:focus-visible {
-  outline: 2px solid #27A063;
+.ant-select-selector:focus-visible,
+a:focus-visible,
+[role="tab"]:focus-visible {
+  outline: 2px solid var(--brand, #1F8A52);
   outline-offset: 2px;
 }
 
 /* Gói 3 — Empty state đẹp hơn */
 .ant-empty-description {
-  color: #5A7A8A;
+  color: var(--muted, #5B6475);
   font-size: 14px;
 }
 
