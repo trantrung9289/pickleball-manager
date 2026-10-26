@@ -9,7 +9,8 @@ import {
   normalizeTeamRules, templateRubbers, isCumulative, scoringLabel, stageLabel, playersById, playerNames,
   rubberCodeLabel, rubberSize, firstLegRounds, stageKeyForMatch, stagesForFormat, genderLabel,
 } from "../utils/teamLabels";
-import { rubberTotals } from "../utils/teamFormat";
+import { rubberTotals, rulesForStage } from "../utils/teamFormat";
+import { findPlacementMatches } from "../utils/bracketLayout";
 
 // Giống hệt teamLabel/teamRank trong Tournament.jsx và PublicTournamentTracker.jsx (đã trùng lặp
 // sẵn giữa 2 file đó) — giữ nguyên logic để tên hiển thị nhất quán trên toàn hệ thống.
@@ -441,6 +442,17 @@ function KnockoutSheet({ tournament }) {
     <div className="print-page print-landscape">
       <SheetHeader tournament={tournament} subtitle="SƠ ĐỒ ĐẤU LOẠI TRỰC TIẾP" />
       <BracketDiagram roundsNodes={roundsNodes} content={realBracketContent} roundTitles={roundTitles} thirdPlace={thirdPlace} />
+      {findPlacementMatches(tournament.matches).length > 0 && (
+        <div style={{ fontSize: 12, marginTop: 6 }}>
+          <b>Tranh hạng:</b>{" "}
+          {findPlacementMatches(tournament.matches).map((m) => (
+            <span key={m.id} style={{ marginRight: 14 }}>
+              {m.round_name} (#{m.match_number}): {teamLabel(m.p1)} <span style={writeBox(30, 20)}>{m.status === "completed" ? m.score1 : ""}</span>
+              {" – "}<span style={writeBox(30, 20)}>{m.status === "completed" ? m.score2 : ""}</span> {teamLabel(m.p2)}
+            </span>
+          ))}
+        </div>
+      )}
       <div className="print-footnote">
         Trận có 1 đội trống ("bye") tự động miễn vào vòng sau, không cần ghi điểm.
         {thirdPlace && " Trận tranh giải 3 nằm ngay dưới ô Chung kết."}
@@ -581,7 +593,7 @@ function TeamLineupSheet({ tournament, rules, team, lineups, match, stage, oppon
     || (a.display_name || "").localeCompare(b.display_name || "", "vi"));
   const captain = players.find((x) => x.is_captain);
   const byId = playersById(team);
-  const rubbers = templateRubbers(rules);
+  const rubbers = templateRubbers(rulesForStage(rules, stage));   // vòng loại trực tiếp có thể có bộ thể thức riêng
   const maxSize = Math.max(1, ...rubbers.map((r) => rubberSize(r.code)));
   const lu = (lineups || []).find((l) => l.stage_key === stage);
   const slots = lu?.slots || {};
@@ -710,9 +722,10 @@ function TeamLineupSheet({ tournament, rules, team, lineups, match, stage, oppon
 // ── Trang: BIÊN BẢN TRẬN ĐỒNG ĐỘI — một trang / trận đã đủ 2 đội (tie thật nếu có, không thì khung mẫu) ──
 function TieSheet({ tournament, rules, match, tie, teamsById, firstLeg }) {
   const cumulative = isCumulative(rules);
+  const stageForRules = tie?.stage_key || stageKeyForMatch(tournament.format, match, firstLeg);
   const rubbers = tie?.rubbers?.length
     ? [...tie.rubbers].sort((a, b) => a.order_index - b.order_index)
-    : templateRubbers(rules);
+    : templateRubbers(rulesForStage(rules, stageForRules));
   const team1 = tie?.team1 || teamsById?.[match.p1_id];
   const team2 = tie?.team2 || teamsById?.[match.p2_id];
   const byId = playersById(team1, team2);

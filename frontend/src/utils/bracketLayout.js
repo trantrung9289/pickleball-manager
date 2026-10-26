@@ -194,7 +194,7 @@ export function buildRealBracketNodes(matches) {
   // Trận "Tranh giải 3" không đi theo đường THẮNG (next_match_id) như cây chính — nó được
   // 2 trận bán kết trỏ tới qua loser_next_match_id (đường THUA riêng). Tách ra, vẽ như một
   // ô độc lập cạnh "Vô địch" (xem findThirdPlaceMatch) thay vì lẫn vào hình học cây chính.
-  const main = matches.filter((m) => m.round_name !== "Tranh giải 3");
+  const main = matches.filter((m) => !isSideMatch(m));
 
   const byRound = {};
   main.forEach((m) => {
@@ -223,6 +223,11 @@ export function buildRealBracketNodes(matches) {
 }
 
 /** Trận tranh giải 3 (nếu có) + 2 trận bán kết đã "thua" vào đây, để hiển thị tên/điểm. */
+/** Trận "bên lề" cây thắng: Tranh giải 3 (đường thua) và Tranh hạng 5-6 / 7-8 (mẫu FIS, không nối cây). */
+export const isSideMatch = (m) => m?.round_name === "Tranh giải 3" || m?.round_name === "Tranh hạng 5-6" || m?.round_name === "Tranh hạng 7-8";
+/** Các trận tranh hạng 5-6 / 7-8 (nếu có), theo tên. */
+export const findPlacementMatches = (matches) => (matches || []).filter((m) => m.round_name === "Tranh hạng 5-6" || m.round_name === "Tranh hạng 7-8");
+
 export function findThirdPlaceMatch(matches) {
   const third = matches.find((m) => m.round_name === "Tranh giải 3");
   if (!third) return null;

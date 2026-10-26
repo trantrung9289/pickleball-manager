@@ -221,6 +221,9 @@ class Tournament(Base):
     score_pin_hash = Column(String(100), nullable=True)          # hash mã PIN 4 số — cho phép nhập điểm qua public
     public_scoring_enabled = Column(Boolean, default=False)      # công tắc bật/tắt, độc lập với việc đã có PIN
     third_place_enabled = Column(Boolean, default=False)         # có trận tranh giải 3 (knockout/combined) không
+    # Mẫu FIS (2026-10-26): tranh hạng 5-6 (hạng Ba bảng A gặp hạng Ba bảng B) và 7-8 (hạng Tư) — chỉ combined 2 bảng,
+    # tạo khi "Lên vòng loại trực tiếp"
+    placement_matches_enabled = Column(Boolean, default=False)
     # Thể thức ĐỒNG ĐỘI (team_type="team"): cách tính điểm, mẫu trận thành phần, điểm/trận, mốc tổng...
     # Xem tournament_engine.normalize_team_rules. NULL với giải đơn/đôi.
     team_rules = Column(JSON, nullable=True)

@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import {
-  Select, Tabs, Empty, Spin, Card, Tag, Typography, Alert, Collapse, Divider, Space, Button, Badge, Modal, Form, Input, AutoComplete, message, Popover, Checkbox,
+  Select, Tabs, Empty, Spin, Card, Tag, Typography, Alert, Collapse, Divider, Space, Button, Badge, Modal, Form, Input, AutoComplete, message, Popover, Checkbox, Row, Col,
 } from "antd";
 import {
   ReloadOutlined, SyncOutlined, TrophyOutlined, EditOutlined, SafetyCertificateOutlined, StarOutlined,
@@ -19,6 +19,7 @@ import { indexTeamPlayers, normalizeTeamRules, rubberTotals } from "../utils/tea
 import TeamOverviewPanel from "./team/TeamOverviewPanel";
 import TeamStatsTable from "./team/TeamStatsTable";
 import TeamStandingsTable from "./team/TeamStandingsTable";
+import { isSideMatch } from "../utils/bracketLayout";
 import TieRubbersInline from "./team/TieRubbersInline";
 import {
   serverOffset, verifyDraw, verifyPartnerDraw, partnerLabelForStep, partnerDrawFinished, partnerDrawStuck,
@@ -220,33 +221,51 @@ function BracketCard({ match, onOpen, renderDetail, inlineDetail = false }) {
   );
 }
 
-function KnockoutBracket({ matches, onOpen, renderDetail }) {
+function KnockoutBracket({ matches: allMatches, onOpen, renderDetail }) {
   const { isMobileView } = useViewMode();
+  // Tranh giải 3 / tranh hạng 5-8 không nằm trên cây thắng → tách thành thẻ riêng sau các vòng
+  const sideMatches = allMatches.filter(m => isSideMatch(m));
+  const matches = allMatches.filter(m => !isSideMatch(m));
   const rounds = [...new Set(matches.map(m => m.round_number))].sort((a, b) => a - b);
+  const sideCards = sideMatches.length > 0 && (
+    <Row gutter={[12, 12]} style={{ marginTop: 12 }}>
+      {sideMatches.map(m => (
+        <Col xs={24} md={12} lg={8} key={m.id}>
+          <Card size="small" title={<Text strong style={{ color: m.round_name === "Tranh giải 3" ? "#d48806" : "#722ed1" }}>{m.round_name}</Text>}>
+            <BracketCard match={m} onOpen={onOpen} renderDetail={renderDetail} inlineDetail={isMobileView} />
+          </Card>
+        </Col>
+      ))}
+    </Row>
+  );
 
   if (isMobileView) {
     return (
-      <Collapse
-        defaultActiveKey={rounds.map(String)}
-        items={rounds.map(r => {
-          const rMatches = matches.filter(m => m.round_number === r);
-          const rName = rMatches[0]?.round_name || `Vòng ${r}`;
-          const done = rMatches.filter(m => m.status === "completed").length;
-          return {
-            key: String(r),
-            label: <Text strong style={{ color: "#1677ff" }}>{rName} ({done}/{rMatches.length})</Text>,
-            children: (
-              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                {rMatches.map(m => <BracketCard key={m.id} match={m} onOpen={onOpen} renderDetail={renderDetail} inlineDetail />)}
-              </div>
-            ),
-          };
-        })}
-      />
+      <>
+        <Collapse
+          defaultActiveKey={rounds.map(String)}
+          items={rounds.map(r => {
+            const rMatches = matches.filter(m => m.round_number === r);
+            const rName = rMatches[0]?.round_name || `Vòng ${r}`;
+            const done = rMatches.filter(m => m.status === "completed").length;
+            return {
+              key: String(r),
+              label: <Text strong style={{ color: "#1677ff" }}>{rName} ({done}/{rMatches.length})</Text>,
+              children: (
+                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                  {rMatches.map(m => <BracketCard key={m.id} match={m} onOpen={onOpen} renderDetail={renderDetail} inlineDetail />)}
+                </div>
+              ),
+            };
+          })}
+        />
+        {sideCards}
+      </>
     );
   }
 
   return (
+    <>
     <div style={{ overflowX: "auto" }}>
       <div style={{ display: "flex", gap: 24, minWidth: rounds.length * 220 }}>
         {rounds.map(r => {
@@ -265,15 +284,22 @@ function KnockoutBracket({ matches, onOpen, renderDetail }) {
         })}
       </div>
     </div>
+    {sideCards}
+    </>
   );
 }
 
 function RoundedSchedule({ matches, columns, mobileProps }) {
-  const rounds = [...new Set(matches.map(m => m.round_number))].sort((a, b) => a - b);
+  const sideMatches = matches.filter(m => isSideMatch(m));   // Tranh giải 3, Tranh hạng 5-6 / 7-8: thẻ riêng theo tên
+  const mainMatches = matches.filter(m => !isSideMatch(m));
+  const rounds = [...new Set(mainMatches.map(m => m.round_number))].sort((a, b) => a - b);
   const roundCols = columns.filter(c => c.dataIndex !== "round_name");
   // Mẫu FIS: lọc nhanh các vòng còn thiếu kết quả
   const [onlyPending, setOnlyPending] = useState(false);
-  const byRound = rounds.map(r => ({ r, rMatches: matches.filter(m => m.round_number === r) }));
+  const byRound = [
+    ...rounds.map(r => ({ r, rMatches: mainMatches.filter(m => m.round_number === r) })),
+    ...[...new Set(sideMatches.map(m => m.round_name))].map(name => ({ r: `side-${name}`, rMatches: sideMatches.filter(m => m.round_name === name) })),
+  ];
   const visible = onlyPending ? byRound.filter(({ rMatches }) => !rMatches.every(m => m.status === "completed")) : byRound;
 
   return (

@@ -61,11 +61,15 @@ export function teamAllStageStats(matches, participants, rules) {
 }
 
 /** Xếp hạng chung cuộc từ vòng loại trực tiếp: Chung kết → 1-2, Tranh giải 3 → 3-4. Không có → null. */
+export const PLACEMENT_NAMES = { "Tranh hạng 5-6": [5, 6], "Tranh hạng 7-8": [7, 8] };
+export const isSideMatch = (m) => m?.round_name === "Tranh giải 3" || !!PLACEMENT_NAMES[m?.round_name];
+
 export function finalPlacements(matches) {
   const ko = (matches || []).filter((m) => m.phase === "knockout");
   if (!ko.length) return null;
   const third = ko.find((m) => m.round_name === "Tranh giải 3") || null;
-  const main = ko.filter((m) => m !== third);
+  const placement = ko.filter((m) => PLACEMENT_NAMES[m.round_name]);
+  const main = ko.filter((m) => m !== third && !PLACEMENT_NAMES[m.round_name]);
   if (!main.length) return null;
   const maxRound = Math.max(...main.map((m) => m.round_number || 0));
   const finals = main.filter((m) => (m.round_number || 0) === maxRound);
@@ -80,6 +84,13 @@ export function finalPlacements(matches) {
     out.push({ rank: 3, label: "Hạng Ba", pid: third.winner_id });
     out.push({ rank: 4, label: "Hạng Tư", pid: loser(third) });
   }
+  placement.forEach((m) => {
+    if (m.status !== "completed" || !m.winner_id) return;
+    const [hi, lo] = PLACEMENT_NAMES[m.round_name];
+    out.push({ rank: hi, label: `Hạng ${hi}`, pid: m.winner_id });
+    out.push({ rank: lo, label: `Hạng ${lo}`, pid: loser(m) });
+  });
+  out.sort((a, b) => a.rank - b.rank);
   return out.length ? out : null;
 }
 
@@ -108,6 +119,13 @@ export function teamRuleSummary(tournament, rules) {
   lines.push(head + ".");
   const rubbers = rules?.rubbers || [];
   lines.push(`Mỗi trận đồng đội gồm ${rubbers.length} trận thành phần: ${rubbers.map((r) => r.label).join(", ")}.`);
+  if (rules?.knockout_rubbers?.length) {
+    lines.push(`Vòng loại trực tiếp dùng bộ thể thức riêng: ${rules.knockout_rubbers.length} trận (${rules.knockout_rubbers.map((r) => r.label).join(", ")})`
+      + (rules.knockout_play_all === false ? ", dừng khi một đội thắng quá nửa số trận." : "."));
+  } else if (rules?.knockout_play_all === false) {
+    lines.push("Vòng loại trực tiếp: dừng khi một đội thắng quá nửa số trận.");
+  }
+  if ((tournament?.placement_matches_enabled)) lines.push("Có tranh hạng 5-6 (hạng Ba hai bảng) và 7-8 (hạng Tư hai bảng).");
   if (rules?.scoring === "cumulative") {
     lines.push(`Tính điểm cộng dồn (PA2): mỗi trận thành phần ${rules.points_per_rubber} điểm${rules.win_by_two ? ", cách biệt 2" : ""}; `
       + `đội chạm mốc tổng ${rules.target_total} điểm trước thắng trận đồng đội, các trận còn lại không cần đấu.`);

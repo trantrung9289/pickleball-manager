@@ -34,6 +34,7 @@ from tournament_engine import (
     partner_draw_stuck, _normalize_partner_plan, UNRANKED,
     normalize_team_rules, rubber_target, validate_rubber_score, tie_result, rubber_players_check,
     over_limit_players, lineup_check, stage_key_for_match, first_leg_rounds, draw_rubber_order, team_standings_breakdown,
+    rules_for_stage,
     RUBBER_CODES, STAGE_KEYS, STAGE_LABELS,
 )
 from auth import (
@@ -130,6 +131,7 @@ def _run_migration():
         ("tournaments", "public_scoring_enabled", "BOOLEAN DEFAULT 0 NOT NULL", None),
         # Bảng tournaments — bật/tắt trận tranh giải 3 (knockout/combined)
         ("tournaments", "third_place_enabled", "BOOLEAN DEFAULT 0 NOT NULL", None),
+        ("tournaments", "placement_matches_enabled", "BOOLEAN DEFAULT 0 NOT NULL", None),
         # Giải đồng đội (2026-10-21): giới tính VĐV, quy tắc đồng đội, seed bốc thứ tự trận thành phần
         ("members", "gender", "VARCHAR(10)", None),
         ("players", "gender", "VARCHAR(10)", None),
@@ -2752,6 +2754,7 @@ def create_tournament(
         score_pin_hash=hash_password(data.score_pin) if data.score_pin else None,
         public_scoring_enabled=data.public_scoring_enabled,
         third_place_enabled=data.third_place_enabled,
+        placement_matches_enabled=data.placement_matches_enabled,
     )
     db.add(t); db.flush()
 
@@ -2828,7 +2831,7 @@ def get_tournament(
     return t
 
 
-SETUP_FIELDS = {"format", "team_type", "pairing_mode", "rank_rules", "num_groups", "third_place_enabled", "team_rules"}
+SETUP_FIELDS = {"format", "team_type", "pairing_mode", "rank_rules", "num_groups", "third_place_enabled", "placement_matches_enabled", "team_rules"}
 ALLOWED_STATUS_TRANSITIONS = {
     models.TournamentStatus.draft: {models.TournamentStatus.active},
     models.TournamentStatus.active: {models.TournamentStatus.completed},
@@ -3838,6 +3841,12 @@ def _stage_key(db: Session, t: "models.Tournament", match: "models.TournamentMat
     return stage_key_for_match(t.format.value, match.phase, match.round_number, _first_leg_rounds(db, t))
 
 
+def _match_rules(db: Session, t: "models.Tournament", match: "models.TournamentMatch") -> dict:
+    """Luật đồng đội áp cho MỘT trận: vòng loại trực tiếp có thể dùng bộ thể thức / cách kết thúc riêng (mẫu FIS).
+    Mọi chỗ tạo biên bản, tính kết quả, ghi điểm, xuất TieOut phải dùng hàm này thay cho _team_rules(t)."""
+    return rules_for_stage(_team_rules(t), _stage_key(db, t, match))
+
+
 def _get_lineup(db: Session, t: "models.Tournament", pid: int, stage: str, create: bool = False):
     lu = db.query(models.TournamentStageLineup).filter(
         models.TournamentStageLineup.participant_id == pid, models.TournamentStageLineup.stage_key == stage).first()
@@ -3851,7 +3860,7 @@ def _get_lineup(db: Session, t: "models.Tournament", pid: int, stage: str, creat
 def _lineup_out(t: "models.Tournament", lu, stage: str, gender_by_tp: dict, public: bool = False) -> dict:
     """public=True: bỏ ghi chú mở khoá và mốc khoá (nội bộ BTC)."""
     slots = dict((lu.slots or {}) if lu is not None else {})
-    chk = lineup_check(_team_rules(t), slots, gender_by_tp)
+    chk = lineup_check(rules_for_stage(_team_rules(t), stage), slots, gender_by_tp)
     return {"stage_key": stage, "slots": slots, "locked": bool(lu.locked) if lu is not None else False,
             "locked_at": (lu.locked_at if lu is not None else None) if not public else None,
             "unlock_note": (lu.unlock_note if lu is not None else None) if not public else None,
@@ -3892,8 +3901,8 @@ def _ensure_rubbers(db: Session, t: "models.Tournament", match: "models.Tourname
     đội hình giai đoạn của hai đội. Chỉ khi trận đã đủ 2 đội."""
     if match.rubbers or match.p1_id is None or match.p2_id is None or _tie_blocked_reason(match):
         return
-    rules = _team_rules(t)
     stage = _stage_key(db, t, match)
+    rules = rules_for_stage(_team_rules(t), stage)
     lu1 = _get_lineup(db, t, match.p1_id, stage)
     lu2 = _get_lineup(db, t, match.p2_id, stage)
     s1 = (lu1.slots or {}) if lu1 else {}
@@ -3924,7 +3933,7 @@ def _ensure_rubbers_committed(db: Session, t: "models.Tournament", match: "model
 def _apply_tie_result(db: Session, t: "models.Tournament", match: "models.TournamentMatch") -> dict:
     """Tính lại kết quả trận đồng đội từ các trận thành phần, cập nhật điểm xuất phát (PA2), cập nhật
     score/winner/status của match và đẩy sang vòng sau khi xong (hoặc dọn vòng sau nếu bị rút lại)."""
-    rules = _team_rules(t)
+    rules = _match_rules(db, t, match)
     rs = sorted(match.rubbers, key=lambda x: x.order_index)
     if rules["scoring"] == "cumulative":
         tot1 = tot2 = 0
@@ -3983,8 +3992,8 @@ def _lock_stage_lineups(db: Session, t: "models.Tournament", match: "models.Tour
 
 
 def _tie_out(db: Session, t: "models.Tournament", match: "models.TournamentMatch", public: bool = False) -> dict:
-    rules = _team_rules(t)
     stage = _stage_key(db, t, match)
+    rules = rules_for_stage(_team_rules(t), stage)
     gender_by_tp = _gender_map(db, t)
     rubbers = _rubber_dicts(match)
     for r in rubbers:
@@ -4496,7 +4505,7 @@ def set_lineup(tid: int, pid: int, stage: str, data: schemas.LineupIn, db: Sessi
         for x in v:
             if x not in own:
                 raise HTTPException(400, f"{k}: VĐV không thuộc đội này")
-    chk = lineup_check(_team_rules(t), slots, g)
+    chk = lineup_check(rules_for_stage(_team_rules(t), stage), slots, g)
     if chk["errors"]:
         raise HTTPException(400, "; ".join(chk["errors"]))
     lu = _get_lineup(db, t, pid, stage, create=True)
@@ -4636,7 +4645,7 @@ def _score_rubber(db: Session, t: "models.Tournament", m: "models.TournamentMatc
     trận đủ 2 đội và còn thi đấu, VĐV đã xếp thuộc đúng đội hiện tại của trận, chuỗi PA2 đúng thứ tự, chưa
     chạm mốc. Xử thua (walkover_side=1|2) không bắt buộc đủ VĐV (điều lệ 5.1: đội không có người vẫn bị xử
     thua) — điểm tự tính: PA1 0–ppr, PA2 bên thắng lên mốc của trận, bên thua giữ điểm xuất phát."""
-    rules = _team_rules(t)
+    rules = _match_rules(db, t, m)
     _require_tie_playable(t, m)
     if walkover_side is None and (not r.side1_players or not r.side2_players):
         raise HTTPException(400, f"{r.label}: chưa xếp đủ VĐV hai bên")
@@ -5714,9 +5723,39 @@ def start_knockout(
 
     db.flush()
     _maybe_add_third_place(db, tid, t)
+    _maybe_add_placement_matches(db, tid, t, group_standings)
     _advance_byes_and_walkovers(db, tid)
     db.commit(); db.refresh(t)
     return t
+
+
+PLACEMENT_ROUND_NAMES = ("Tranh hạng 5-6", "Tranh hạng 7-8")
+
+
+def _maybe_add_placement_matches(db: Session, tid: int, t: "models.Tournament", group_standings: dict) -> None:
+    """Mẫu FIS (2026-10-26): tranh hạng 5-6 (hạng Ba bảng A gặp hạng Ba bảng B) và 7-8 (hạng Tư A gặp hạng Tư B)
+    khi bật cờ và thể thức kết hợp có ĐÚNG 2 bảng. Tạo một lần lúc lên vòng loại trực tiếp, cùng round_number với
+    chung kết, không nối vào cây (không next_match); thiếu đội ở hạng đó (bảng ít đội) thì bỏ trận đó."""
+    if not getattr(t, "placement_matches_enabled", False):
+        return
+    names = sorted(group_standings)
+    if len(names) != 2:
+        return
+    ko = db.query(models.TournamentMatch).filter(
+        models.TournamentMatch.tournament_id == tid, models.TournamentMatch.phase == "knockout").all()
+    if not ko or any(m.round_name in PLACEMENT_ROUND_NAMES for m in ko):
+        return
+    max_round = max(m.round_number for m in ko)
+    next_no = max(m.match_number for m in ko) + 1
+    a, b = group_standings[names[0]], group_standings[names[1]]
+    for rank_idx, rname in ((2, PLACEMENT_ROUND_NAMES[0]), (3, PLACEMENT_ROUND_NAMES[1])):
+        if len(a) <= rank_idx or len(b) <= rank_idx:
+            continue
+        db.add(models.TournamentMatch(
+            tournament_id=tid, round_number=max_round, round_name=rname, match_number=next_no, phase="knockout",
+            group_name=None, p1_id=a[rank_idx]["participant_id"], p2_id=b[rank_idx]["participant_id"]))
+        next_no += 1
+    db.flush()
 
 
 def _clear_tie_sheet(db: Session, m: models.TournamentMatch) -> None:

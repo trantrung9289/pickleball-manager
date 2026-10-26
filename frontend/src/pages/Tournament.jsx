@@ -29,7 +29,7 @@ import TieRubbersInline from "../components/team/TieRubbersInline";
 import { useViewMode } from "../contexts/ViewModeContext";
 import { useAuth } from "../context/AuthContext";
 import { useRankLevels } from "../hooks/useRankLevels";
-import { buildRealBracketNodes, computeBracketGeometry, findThirdPlaceMatch } from "../utils/bracketLayout";
+import { buildRealBracketNodes, computeBracketGeometry, findThirdPlaceMatch, isSideMatch, findPlacementMatches } from "../utils/bracketLayout";
 import { teamLabel, teamRank } from "../utils/tournamentLabels";
 import { TEAM_TYPE_LABELS, defaultTeamRules, normalizeTeamRules, tieScoreLabel, indexTeamPlayers, rubberTotals } from "../utils/teamFormat";
 import TeamOverviewPanel from "../components/team/TeamOverviewPanel";
@@ -300,6 +300,7 @@ function CreateWizard({ onCreated, onClose }) {
   const [format, setFormat] = useState(null);
   const [teamType, setTeamType] = useState("singles");
   const [thirdPlaceEnabled, setThirdPlaceEnabled] = useState(true);
+  const [placementEnabled, setPlacementEnabled] = useState(false);   // tranh hạng 5-6 / 7-8 (combined 2 bảng, mẫu FIS)
   // Giải đồng đội: quy tắc trận thành phần / cách tính điểm (TeamRulesEditor), gửi kèm team_type="team"
   const [teamRules, setTeamRules] = useState(defaultTeamRules);
   // PIN nhập điểm qua public
@@ -337,6 +338,7 @@ function CreateWizard({ onCreated, onClose }) {
         public_scoring_enabled: pinEnabled,
         score_pin: pinEnabled ? pinValue : null,
         third_place_enabled: (vals.format === "knockout" || vals.format === "combined") ? thirdPlaceEnabled : false,
+        placement_matches_enabled: vals.format === "combined" && (vals.num_groups || 2) === 2 ? placementEnabled : false,
         ...(isTeam ? { team_rules: rulesPayload } : {}),
       };
       const res = await tournamentsApi.create(payload);
@@ -401,6 +403,13 @@ function CreateWizard({ onCreated, onClose }) {
             <Form.Item>
               <Checkbox checked={thirdPlaceEnabled} onChange={(e) => setThirdPlaceEnabled(e.target.checked)}>
                 Có trận tranh giải 3 <Text type="secondary" style={{ fontSize: 12 }}>(2 người thua bán kết đấu với nhau — cần ít nhất 4 đội)</Text>
+              </Checkbox>
+            </Form.Item>
+          )}
+          {format === "combined" && (
+            <Form.Item>
+              <Checkbox checked={placementEnabled} onChange={(e) => setPlacementEnabled(e.target.checked)}>
+                Có tranh hạng 5-6 và 7-8 <Text type="secondary" style={{ fontSize: 12 }}>(hạng Ba / hạng Tư của 2 bảng gặp nhau — chỉ khi đúng 2 bảng)</Text>
               </Checkbox>
             </Form.Item>
           )}
@@ -664,7 +673,8 @@ function KnockoutBracket({ matches, onScoreClick, renderDetail }) {
   // Trận "Tranh giải 3" đi theo đường thua (loser_next_match_id), không phải cây thắng chính —
   // tách riêng để không lẫn vào cùng cột với Chung kết (cả hai có cùng round_number).
   const thirdPlace = matches.find(m => m.round_name === "Tranh giải 3");
-  const mainMatches = thirdPlace ? matches.filter(m => m.id !== thirdPlace.id) : matches;
+  const placements = findPlacementMatches(matches);   // tranh hạng 5-6 / 7-8 (mẫu FIS) — không thuộc cây thắng
+  const mainMatches = matches.filter(m => !isSideMatch(m));
   const rounds = [...new Set(mainMatches.map(m => m.round_number))].sort((a, b) => a - b);
 
   // Mobile: Collapse theo từng vòng (dọc) — cây nhánh có đường nối chỉ hợp lý ở màn hình
@@ -694,12 +704,32 @@ function KnockoutBracket({ matches, onScoreClick, renderDetail }) {
             <BracketCard match={thirdPlace} onScoreClick={onScoreClick} renderDetail={renderDetail} />
           </Card>
         )}
+        {placements.map(m => (
+          <Card key={m.id} size="small" style={{ marginTop: 12 }} title={<Text strong style={{ color: "#722ed1" }}>{m.round_name}</Text>}>
+            <BracketCard match={m} onScoreClick={onScoreClick} renderDetail={renderDetail} />
+          </Card>
+        ))}
       </>
     );
   }
 
-  // Desktop: sơ đồ nhánh thật với đường nối giữa các vòng
-  return <BracketTreeDesktop matches={matches} onScoreClick={onScoreClick} renderDetail={renderDetail} />;
+  // Desktop: sơ đồ nhánh thật với đường nối giữa các vòng (+ các trận tranh hạng bên dưới)
+  return (
+    <>
+      <BracketTreeDesktop matches={matches} onScoreClick={onScoreClick} renderDetail={renderDetail} />
+      {placements.length > 0 && (
+        <Row gutter={[12, 12]} style={{ marginTop: 12 }}>
+          {placements.map(m => (
+            <Col xs={24} md={12} lg={8} key={m.id}>
+              <Card size="small" title={<Text strong style={{ color: "#722ed1" }}>{m.round_name}</Text>}>
+                <BracketCard match={m} onScoreClick={onScoreClick} renderDetail={renderDetail} />
+              </Card>
+            </Col>
+          ))}
+        </Row>
+      )}
+    </>
+  );
 }
 
 /** Bọc ô nhánh bằng Popover chi tiết trận thành phần (chỉ khi có renderDetail và trận đủ 2 đội). */
@@ -911,15 +941,17 @@ function BracketTreeDesktop({ matches, onScoreClick, renderDetail }) {
 function RoundedSchedule({ matches, columns, mobileProps }) {
   // Tách trận "Tranh giải 3" ra khỏi vòng cuối — nó dùng chung round_number với Chung kết
   // (do cùng là vòng cuối cùng của bracket) nên cần nhóm riêng để không bị gộp nhãn sai.
-  const thirdPlace = matches.find(m => m.round_name === "Tranh giải 3");
-  const mainMatches = thirdPlace ? matches.filter(m => m.id !== thirdPlace.id) : matches;
+  const sideMatches = matches.filter(m => isSideMatch(m));   // Tranh giải 3, Tranh hạng 5-6 / 7-8: nhóm riêng theo tên
+  const mainMatches = matches.filter(m => !isSideMatch(m));
   const rounds = [...new Set(mainMatches.map(m => m.round_number))].sort((a, b) => a - b);
   const roundCols = columns.filter(c => c.dataIndex !== "round_name");
   const groups = rounds.map(r => ({
     key: String(r),
     rMatches: mainMatches.filter(m => m.round_number === r),
   }));
-  if (thirdPlace) groups.push({ key: "third-place", rMatches: [thirdPlace] });
+  [...new Set(sideMatches.map(m => m.round_name))].forEach(name => {
+    groups.push({ key: `side-${name}`, rMatches: sideMatches.filter(m => m.round_name === name) });
+  });
   // Mẫu FIS: lọc nhanh các vòng còn thiếu kết quả khi điều hành ngày thi đấu
   const [onlyPending, setOnlyPending] = useState(false);
   const isRoundDone = (rMatches) => rMatches.length > 0 && rMatches.every(m => m.status === "completed");
@@ -938,7 +970,7 @@ function RoundedSchedule({ matches, columns, mobileProps }) {
           <Card
             key={key}
             size="small"
-            title={<Text strong style={{ color: key === "third-place" ? "#d48806" : "#1677ff" }}>{rName}</Text>}
+            title={<Text strong style={{ color: key.startsWith("side-") ? "#d48806" : "#1677ff" }}>{rName}</Text>}
             extra={done === rMatches.length
               ? <Tag color="success">Đã đủ kết quả · {done}/{rMatches.length}</Tag>
               : <Tag color="default">{done}/{rMatches.length}</Tag>}
@@ -1248,6 +1280,7 @@ function EditSetupModal({ tournament, onSaved, onClose }) {
         format: vals.format,
         num_groups: vals.format === "combined" ? (vals.num_groups || 2) : undefined,
         third_place_enabled: (vals.format === "knockout" || vals.format === "combined") ? !!vals.third_place_enabled : false,
+        placement_matches_enabled: vals.format === "combined" ? !!vals.placement_matches_enabled : false,
         ...(isTeam ? { team_rules: rulesPayload } : {}),
       });
       message.success("Đã lưu cấu hình");
@@ -1267,7 +1300,7 @@ function EditSetupModal({ tournament, onSaved, onClose }) {
         </Space>
       }>
       <Form form={form} layout="vertical"
-        initialValues={{ format: tournament.format, num_groups: tournament.num_groups, third_place_enabled: tournament.third_place_enabled }}>
+        initialValues={{ format: tournament.format, num_groups: tournament.num_groups, third_place_enabled: tournament.third_place_enabled, placement_matches_enabled: tournament.placement_matches_enabled }}>
         <Form.Item name="format" label="Thể thức thi đấu">
           <Select onChange={setFormat}>
             {Object.entries(FORMAT_MAP).map(([k, v]) => (
@@ -1283,6 +1316,11 @@ function EditSetupModal({ tournament, onSaved, onClose }) {
         {(format === "knockout" || format === "combined") && (
           <Form.Item name="third_place_enabled" valuePropName="checked" style={{ marginBottom: 0 }}>
             <Checkbox>Có trận tranh giải 3 <Text type="secondary" style={{ fontSize: 12 }}>(cần ít nhất 4 đội)</Text></Checkbox>
+          </Form.Item>
+        )}
+        {format === "combined" && (
+          <Form.Item name="placement_matches_enabled" valuePropName="checked" style={{ marginBottom: 0 }}>
+            <Checkbox>Có tranh hạng 5-6 và 7-8 <Text type="secondary" style={{ fontSize: 12 }}>(đúng 2 bảng; tạo khi lên vòng loại trực tiếp)</Text></Checkbox>
           </Form.Item>
         )}
       </Form>

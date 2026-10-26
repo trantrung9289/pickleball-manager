@@ -6,7 +6,7 @@ import {
   autoLabelRubbers, placeholderLabels, normalizeTeamRules, defaultTeamRules, defaultTargetTotal, rubberTarget,
   stagesForFormat, overLimitIds, appearanceCounts, genderIssue, preferredGenders, teamGenderNeeds,
   teamRosterWarnings, tieScoreLabel, playerIndex, rubberStatusLabel, rubberSize, slotIssueText,
-  indexTeamPlayers, matchRubbersForDisplay, rubberScoreView, distributeEvenly, rubberTotals, rosterCountText,
+  indexTeamPlayers, matchRubbersForDisplay, rubberScoreView, distributeEvenly, rubberTotals, rosterCountText, rulesForStage,
 } from "./teamFormat.js";
 
 test("autoLabelRubbers: nhãn trống tự đánh số theo thể thức, bộ đếm tăng cả khi có nhãn tự đặt, trùng nhãn thêm hậu tố", () => {
@@ -198,4 +198,22 @@ test("normalizeTeamRules: ranking mặc định tie_points, point_diff giữ ngu
   assert.equal(normalizeTeamRules(null).ranking, "tie_points");
   assert.equal(normalizeTeamRules({ ranking: "point_diff" }).ranking, "point_diff");
   assert.equal(normalizeTeamRules({ ranking: "x" }).ranking, "tie_points");
+});
+
+test("mẫu FIS đợt 4: Đôi tự do không ràng buộc giới; bộ thể thức vòng loại riêng + play_all theo giai đoạn", () => {
+  assert.equal(genderIssue("FD", ["male", null]), "");
+  const r = normalizeTeamRules({ scoring: "cumulative", points_per_rubber: 11, rubbers: [{ code: "MD" }, { code: "WD" }],
+    knockout_rubbers: [{ code: "MD" }, { code: "WD" }, { code: "XD" }, { code: "FD" }], knockout_play_all: false });
+  assert.equal(r.knockout_rubbers.length, 4);
+  assert.deepEqual(r.knockout_rubbers.map((x) => x.label), ["Đôi Nam 1", "Đôi Nữ 1", "Đôi Nam Nữ 1", "Đôi tự do 1"]);
+  assert.equal(r.knockout_play_all, false);
+  assert.equal(rulesForStage(r, "leg1").rubbers.length, 2);
+  const ko = rulesForStage(r, "knockout");
+  assert.equal(ko.rubbers.length, 4); assert.equal(ko.target_total, 44); assert.equal(ko.play_all, false);
+  assert.equal(normalizeTeamRules(null).knockout_rubbers, null);
+  assert.equal(normalizeTeamRules(null).knockout_play_all, null);
+  // mẫu trận thành phần của trận loại trực tiếp lấy theo bộ vòng loại
+  assert.equal(matchRubbersForDisplay({ phase: "knockout", rubbers: [] }, r).rubbers.length, 4);
+  assert.equal(matchRubbersForDisplay({ phase: "group", rubbers: [] }, r).rubbers.length, 2);
+  assert.deepEqual(rubberTotals([{ phase: "group", status: "pending", rubbers: [] }, { phase: "knockout", status: "pending", rubbers: [] }], r).total, 6);
 });

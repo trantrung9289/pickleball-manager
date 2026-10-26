@@ -7,7 +7,7 @@ import { useViewMode } from "../../contexts/ViewModeContext";
 import GenderTag from "./GenderTag";
 import SlotSelect from "./SlotSelect";
 import {
-  STAGE_LABELS, appearanceCounts, normalizeTeamRules, overLimitIds, rubberSize, slotIssueText, stagesForFormat,
+  STAGE_LABELS, appearanceCounts, normalizeTeamRules, overLimitIds, rubberSize, rulesForStage, slotIssueText, stagesForFormat,
 } from "../../utils/teamFormat";
 
 const { Text } = Typography;
@@ -66,8 +66,9 @@ export default function StageLineupModal({ tournament, team, canEdit = false, on
   const lu = lineups[stage];
   const slots = drafts[stage] || {};
   const locked = !!lu?.locked;
-  const sides = rules.rubbers.map((r) => slots[r.label] || []);
-  const over = overLimitIds(rules, sides);
+  const stageRules = rulesForStage(rules, stage);   // vòng loại trực tiếp có thể có bộ thể thức riêng (mẫu FIS)
+  const sides = stageRules.rubbers.map((r) => slots[r.label] || []);
+  const over = overLimitIds(stageRules, sides);
   const counts = appearanceCounts(sides);
   const dirty = JSON.stringify(slots) !== JSON.stringify(lu?.slots || {});
   const setSlot = (label, ids) => setDrafts((prev) => ({ ...prev, [stage]: { ...(prev[stage] || {}), [label]: ids } }));
@@ -75,7 +76,7 @@ export default function StageLineupModal({ tournament, team, canEdit = false, on
   const handleSave = async () => {
     // Chỉ gửi slot đủ người hoặc rỗng — slot dở dang bị backend chặn (sai số người)
     const payload = {};
-    for (const r of rules.rubbers) {
+    for (const r of stageRules.rubbers) {
       const ids = slots[r.label] || [];
       if (ids.length && ids.length !== rubberSize(r.code)) {
         message.error(`${r.label}: cần đúng ${rubberSize(r.code)} VĐV (hoặc để trống)`); return;
@@ -167,7 +168,7 @@ export default function StageLineupModal({ tournament, team, canEdit = false, on
           )}
 
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            {rules.rubbers.map((r) => {
+            {stageRules.rubbers.map((r) => {
               const ids = slots[r.label] || [];
               const issue = slotIssueText(r.code, ids, playerById);
               return (

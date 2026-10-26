@@ -9,8 +9,10 @@ export const RUBBER_CODES = {
   XD: { name: "Đôi Nam Nữ", genders: ["male", "female"] },
   MS: { name: "Đơn Nam", genders: ["male"] },
   WS: { name: "Đơn Nữ", genders: ["female"] },
+  FD: { name: "Đôi tự do", genders: ["any", "any"] },   // mẫu FIS "Đôi LĐ + CBNV": 2 VĐV bất kỳ giới
 };
-export const RUBBER_CODE_LIST = ["MD", "WD", "XD", "MS", "WS"];
+export const RUBBER_CODE_LIST = ["MD", "WD", "XD", "MS", "WS", "FD"];
+export const DEFAULT_RUBBER_CODES = ["MD", "WD", "XD", "MS", "WS"];
 
 export const STAGE_KEYS = ["leg1", "leg2", "knockout"];
 export const STAGE_LABELS = { leg1: "Lượt đi / Vòng bảng", leg2: "Lượt về", knockout: "Vòng loại trực tiếp" };
@@ -80,7 +82,7 @@ const toInt = (v, dflt) => {
 };
 
 /** Bản mẫu 5 thể thức mặc định (nhãn để trống → tự đánh số). */
-export const defaultRubbers = () => RUBBER_CODE_LIST.map((code) => ({ code, label: "" }));
+export const defaultRubbers = () => DEFAULT_RUBBER_CODES.map((code) => ({ code, label: "" }));
 
 /**
  * Chuẩn hoá team_rules như backend: scoring mặc định match_points; rubbers ≥ 1 (mặc định 5 thể thức);
@@ -95,6 +97,9 @@ export function normalizeTeamRules(raw) {
   const rubbers = autoLabelRubbers(r.rubbers && r.rubbers.length ? r.rubbers : defaultRubbers());
   if (!rubbers.length) throw new Error("Cần ít nhất 1 trận thành phần");
   if (rubbers.length > 20) throw new Error("Tối đa 20 trận thành phần");
+  // Mẫu FIS: vòng loại trực tiếp có thể dùng bộ thể thức riêng (null = dùng chung) và cách kết thúc riêng
+  const knockout_rubbers = r.knockout_rubbers && r.knockout_rubbers.length ? autoLabelRubbers(r.knockout_rubbers) : null;
+  const knockout_play_all = r.knockout_play_all === undefined || r.knockout_play_all === null ? null : !!r.knockout_play_all;
   const n = rubbers.length;
   let target_total = null;
   if (scoring === "cumulative") {
@@ -109,12 +114,28 @@ export function normalizeTeamRules(raw) {
     target_total,
     max_rubbers_per_player: Math.max(1, toInt(r.max_rubbers_per_player, 2) || 2),
     play_all: r.play_all === undefined ? true : !!r.play_all,
+    knockout_rubbers,
+    knockout_play_all,
     // Sĩ số đội tối đa (mẫu FIS "8 nam 2 nữ"): null = không giới hạn; chỉ cảnh báo, không chặn — như backend
     max_male: capOrNull(r.max_male),
     max_female: capOrNull(r.max_female),
     max_players: capOrNull(r.max_players),
   };
 }
+/** Luật áp cho một giai đoạn — gương backend rules_for_stage: knockout có thể có bộ thể thức / play_all riêng. */
+export function rulesForStage(rules, stage) {
+  if (stage !== "knockout" || !rules) return rules;
+  const out = { ...rules };
+  if (rules.knockout_rubbers && rules.knockout_rubbers.length) {
+    out.rubbers = rules.knockout_rubbers;
+    if (rules.scoring === "cumulative") out.target_total = (rules.points_per_rubber || 11) * out.rubbers.length;
+  }
+  if (rules.knockout_play_all !== null && rules.knockout_play_all !== undefined) out.play_all = !!rules.knockout_play_all;
+  return out;
+}
+/** Giai đoạn "thể thức" của một trận chỉ cần phân biệt loại trực tiếp hay không (leg1/leg2 dùng chung bộ). */
+export const stageOfMatch = (match) => (match?.phase === "knockout" ? "knockout" : "leg1");
+
 function capOrNull(v) {
   if (v === null || v === undefined || v === "") return null;
   const n = parseInt(v, 10);
@@ -172,6 +193,7 @@ export function appearanceCounts(sides) {
  */
 export function genderIssue(code, genders) {
   const expected = RUBBER_CODES[code]?.genders;
+  if (expected?.includes("any")) return "";   // Đôi tự do: không ràng buộc giới tính
   if (!expected || !genders || genders.length !== expected.length) return null;
   if (genders.some((g) => g !== "male" && g !== "female")) return "unknown";
   const a = [...genders].sort().join(","), b = [...expected].sort().join(",");
@@ -188,7 +210,7 @@ export function slotIssueText(code, ids, playerById) {
 
 /** Giới tính "nên có" của một thể thức để lọc gợi ý: MD/MS → nam, WD/WS → nữ, XD → cả hai. */
 export function preferredGenders(code) {
-  return [...new Set(RUBBER_CODES[code]?.genders || [])];
+  return [...new Set((RUBBER_CODES[code]?.genders || []).filter((g) => g !== "any"))];
 }
 
 /**
@@ -199,7 +221,7 @@ export function teamGenderNeeds(rules) {
   const limit = Math.max(1, rules?.max_rubbers_per_player || 2);
   let male = 0, female = 0;
   (rules?.rubbers || []).forEach((r) => {
-    (RUBBER_CODES[r.code]?.genders || []).forEach((g) => { if (g === "male") male += 1; else female += 1; });
+    (RUBBER_CODES[r.code]?.genders || []).forEach((g) => { if (g === "male") male += 1; else if (g === "female") female += 1; });
   });
   return { male: Math.ceil(male / limit), female: Math.ceil(female / limit) };
 }
@@ -279,7 +301,7 @@ export function indexTeamPlayers(list) {
 export function matchRubbersForDisplay(match, rules) {
   const real = match?.rubbers || [];
   if (real.length) return { rubbers: [...real].sort((a, b) => a.order_index - b.order_index), template: false };
-  const n = normalizeTeamRules(rules);
+  const n = rulesForStage(normalizeTeamRules(rules), stageOfMatch(match));
   return {
     template: true,
     rubbers: n.rubbers.map((r, i) => ({
@@ -331,6 +353,7 @@ export function distributeEvenly(tpids, teams) {
  */
 export function rubberTotals(matches, rules) {
   const perTie = (rules?.rubbers || []).length;
+  const perTieKo = (rules?.knockout_rubbers?.length ? rules.knockout_rubbers : rules?.rubbers || []).length;
   let total = 0;
   let done = 0;
   (matches || []).forEach((m) => {
@@ -338,7 +361,8 @@ export function rubberTotals(matches, rules) {
     const rs = m.rubbers || [];
     const d = rs.filter((r) => r.status === "completed").length;
     done += d;
-    total += m.status === "completed" ? d : Math.max(rs.length, perTie);
+    const tpl = m.phase === "knockout" ? perTieKo : perTie;
+    total += m.status === "completed" ? d : Math.max(rs.length, tpl);
   });
   return { total, done, remaining: total - done, perTie };
 }

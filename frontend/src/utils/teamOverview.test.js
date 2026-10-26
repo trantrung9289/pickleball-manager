@@ -66,3 +66,13 @@ test("teamRoundsPlayed / teamOverviewCounts / teamRuleSummary", () => {
   assert.match(lines[1], /3 trận thành phần: Đôi Nam 1, Đôi Nữ 1, Đôi Nam Nữ 1/);
   assert.ok(lines.some((l) => l.includes("đối đầu trực tiếp → hiệu số trận thành phần")));
 });
+
+test("finalPlacements: tranh hạng 5-6 / 7-8 (mẫu FIS) thêm hạng 5–8", () => {
+  const ko = [
+    { phase: "knockout", round_number: 2, round_name: "Chung kết", p1_id: 1, p2_id: 4, status: "completed", winner_id: 4 },
+    { phase: "knockout", round_number: 2, round_name: "Tranh giải 3", p1_id: 2, p2_id: 3, status: "completed", winner_id: 2 },
+    { phase: "knockout", round_number: 2, round_name: "Tranh hạng 5-6", p1_id: 5, p2_id: 6, status: "completed", winner_id: 6 },
+    { phase: "knockout", round_number: 2, round_name: "Tranh hạng 7-8", p1_id: 7, p2_id: 8, status: "pending", winner_id: null },
+  ];
+  assert.deepEqual(finalPlacements(ko).map((x) => [x.rank, x.pid]), [[1, 4], [2, 1], [3, 2], [4, 3], [5, 6], [6, 5]]);
+});

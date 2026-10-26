@@ -963,7 +963,9 @@ RUBBER_CODES = {
     "XD": ("Đôi Nam Nữ", ("male", "female")),
     "MS": ("Đơn Nam", ("male",)),
     "WS": ("Đơn Nữ", ("female",)),
+    "FD": ("Đôi tự do", ("any", "any")),   # mẫu FIS "Đôi LĐ + CBNV": 2 VĐV bất kỳ giới (2026-10-26)
 }
+DEFAULT_RUBBER_CODES = ("MD", "WD", "XD", "MS", "WS")
 TEAM_SCORINGS = ("match_points", "cumulative")
 TEAM_RANKINGS = ("tie_points", "point_diff")
 STAGE_KEYS = ("leg1", "leg2", "knockout")
@@ -971,21 +973,11 @@ STAGE_LABELS = {"leg1": "Lượt đi / Vòng bảng", "leg2": "Lượt về", "k
 GENDER_LABELS = {"male": "Nam", "female": "Nữ", "other": "Khác"}
 
 
-def normalize_team_rules(raw: Optional[Dict]) -> Dict:
-    """Chuẩn hoá team_rules. Mặc định: PA1, 5 thể thức (MD, WD, XD, MS, WS), 11 điểm, cách biệt 2,
-    tối đa 2 trận/VĐV, đánh hết các trận. PA2: target_total mặc định = điểm/trận × số trận.
-    Nhãn thiếu → tự sinh "Đôi Nam 1", "Đôi Nam 2"...; nhãn trùng → thêm hậu tố để làm khoá slot đội hình."""
-    raw = dict(raw or {})
-    scoring = raw.get("scoring") if raw.get("scoring") in TEAM_SCORINGS else "match_points"
-    try:
-        ppr = int(raw.get("points_per_rubber") or 11)
-    except (TypeError, ValueError):
-        ppr = 11
-    ppr = max(1, min(ppr, 99))
-    rubbers_in = raw.get("rubbers") or [{"code": c} for c in ("MD", "WD", "XD", "MS", "WS")]
+def _normalize_rubber_list(rubbers_in) -> List[Dict]:
+    """Danh sách trận thành phần: bỏ mã lạ, tự đánh nhãn "Đôi Nam 1/2…", nhãn trùng thêm hậu tố; 1..20 trận."""
     counters: Dict[str, int] = {}
     rubbers: List[Dict] = []
-    for r in rubbers_in:
+    for r in rubbers_in or []:
         code = str((r or {}).get("code") or "").upper().strip()
         if code not in RUBBER_CODES:
             continue
@@ -1004,6 +996,42 @@ def normalize_team_rules(raw: Optional[Dict]) -> Dict:
             r["label"] = f"{base} ({seen[base]})"
         else:
             seen[base] = 1
+    return rubbers
+
+
+def rules_for_stage(rules: Dict, stage: str) -> Dict:
+    """Luật áp cho một giai đoạn: vòng loại trực tiếp có thể có bộ thể thức riêng (knockout_rubbers) và cách kết
+    thúc riêng (knockout_play_all); PA2 mốc tổng vòng loại = điểm/trận × số trận của bộ đó. Giai đoạn khác → luật gốc."""
+    if stage != "knockout":
+        return rules
+    out = dict(rules)
+    if rules.get("knockout_rubbers"):
+        out["rubbers"] = rules["knockout_rubbers"]
+        if rules.get("scoring") == "cumulative":
+            out["target_total"] = rules["points_per_rubber"] * len(out["rubbers"])
+    if rules.get("knockout_play_all") is not None:
+        out["play_all"] = bool(rules["knockout_play_all"])
+    return out
+
+
+def normalize_team_rules(raw: Optional[Dict]) -> Dict:
+    """Chuẩn hoá team_rules. Mặc định: PA1, 5 thể thức (MD, WD, XD, MS, WS), 11 điểm, cách biệt 2,
+    tối đa 2 trận/VĐV, đánh hết các trận. PA2: target_total mặc định = điểm/trận × số trận.
+    Nhãn thiếu → tự sinh "Đôi Nam 1", "Đôi Nam 2"...; nhãn trùng → thêm hậu tố để làm khoá slot đội hình."""
+    raw = dict(raw or {})
+    scoring = raw.get("scoring") if raw.get("scoring") in TEAM_SCORINGS else "match_points"
+    try:
+        ppr = int(raw.get("points_per_rubber") or 11)
+    except (TypeError, ValueError):
+        ppr = 11
+    ppr = max(1, min(ppr, 99))
+    rubbers = _normalize_rubber_list(raw.get("rubbers") or [{"code": c} for c in DEFAULT_RUBBER_CODES])
+    # Mẫu FIS (2026-10-26): vòng loại trực tiếp có thể dùng BỘ THỂ THỨC RIÊNG (vd vòng bảng 5 trận, chung kết 7 trận);
+    # None = dùng chung bộ của vòng bảng. knockout_play_all: None = như vòng bảng.
+    ko_raw = raw.get("knockout_rubbers")
+    knockout_rubbers = _normalize_rubber_list(ko_raw) if ko_raw else None
+    kpa = raw.get("knockout_play_all")
+    knockout_play_all = None if kpa is None else bool(kpa)
     n = len(rubbers)
     target_total = None
     if scoring == "cumulative":
@@ -1038,6 +1066,8 @@ def normalize_team_rules(raw: Optional[Dict]) -> Dict:
         "target_total": target_total,
         "max_rubbers_per_player": max_per,
         "play_all": bool(raw.get("play_all", True)),
+        "knockout_rubbers": knockout_rubbers,
+        "knockout_play_all": knockout_play_all,
         "max_male": _cap("max_male"),
         "max_female": _cap("max_female"),
         "max_players": _cap("max_players"),
@@ -1121,6 +1151,11 @@ def tie_result(rules: Dict, rubbers: List[Dict]) -> Dict:
     decided = wins1 * 2 > n or wins2 * 2 > n
     winner = None
     detail = f"Đang {wins1} – {wins2} trận"
+    if not finished and decided and not rules.get("play_all", True):
+        # Mẫu FIS chung kết: "đội thắng quá nửa số trận giành chiến thắng" — các trận còn lại không cần đấu
+        winner = 1 if wins1 > wins2 else 2
+        return {"score1": wins1, "score2": wins2, "winner_side": winner, "decided": True, "finished": True,
+                "detail": f"Thắng {max(wins1, wins2)} – {min(wins1, wins2)} trận (quá nửa, dừng sớm)", "next_start": (0, 0)}
     if finished:
         if wins1 != wins2:
             winner = 1 if wins1 > wins2 else 2
@@ -1152,6 +1187,8 @@ def rubber_players_check(code: str, players: List[int], gender_by_tp: Dict[int, 
     if len(set(players)) != len(players):
         errors.append("Một VĐV không thể xuất hiện 2 lần trong cùng trận thành phần")
         return errors, warnings
+    if "any" in expected:
+        return errors, warnings          # Đôi tự do: không ràng buộc giới tính
     genders = [gender_by_tp.get(p) for p in players]
     if any(g not in ("male", "female") for g in genders):
         warnings.append(f"{name}: có VĐV chưa khai giới tính")

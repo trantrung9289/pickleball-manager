@@ -20,10 +20,11 @@ export const RUBBER_CODE_LABELS = {
   XD: "Đôi Nam Nữ",
   MS: "Đơn Nam",
   WS: "Đơn Nữ",
+  FD: "Đôi tự do",
 };
 
 /** Số VĐV mỗi bên của một thể thức trận thành phần. */
-export const RUBBER_CODE_SIZE = { MD: 2, WD: 2, XD: 2, MS: 1, WS: 1 };
+export const RUBBER_CODE_SIZE = { MD: 2, WD: 2, XD: 2, MS: 1, WS: 1, FD: 2 };
 
 export const STAGE_LABELS = {
   leg1: "Lượt đi / Vòng bảng",

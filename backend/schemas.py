@@ -325,6 +325,7 @@ class TournamentCreate(BaseModel):
     score_pin: Optional[str] = None          # PIN 4 số — cho phép nhập điểm qua public
     public_scoring_enabled: bool = False
     third_place_enabled: bool = False        # có trận tranh giải 3 không (knockout/combined, cần ≥4 đội)
+    placement_matches_enabled: bool = False  # tranh hạng 5-6 / 7-8 (combined đúng 2 bảng) — mẫu FIS
     team_rules: Optional[Dict[str, Any]] = None   # bắt buộc khi team_type == "team" (xem normalize_team_rules)
 
 
@@ -338,6 +339,7 @@ class TournamentUpdate(BaseModel):
     rank_rules: Optional[List[Dict[str, str]]] = None
     num_groups: Optional[int] = Field(default=None, ge=1, le=16)
     third_place_enabled: Optional[bool] = None
+    placement_matches_enabled: Optional[bool] = None
     team_rules: Optional[Dict[str, Any]] = None
 
 
@@ -655,6 +657,7 @@ class TournamentOut(BaseModel):
     created_at: Optional[datetime] = None
     public_scoring_enabled: bool = False
     third_place_enabled: bool = False
+    placement_matches_enabled: bool = False
     has_score_pin: bool = False
     team_rules: Optional[Any] = None        # quy tắc giải đồng đội (team_type == "team")
     participants: List[ParticipantOut] = []
@@ -752,6 +755,7 @@ class PublicTournamentOut(BaseModel):
     created_at: Optional[datetime] = None
     public_scoring_enabled: bool = False
     third_place_enabled: bool = False
+    placement_matches_enabled: bool = False
     has_score_pin: bool = False
     team_rules: Optional[Any] = None
     participants: List[PublicParticipantOut] = []

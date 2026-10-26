@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Alert, Button, Input, InputNumber, Radio, Space, Switch, Tag, Tooltip, Typography } from "antd";
+import { Alert, Button, Input, InputNumber, Radio, Select, Space, Switch, Tag, Tooltip, Typography } from "antd";
 import { ArrowDownOutlined, ArrowUpOutlined, DeleteOutlined, PlusOutlined, ReloadOutlined } from "@ant-design/icons";
 import {
   RUBBER_CODE_LIST, SCORING_LABELS, defaultRubbers, defaultTargetTotal, placeholderLabels, rubberName,
@@ -7,7 +7,7 @@ import {
 
 const { Text } = Typography;
 
-const CODE_COLOR = { MD: "blue", WD: "magenta", XD: "purple", MS: "geekblue", WS: "pink" };
+const CODE_COLOR = { MD: "blue", WD: "magenta", XD: "purple", MS: "geekblue", WS: "pink", FD: "gold" };
 const POINT_PRESETS = [11, 15, 21];
 
 /**
@@ -18,22 +18,10 @@ const POINT_PRESETS = [11, 15, 21];
  *  - rubbers: danh sách trận thành phần theo thứ tự mẫu (thứ tự thật được bốc thăm từng trận đồng đội).
  *  - points_per_rubber 11/15/21 (hoặc tuỳ chỉnh), win_by_two, target_total (PA2), max_rubbers_per_player.
  */
-export default function TeamRulesEditor({ value, onChange, disabled = false }) {
-  const rules = value || {};
-  const rubbers = rules.rubbers || [];
-  const scoring = rules.scoring === "cumulative" ? "cumulative" : "match_points";
-  const ppr = rules.points_per_rubber || 11;
-  // Mốc tổng PA2 tự = điểm × số trận cho tới khi người dùng tự sửa (targetEdited)
-  const [targetEdited, setTargetEdited] = useState(
-    () => rules.target_total != null && rules.target_total !== defaultTargetTotal(rules),
-  );
 
-  const emit = (patch) => {
-    const next = { ...rules, ...patch };
-    if (!targetEdited) next.target_total = defaultTargetTotal(next);
-    onChange(next);
-  };
-  const setRubbers = (list) => emit({ rubbers: list });
+/** Danh sách trận thành phần (dùng cho bộ vòng bảng lẫn bộ vòng loại trực tiếp). */
+function RubberList({ title, hint, rubbers, setRubbers, disabled }) {
+  const placeholders = placeholderLabels(rubbers);
   const move = (i, dir) => {
     const j = i + dir;
     if (j < 0 || j >= rubbers.length) return;
@@ -41,34 +29,11 @@ export default function TeamRulesEditor({ value, onChange, disabled = false }) {
     [list[i], list[j]] = [list[j], list[i]];
     setRubbers(list);
   };
-
-  const placeholders = placeholderLabels(rubbers);
-  const autoTarget = defaultTargetTotal(rules);
-
   return (
-    <div>
-      <div style={{ fontWeight: 600, marginBottom: 6 }}>Cách tính kết quả trận đồng đội</div>
-      <Radio.Group value={scoring} disabled={disabled} onChange={(e) => emit({ scoring: e.target.value })}
-        style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>
-        <Radio value="match_points">
-          <b>{SCORING_LABELS.match_points}</b>
-          <Text type="secondary" style={{ display: "block", fontSize: 12 }}>
-            Mỗi trận thành phần thắng = 1. Đánh hết các trận; hoà số trận → hiệu số điểm nhỏ → đội thắng trận cuối.
-          </Text>
-        </Radio>
-        <Radio value="cumulative">
-          <b>{SCORING_LABELS.cumulative}</b>
-          <Text type="secondary" style={{ display: "block", fontSize: 12 }}>
-            Điểm trận sau nối tiếp trận trước (11 → 22 → 33...). Đội chạm mốc tổng trước thắng cả trận đồng đội.
-          </Text>
-        </Radio>
-      </Radio.Group>
-
+    <>
       <div style={{ fontWeight: 600, marginBottom: 6 }}>
-        Các trận thành phần ({rubbers.length})
-        <Text type="secondary" style={{ fontWeight: 400, fontSize: 12, marginLeft: 8 }}>
-          thứ tự mẫu — thứ tự thật sẽ bốc thăm ở từng trận đồng đội
-        </Text>
+        {title}
+        {hint && <Text type="secondary" style={{ fontWeight: 400, fontSize: 12, marginLeft: 8 }}>{hint}</Text>}
       </div>
       {rubbers.length === 0 && (
         <Alert type="error" showIcon style={{ marginBottom: 8 }} message="Cần ít nhất 1 trận thành phần" />
@@ -105,6 +70,87 @@ export default function TeamRulesEditor({ value, onChange, disabled = false }) {
           </Button>
         </Tooltip>
       </Space>
+
+    </>
+  );
+}
+
+export default function TeamRulesEditor({ value, onChange, disabled = false }) {
+  const rules = value || {};
+  const rubbers = rules.rubbers || [];
+  const scoring = rules.scoring === "cumulative" ? "cumulative" : "match_points";
+  const ppr = rules.points_per_rubber || 11;
+  // Mốc tổng PA2 tự = điểm × số trận cho tới khi người dùng tự sửa (targetEdited)
+  const [targetEdited, setTargetEdited] = useState(
+    () => rules.target_total != null && rules.target_total !== defaultTargetTotal(rules),
+  );
+
+  const emit = (patch) => {
+    const next = { ...rules, ...patch };
+    if (!targetEdited) next.target_total = defaultTargetTotal(next);
+    onChange(next);
+  };
+  const setRubbers = (list) => emit({ rubbers: list });
+  const autoTarget = defaultTargetTotal(rules);
+
+  return (
+    <div>
+      <div style={{ fontWeight: 600, marginBottom: 6 }}>Cách tính kết quả trận đồng đội</div>
+      <Radio.Group value={scoring} disabled={disabled} onChange={(e) => emit({ scoring: e.target.value })}
+        style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>
+        <Radio value="match_points">
+          <b>{SCORING_LABELS.match_points}</b>
+          <Text type="secondary" style={{ display: "block", fontSize: 12 }}>
+            Mỗi trận thành phần thắng = 1. Đánh hết các trận; hoà số trận → hiệu số điểm nhỏ → đội thắng trận cuối.
+          </Text>
+        </Radio>
+        <Radio value="cumulative">
+          <b>{SCORING_LABELS.cumulative}</b>
+          <Text type="secondary" style={{ display: "block", fontSize: 12 }}>
+            Điểm trận sau nối tiếp trận trước (11 → 22 → 33...). Đội chạm mốc tổng trước thắng cả trận đồng đội.
+          </Text>
+        </Radio>
+      </Radio.Group>
+
+      <RubberList title={`Các trận thành phần (${rubbers.length})`} hint="thứ tự mẫu — thứ tự thật sẽ bốc thăm ở từng trận đồng đội"
+        rubbers={rubbers} setRubbers={setRubbers} disabled={disabled} />
+
+      {scoring === "match_points" && (
+        <Space size={6} style={{ marginBottom: 10 }}>
+          <Switch size="small" checked={rules.play_all !== false} disabled={disabled} onChange={(v) => emit({ play_all: v })} />
+          <Text>Đánh hết các trận thành phần</Text>
+          <Tooltip title="Tắt = dừng ngay khi một đội thắng quá nửa số trận (kiểu FIS: 'đội thắng 4/7 trận giành chiến thắng')"><Text type="secondary">?</Text></Tooltip>
+        </Space>
+      )}
+
+      {/* Mẫu FIS: vòng loại trực tiếp dùng bộ thể thức riêng (vd vòng bảng 5 trận, chung kết 7 trận) */}
+      <div style={{ border: "1px dashed #d9d9d9", borderRadius: 8, padding: "8px 12px", marginBottom: 12 }}>
+        <Space size={6} wrap>
+          <Switch size="small" checked={!!(rules.knockout_rubbers && rules.knockout_rubbers.length)} disabled={disabled}
+            onChange={(v) => emit({ knockout_rubbers: v ? rubbers.map((r) => ({ ...r })) : null })} />
+          <Text strong>Vòng loại trực tiếp dùng bộ thể thức riêng</Text>
+          <Text type="secondary" style={{ fontSize: 12 }}>(chung kết / tranh hạng; vòng bảng và vòng tròn dùng bộ ở trên)</Text>
+        </Space>
+        {rules.knockout_rubbers && rules.knockout_rubbers.length > 0 && (
+          <div style={{ marginTop: 8 }}>
+            <RubberList title={`Trận thành phần vòng loại trực tiếp (${rules.knockout_rubbers.length})`} hint=""
+              rubbers={rules.knockout_rubbers} setRubbers={(list) => emit({ knockout_rubbers: list })} disabled={disabled} />
+          </div>
+        )}
+        {scoring === "match_points" && (
+          <Space size={6} style={{ marginTop: 6 }}>
+            <Text>Kết thúc trận vòng loại</Text>
+            <Select size="small" style={{ width: 300 }} disabled={disabled}
+              value={rules.knockout_play_all === null || rules.knockout_play_all === undefined ? "inherit" : (rules.knockout_play_all ? "all" : "early")}
+              onChange={(v) => emit({ knockout_play_all: v === "inherit" ? null : v === "all" })}
+              options={[
+                { value: "inherit", label: "Như vòng bảng" },
+                { value: "all", label: "Đánh hết các trận" },
+                { value: "early", label: "Dừng khi một đội thắng quá nửa số trận" },
+              ]} />
+          </Space>
+        )}
+      </div>
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: "10px 24px", alignItems: "center", marginBottom: 8 }}>
         <Space size={6} wrap>
