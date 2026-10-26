@@ -33,7 +33,7 @@ from tournament_engine import (
     normalize_rank, normalize_partner_rules, partner_draw_plan, partner_step_context, partner_draw_finished,
     partner_draw_stuck, _normalize_partner_plan, UNRANKED,
     normalize_team_rules, rubber_target, validate_rubber_score, tie_result, rubber_players_check,
-    over_limit_players, lineup_check, stage_key_for_match, first_leg_rounds, draw_rubber_order,
+    over_limit_players, lineup_check, stage_key_for_match, first_leg_rounds, draw_rubber_order, team_standings_breakdown,
     RUBBER_CODES, STAGE_KEYS, STAGE_LABELS,
 )
 from auth import (
@@ -2277,6 +2277,7 @@ def public_tournament_detail(request: Request, slug: str, tid: int, db: Session 
 def public_tournament_standings(
     request: Request, slug: str, tid: int,
     group: Optional[str] = None,
+    leg: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     rec = _validate_token(slug, db)
@@ -2299,8 +2300,7 @@ def public_tournament_standings(
     if group:
         participants = [p for p in participants if p.group_name == group]
 
-    m_dicts, p_dicts = _standings_inputs(t, matches, participants)
-    return compute_standings(m_dicts, p_dicts, group=group, profile=_standings_profile(t))
+    return _team_standings_rows(db, t, matches, participants, group, leg)
 
 
 @app.post("/api/public/report/{slug}/tournaments/{tid}/matches/{mid}/score", response_model=schemas.MatchOut)
@@ -3565,7 +3565,35 @@ def _team_rules(t: "models.Tournament") -> dict:
 def _standings_profile(t: "models.Tournament") -> str:
     if t.team_type != "team":
         return "default"
-    return "team_cumulative" if _team_rules(t)["scoring"] == "cumulative" else "team_match_points"
+    rules = _team_rules(t)
+    if rules.get("ranking") == "point_diff":
+        return "team_point_diff"      # mẫu FIS: tổng hiệu số điểm → điểm ghi → đối đầu
+    return "team_cumulative" if rules["scoring"] == "cumulative" else "team_match_points"
+
+
+def _team_standings_rows(db: Session, t: "models.Tournament", matches: list, participants: list,
+                         group: Optional[str], leg: Optional[str]) -> list:
+    """BXH dùng chung admin/public: lọc theo lượt (leg1/leg2, chỉ có nghĩa với vòng tròn 2 lượt) rồi tính
+    compute_standings; giải đồng đội gắn thêm `breakdown` (thể loại / lượt / từng cặp đấu) và `ranking`."""
+    flr = _first_leg_rounds(db, t)
+    stage_of = {m.id: stage_key_for_match(t.format.value, m.phase, m.round_number, flr) for m in matches}
+    if leg in ("leg1", "leg2"):
+        matches = [m for m in matches if stage_of[m.id] == leg]
+    m_dicts, p_dicts = _standings_inputs(t, matches, participants)
+    rows = compute_standings(m_dicts, p_dicts, group=group, profile=_standings_profile(t))
+    if t.team_type != "team":
+        return rows
+    rules = _team_rules(t)
+    full = [{
+        "id": m.id, "p1_id": m.p1_id, "p2_id": m.p2_id, "status": m.status.value if hasattr(m.status, "value") else m.status,
+        "winner_id": m.winner_id, "is_walkover": m.is_walkover, "round_name": m.round_name,
+        "score1": m.score1, "score2": m.score2, "stage_key": stage_of[m.id], "rubbers": _rubber_dicts(m),
+    } for m in matches]
+    bd = team_standings_breakdown(full, p_dicts, rules)
+    for r in rows:
+        r["breakdown"] = bd.get(r["participant_id"])
+        r["ranking"] = rules.get("ranking", "tie_points")
+    return rows
 
 
 def _rubber_dicts(match: "models.TournamentMatch") -> list:
@@ -5922,6 +5950,7 @@ def withdraw_participant(
 def get_standings(
     tid: int,
     group: Optional[str] = None,
+    leg: Optional[str] = None,
     db: Session = Depends(get_db),
     perms: ClubPermissions = Depends(get_club_permission),
 ):
@@ -5941,8 +5970,7 @@ def get_standings(
     if group:
         participants = [p for p in participants if p.group_name == group]
 
-    m_dicts, p_dicts = _standings_inputs(t, matches, participants)
-    return compute_standings(m_dicts, p_dicts, group=group, profile=_standings_profile(t))
+    return _team_standings_rows(db, t, matches, participants, group, leg)
 
 
 # ── BOT CONFIG ────────────────────────────────────────────

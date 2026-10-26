@@ -193,3 +193,9 @@ test("sĩ số đội tối đa (mẫu FIS): chuẩn hoá null/số, cảnh báo
   assert.equal(rosterCountText(rules, players), "3/2 VĐV · 2/1 Nam · 1/1 Nữ");
   assert.equal(rosterCountText(normalizeTeamRules(null), [{ gender: "male" }, {}]), "2 VĐV · 1 Nam · 0 Nữ · 1 chưa khai");
 });
+
+test("normalizeTeamRules: ranking mặc định tie_points, point_diff giữ nguyên, giá trị lạ về mặc định", () => {
+  assert.equal(normalizeTeamRules(null).ranking, "tie_points");
+  assert.equal(normalizeTeamRules({ ranking: "point_diff" }).ranking, "point_diff");
+  assert.equal(normalizeTeamRules({ ranking: "x" }).ranking, "tie_points");
+});

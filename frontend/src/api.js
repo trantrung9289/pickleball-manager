@@ -131,7 +131,7 @@ export const tournamentsApi = {
   score: (tid, mid, data) => api.post(`/api/tournaments/${tid}/matches/${mid}/score`, data),
   updateScorePin: (tid, data) => api.patch(`/api/tournaments/${tid}/score-pin`, data),
   updateThirdPlace: (tid, enabled) => api.patch(`/api/tournaments/${tid}/third-place`, { enabled }),
-  standings: (tid, group) => api.get(`/api/tournaments/${tid}/standings`, { params: group ? { group } : {} }),
+  standings: (tid, group, leg) => api.get(`/api/tournaments/${tid}/standings`, { params: { ...(group ? { group } : {}), ...(leg ? { leg } : {}) } }),   // leg: leg1|leg2 (vòng tròn 2 lượt)
   replaceParticipant: (tid, pid, data) => api.patch(`/api/tournaments/${tid}/participants/${pid}`, data),
   addParticipant: (tid, data) => api.post(`/api/tournaments/${tid}/participants`, data),
   removeParticipant: (tid, pid) => api.delete(`/api/tournaments/${tid}/participants/${pid}`),
@@ -259,7 +259,7 @@ export const createPublicReportApi = (slug) => {
     tournaments: {
       list: () => pub.get(`${base}/tournaments`),
       detail: (tid) => pub.get(`${base}/tournaments/${tid}`),
-      standings: (tid, group) => pub.get(`${base}/tournaments/${tid}/standings`, { params: { group } }),
+      standings: (tid, group, leg) => pub.get(`${base}/tournaments/${tid}/standings`, { params: { group, ...(leg ? { leg } : {}) } }),
       score: (tid, mid, data) => pub.post(`${base}/tournaments/${tid}/matches/${mid}/score`, data),
       // Bốc thăm: public poll nhanh (2s) trên endpoint riêng — bucket rate-limit riêng theo path
       draw: (tid) => pub.get(`${base}/tournaments/${tid}/draw`),

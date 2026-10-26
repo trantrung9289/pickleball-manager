@@ -152,9 +152,10 @@ const TEAM_STANDINGS_COLS = [
 ];
 const signed = (v) => (v > 0 ? `+${v}` : `${v ?? 0}`);
 
-function StandingsShell({ rows, isTeam }) {
+function StandingsShell({ rows, isTeam, pointDiff = false }) {
   if (!rows) return null;
-  const cols = isTeam ? TEAM_STANDINGS_COLS : STANDINGS_COLS;
+  // Xếp hạng kiểu FIS (point_diff): cột "Điểm" bảng không còn ý nghĩa → thay bằng Đ.ghi (điểm ghi được)
+  const cols = isTeam ? (pointDiff ? TEAM_STANDINGS_COLS.map((c) => (c.label === "Điểm" ? { label: "Đ.ghi", width: 40 } : c)) : TEAM_STANDINGS_COLS) : STANDINGS_COLS;
   return (
     <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
       <colgroup>
@@ -197,7 +198,7 @@ function StandingsShell({ rows, isTeam }) {
                 </>
               )
               : <td style={cellStyle("center")}>{signed(r.goal_diff)}</td>}
-            <td style={cellStyle("center")}>{r.points}</td>
+            <td style={cellStyle("center")}>{isTeam && pointDiff ? r.pts_for : r.points}</td>
           </tr>
         ))}
       </tbody>
@@ -406,7 +407,7 @@ function projectedBracketContent(node, roundIndex) {
 }
 
 // ── Trang: vòng tròn / vòng tròn hai lượt / thi đấu riêng lẻ ─────────────────
-function RoundRobinSheet({ tournament, standings, isTeam }) {
+function RoundRobinSheet({ tournament, standings, isTeam, pointDiff }) {
   return (
     <div className="print-page print-portrait">
       <SheetHeader tournament={tournament} subtitle={`BẢNG THI ĐẤU — ${FORMAT_LABEL[tournament.format].toUpperCase()}`} />
@@ -418,7 +419,7 @@ function RoundRobinSheet({ tournament, standings, isTeam }) {
           <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".06em", color: "#555", textTransform: "uppercase", margin: "0 0 4px", paddingBottom: 3, borderBottom: "2px solid #141413" }}>
             Bảng xếp hạng
           </div>
-          <StandingsShell rows={standings} isTeam={isTeam} />
+          <StandingsShell rows={standings} isTeam={isTeam} pointDiff={pointDiff} />
           <div style={{ marginTop: 28, padding: 12, border: "1.3px dashed #bbb", borderRadius: 6, fontSize: 11.5, color: "#666", lineHeight: 1.6 }}>
             <b style={{ color: "#141413" }}>Ghi chú</b><br />
             {isTeam
@@ -449,7 +450,7 @@ function KnockoutSheet({ tournament }) {
 }
 
 // ── Trang: vòng bảng + loại trực tiếp ─────────────────────────────────────────
-function CombinedSheet({ tournament, standingsByGroup, isTeam }) {
+function CombinedSheet({ tournament, standingsByGroup, isTeam, pointDiff }) {
   const groups = [...new Set(tournament.participants.map((p) => p.group_name).filter(Boolean))].sort();
   const koMatches = tournament.matches.filter((m) => m.phase === "knockout");
   const hasRealKO = koMatches.length > 0;
@@ -493,7 +494,7 @@ function CombinedSheet({ tournament, standingsByGroup, isTeam }) {
               </div>
               <MatchRows matches={tournament.matches.filter((m) => m.phase === "group" && m.group_name === g)} />
               <div style={{ marginTop: 6 }}>
-                <StandingsShell rows={standingsByGroup?.[g]} isTeam={isTeam} />
+                <StandingsShell rows={standingsByGroup?.[g]} isTeam={isTeam} pointDiff={pointDiff} />
               </div>
             </div>
           ))}
@@ -883,6 +884,7 @@ export default function TournamentPrintSheet({ tournament, onReady, teams, lineu
   const fmt = tournament.format;
   const isTeam = tournament.team_type === "team";
   const rules = isTeam ? normalizeTeamRules(tournament.team_rules) : null;
+  const pointDiff = !!rules && rules.ranking === "point_diff";
   const teamsById = {};
   (teams || []).forEach((t) => { if (t?.participant?.id != null) teamsById[t.participant.id] = t; });
   // Biên bản: mọi trận đã đủ 2 đội (trừ xử thua do bỏ giải — không có trận thành phần);
@@ -923,9 +925,9 @@ export default function TournamentPrintSheet({ tournament, onReady, teams, lineu
   return (
     <div className="print-sheet-root">
       {fmt === "knockout" && <KnockoutSheet tournament={tournament} />}
-      {fmt === "combined" && <CombinedSheet tournament={tournament} standingsByGroup={standings} isTeam={isTeam} />}
+      {fmt === "combined" && <CombinedSheet tournament={tournament} standingsByGroup={standings} isTeam={isTeam} pointDiff={pointDiff} />}
       {(fmt === "round_robin" || fmt === "round_robin_double" || fmt === "individual") && (
-        <RoundRobinSheet tournament={tournament} standings={standings._all} isTeam={isTeam} />
+        <RoundRobinSheet tournament={tournament} standings={standings._all} isTeam={isTeam} pointDiff={pointDiff} />
       )}
       {isTeam && lineupPages.map(({ team, match, stage, opponent }) => (
         <TeamLineupSheet

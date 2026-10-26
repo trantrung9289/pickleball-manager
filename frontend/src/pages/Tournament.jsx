@@ -34,6 +34,7 @@ import { teamLabel, teamRank } from "../utils/tournamentLabels";
 import { TEAM_TYPE_LABELS, defaultTeamRules, normalizeTeamRules, tieScoreLabel, indexTeamPlayers, rubberTotals } from "../utils/teamFormat";
 import TeamOverviewPanel from "../components/team/TeamOverviewPanel";
 import TeamStatsTable from "../components/team/TeamStatsTable";
+import TeamStandingsTable from "../components/team/TeamStandingsTable";
 import {
   DRAW_FORMATS, serverOffset, normalizeRank, UNRANKED, partnerPlan, normalizePartnerRules, ranksLabel,
 } from "../utils/drawMath";
@@ -1003,7 +1004,20 @@ function BracketCard({ match, onScoreClick, renderDetail }) {
 // ── Bảng xếp hạng (W=1, L=0) ────────────────────────────
 // Giải đồng đội: thay BT/BB/Hiệu số bằng "HS trận" (rubber_diff: hiệu số trận thành phần) và "HS điểm" (pts_diff:
 // hiệu số điểm nhỏ / tổng tích luỹ) theo thứ tự tie-break điều lệ; `needs_draw` = còn bằng nhau hoàn toàn → tô cảnh báo.
-function StandingsTable({ tournament, group }) {
+function StandingsTable({ tournament, group, onOpenMatch }) {
+  const isTeam = tournament.team_type === "team";
+  if (isTeam) return <TeamStandingsWrapper tournament={tournament} group={group} onOpenMatch={onOpenMatch} />;
+  return <PlainStandingsTable tournament={tournament} group={group} />;
+}
+
+// Giải đồng đội: bảng theo thể loại / lượt / từng cặp đấu (mẫu FIS, 2026-10-26)
+function TeamStandingsWrapper({ tournament, group, onOpenMatch }) {
+  const rules = useMemo(() => { try { return normalizeTeamRules(tournament.team_rules); } catch { return null; } }, [tournament.team_rules]);
+  const fetchStandings = useCallback((g, leg) => tournamentsApi.standings(tournament.id, g || undefined, leg || undefined), [tournament.id]);
+  return <TeamStandingsTable tournament={tournament} rules={rules} group={group} fetchStandings={fetchStandings} onOpenMatch={onOpenMatch} />;
+}
+
+function PlainStandingsTable({ tournament, group }) {
   const [rows, setRows] = useState([]);
   const isTeam = tournament.team_type === "team";
   const doneCount = tournament.matches?.filter(m => m.status === "completed").length ?? 0;
@@ -2124,7 +2138,7 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated, autoOpenAdd
       tabItems.push({
         key: "standings",
         label: "Bảng xếp hạng",
-        children: <StandingsTable tournament={tournament} />,
+        children: <StandingsTable tournament={tournament} onOpenMatch={openMatch} />,
       });
     }
   }
@@ -2176,7 +2190,7 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated, autoOpenAdd
                     style={{ marginBottom: 16 }}
                     {...matchTableMobileProps}
                   />
-                  <StandingsTable tournament={tournament} group={g} />
+                  <StandingsTable tournament={tournament} group={g} onOpenMatch={openMatch} />
                 </>
               ),
             }))}

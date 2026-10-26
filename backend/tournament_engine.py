@@ -796,6 +796,9 @@ def compute_standings(
                 → hiệu số ĐIỂM NHỎ toàn bảng → (bốc thăm: giữ nguyên thứ tự, đánh dấu needs_draw).
       profile="team_cumulative" (điều lệ PA2): điểm bảng → hiệu số TỔNG ĐIỂM TÍCH LUỸ toàn bảng → đối đầu trực tiếp
                 → (bốc thăm).
+      profile="team_point_diff" (mẫu FIS / Davis Cup, 2026-10-26): KHÔNG xếp theo điểm bảng — tổng HIỆU SỐ ĐIỂM trận
+                thành phần toàn bảng → tổng ĐIỂM GHI → đối đầu trực tiếp (hiệu số điểm → điểm ghi giữa các đội bằng nhau)
+                → (bốc thăm / tie-break). `points` vẫn = số trận đồng đội thắng để hiển thị.
     """
     stats: Dict[int, Dict] = {}
     for p in participants:
@@ -870,6 +873,7 @@ def compute_standings(
         Trận walkover vẫn tính thắng/thua đối đầu, không cộng vào hiệu số/điểm ghi được
         (nhất quán với compute_standings ở trên)."""
         h_points = h_for = h_against = 0
+        h_pts_for = h_pts_against = 0
         for m in completed_matches:
             p1, p2 = m.get("p1_id"), m.get("p2_id")
             if pid not in (p1, p2):
@@ -886,40 +890,54 @@ def compute_standings(
             my_score, opp_score = (s1, s2) if p1 == pid else (s2, s1)
             h_for += my_score
             h_against += opp_score
+            pt1, pt2 = int(m.get("pts1") or 0), int(m.get("pts2") or 0)
+            my_pts, opp_pts = (pt1, pt2) if p1 == pid else (pt2, pt1)
+            h_pts_for += my_pts
+            h_pts_against += opp_pts
             won_h2h = (m.get("winner_id") == pid) if (profile != "default" and m.get("winner_id")) else my_score > opp_score
             if won_h2h:
                 h_points += 1
+        if profile == "team_point_diff":
+            return (-(h_pts_for - h_pts_against), -h_pts_for)   # FIS: hiệu số điểm đối đầu → điểm ghi đối đầu
         if profile != "default":
             return (-h_points,)          # điều lệ: đối đầu trực tiếp chỉ xét kết quả thắng/thua
         return (-h_points, -(h_for - h_against), -h_for)
+
+    def primary_key(x: Dict) -> tuple:
+        if profile == "team_point_diff":
+            return (-x["pts_diff"], -x["pts_for"])   # FIS: không xếp theo điểm bảng
+        return (-x["points"],)
 
     def secondary_key(x: Dict) -> tuple:
         if profile == "team_match_points":
             return (-x["rubber_diff"], -x["pts_diff"])
         if profile == "team_cumulative":
             return (-x["goal_diff"],)    # hiệu số tổng điểm tích luỹ (score của tie là tổng điểm)
+        if profile == "team_point_diff":
+            return ()
         return (-x["goal_diff"], -x["goals_for"])
 
     def group_sort_key(x: Dict, tied_ids: set) -> tuple:
         h2h = head_to_head_key(x["participant_id"], tied_ids)
         if profile == "team_cumulative":
             return secondary_key(x) + h2h     # PA2: hiệu số tích luỹ TRƯỚC, đối đầu SAU
-        return h2h + secondary_key(x)         # default & PA1: đối đầu trước
+        return h2h + secondary_key(x)         # default & PA1 & FIS: đối đầu trước
 
-    # Nhóm theo điểm số; trong mỗi nhóm bằng điểm áp tie-break theo profile.
-    rows.sort(key=lambda x: (-x["points"],) + secondary_key(x))
+    # Nhóm theo khoá chính (điểm bảng; FIS: hiệu số điểm + điểm ghi); trong mỗi nhóm bằng nhau áp tie-break theo profile.
+    rows.sort(key=lambda x: primary_key(x) + secondary_key(x))
     ordered: List[Dict] = []
     i = 0
     while i < len(rows):
         j = i
-        while j < len(rows) and rows[j]["points"] == rows[i]["points"]:
+        while j < len(rows) and primary_key(rows[j]) == primary_key(rows[i]):
             j += 1
         tied_group = rows[i:j]
         if len(tied_group) > 1:
             tied_ids = {r["participant_id"] for r in tied_group}
             tied_group.sort(key=lambda x: group_sort_key(x, tied_ids))
-            if profile != "default":
+            if profile != "default" and any(x["played"] > 0 for x in tied_group):
                 # Vẫn bằng nhau sau mọi chỉ số → điều lệ: bốc thăm. Đánh dấu để BTC xử lý, giữ thứ tự ổn định.
+                # (Chưa đội nào đấu trận nào → không đánh dấu, tránh gắn "bốc thăm" lên bảng trống.)
                 keys = [group_sort_key(x, tied_ids) for x in tied_group]
                 for k in range(len(tied_group)):
                     dup = any(keys[k] == keys[o] for o in range(len(tied_group)) if o != k)
@@ -947,6 +965,7 @@ RUBBER_CODES = {
     "WS": ("Đơn Nữ", ("female",)),
 }
 TEAM_SCORINGS = ("match_points", "cumulative")
+TEAM_RANKINGS = ("tie_points", "point_diff")
 STAGE_KEYS = ("leg1", "leg2", "knockout")
 STAGE_LABELS = {"leg1": "Lượt đi / Vòng bảng", "leg2": "Lượt về", "knockout": "Vòng loại trực tiếp"}
 GENDER_LABELS = {"male": "Nam", "female": "Nữ", "other": "Khác"}
@@ -1007,8 +1026,12 @@ def normalize_team_rules(raw: Optional[Dict]) -> Dict:
             v = None
         return v if v and v >= 1 else None
 
+    # Cách xếp hạng vòng bảng (mẫu FIS 2026-10-26): "tie_points" = điểm bảng theo trận đồng đội thắng (điều lệ
+    # PA1/PA2, mặc định); "point_diff" = tổng hiệu số điểm trận thành phần → điểm ghi → đối đầu (kiểu Davis Cup)
+    ranking = raw.get("ranking") if raw.get("ranking") in TEAM_RANKINGS else "tie_points"
     return {
         "scoring": scoring,
+        "ranking": ranking,
         "rubbers": rubbers,
         "points_per_rubber": ppr,
         "win_by_two": bool(raw.get("win_by_two", True)),
@@ -1325,3 +1348,69 @@ def team_draw_plan(people: List[Dict], team_ids: List[int], rules) -> Dict:
         "team_ids": [int(t) for t in team_ids],
         "estimated": any(r["per_team"] is not None for r in rules),
     }
+
+
+def team_standings_breakdown(matches: List[Dict], participants: List[Dict], rules: Dict) -> Dict[int, Dict]:
+    """Phân tích BXH giải đồng đội theo THỂ LOẠI / LƯỢT / TỪNG CẶP ĐẤU (mẫu FIS + yêu cầu 2026-10-23).
+    matches: dict có p1_id, p2_id, status, winner_id, is_walkover, id, round_name, stage_key ("leg1"|"leg2"|...),
+    rubbers: [{label, code, status, score1, score2, start1, start2}]. Chỉ tính trận thành phần đã kết thúc; PA2 trừ điểm
+    xuất phát để ra điểm ghi trong trận đó. Trả {participant_id: {by_category, by_leg, h2h}}."""
+    cumulative = rules.get("scoring") == "cumulative"
+    labels = [r["label"] for r in rules.get("rubbers", [])]
+    names = {p["id"]: (p.get("team_name") or p.get("full_name") or "") for p in participants}
+
+    def new_cat():
+        return {"played": 0, "won": 0, "lost": 0, "pts_for": 0, "pts_against": 0}
+
+    def new_leg():
+        return {"ties_played": 0, "ties_won": 0, "rubbers_won": 0, "rubbers_lost": 0, "pts_for": 0, "pts_against": 0}
+
+    out: Dict[int, Dict] = {
+        p["id"]: {"by_category": {lb: new_cat() for lb in labels}, "by_leg": {}, "h2h": {}} for p in participants
+    }
+    for m in matches:
+        p1, p2 = m.get("p1_id"), m.get("p2_id")
+        if p1 not in out or p2 not in out:
+            continue
+        leg = m.get("stage_key") or "leg1"
+        done_tie = m.get("status") == "completed"
+        for me, opp in ((p1, p2), (p2, p1)):
+            row = out[me]
+            lg = row["by_leg"].setdefault(leg, new_leg())
+            entry = row["h2h"].setdefault(opp, {"opponent_id": opp, "opponent_name": names.get(opp, ""), "legs": {}})
+            res = None
+            if done_tie:
+                lg["ties_played"] += 1
+                if m.get("winner_id") == me:
+                    lg["ties_won"] += 1; res = "W"
+                elif m.get("winner_id") == opp:
+                    res = "L"
+            rub_rows = []
+            for r in m.get("rubbers") or []:
+                s1, s2 = int(r.get("score1") or 0), int(r.get("score2") or 0)
+                if cumulative:
+                    s1 -= int(r.get("start1") or 0); s2 -= int(r.get("start2") or 0)
+                mine, theirs = (s1, s2) if me == p1 else (s2, s1)
+                finished = r.get("status") == "completed"
+                win = finished and mine > theirs
+                rub_rows.append({"label": r.get("label"), "code": r.get("code"), "for": mine if finished else None,
+                                 "against": theirs if finished else None, "win": win if finished else None,
+                                 "walkover": bool(r.get("is_walkover"))})
+                if not finished:
+                    continue
+                cat = row["by_category"].setdefault(r.get("label"), new_cat())
+                cat["played"] += 1; cat["pts_for"] += mine; cat["pts_against"] += theirs
+                lg["pts_for"] += mine; lg["pts_against"] += theirs
+                if win:
+                    cat["won"] += 1; lg["rubbers_won"] += 1
+                elif theirs > mine:
+                    cat["lost"] += 1; lg["rubbers_lost"] += 1
+            my_score, opp_score = (m.get("score1"), m.get("score2")) if me == p1 else (m.get("score2"), m.get("score1"))
+            entry["legs"][leg] = {
+                "match_id": m.get("id"), "round_name": m.get("round_name"), "status": m.get("status"),
+                "result": res, "is_walkover": bool(m.get("is_walkover")),
+                "score_for": my_score, "score_against": opp_score, "rubbers": rub_rows,
+            }
+    for row in out.values():
+        row["h2h"] = sorted(row["h2h"].values(), key=lambda x: (x["opponent_name"], x["opponent_id"]))
+    return out

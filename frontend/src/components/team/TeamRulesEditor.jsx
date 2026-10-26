@@ -129,6 +129,14 @@ export default function TeamRulesEditor({ value, onChange, disabled = false }) {
         </Space>
       </div>
 
+      <div style={{ marginBottom: 8 }}>
+        <Text style={{ marginRight: 8 }}>Xếp hạng vòng bảng</Text>
+        <Radio.Group value={rules.ranking === "point_diff" ? "point_diff" : "tie_points"} disabled={disabled}
+          onChange={(e) => emit({ ranking: e.target.value })}>
+          <Radio value="tie_points">Theo trận đồng đội thắng <Text type="secondary">(điều lệ PA1/PA2)</Text></Radio>
+          <Radio value="point_diff">Theo tổng hiệu số điểm trận thành phần <Text type="secondary">(kiểu FIS / Davis Cup: hiệu số → điểm ghi → đối đầu)</Text></Radio>
+        </Radio.Group>
+      </div>
       <Space size={6} wrap style={{ marginBottom: 8 }}>
         <Text>Sĩ số đội tối đa</Text>
         <InputNumber min={1} max={99} placeholder="—" value={rules.max_male ?? null} disabled={disabled} style={{ width: 64 }}

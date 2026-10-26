@@ -26,6 +26,11 @@ export const SCORING_LABELS = {
   match_points: "Tính theo trận thành phần (PA1)",
   cumulative: "Điểm nối tiếp (PA2)",
 };
+export const RANKING_LABELS = {
+  tie_points: "Điểm bảng theo trận đồng đội thắng (điều lệ PA1/PA2)",
+  point_diff: "Tổng hiệu số điểm trận thành phần → điểm ghi → đối đầu (kiểu FIS / Davis Cup)",
+};
+export const RANKING_SHORT = { tie_points: "theo trận đồng đội", point_diff: "theo hiệu số điểm" };
 export const SCORING_SHORT = { match_points: "PA1 · theo trận", cumulative: "PA2 · nối tiếp" };
 
 export const TEAM_TYPE_LABELS = { singles: "Đấu đơn", doubles: "Đấu đôi", team: "Đồng đội" };
@@ -85,6 +90,7 @@ export const defaultRubbers = () => RUBBER_CODE_LIST.map((code) => ({ code, labe
 export function normalizeTeamRules(raw) {
   const r = raw || {};
   const scoring = r.scoring === "cumulative" ? "cumulative" : "match_points";
+  const ranking = r.ranking === "point_diff" ? "point_diff" : "tie_points";   // cách xếp hạng vòng bảng (mẫu FIS)
   const ppr = Math.max(1, Math.min(99, toInt(r.points_per_rubber, 11) || 11));
   const rubbers = autoLabelRubbers(r.rubbers && r.rubbers.length ? r.rubbers : defaultRubbers());
   if (!rubbers.length) throw new Error("Cần ít nhất 1 trận thành phần");
@@ -96,6 +102,7 @@ export function normalizeTeamRules(raw) {
   }
   return {
     scoring,
+    ranking,
     rubbers,
     points_per_rubber: ppr,
     win_by_two: r.win_by_two === undefined ? true : !!r.win_by_two,

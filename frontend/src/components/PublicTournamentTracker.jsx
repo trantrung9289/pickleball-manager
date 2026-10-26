@@ -18,6 +18,7 @@ import { tieScoreText } from "../utils/teamLabels";
 import { indexTeamPlayers, normalizeTeamRules, rubberTotals } from "../utils/teamFormat";
 import TeamOverviewPanel from "./team/TeamOverviewPanel";
 import TeamStatsTable from "./team/TeamStatsTable";
+import TeamStandingsTable from "./team/TeamStandingsTable";
 import TieRubbersInline from "./team/TieRubbersInline";
 import {
   serverOffset, verifyDraw, verifyPartnerDraw, partnerLabelForStep, partnerDrawFinished, partnerDrawStuck,
@@ -306,7 +307,19 @@ function RoundedSchedule({ matches, columns, mobileProps }) {
   );
 }
 
-function StandingsTable({ tournament, group, api }) {
+function StandingsTable({ tournament, group, api, onOpenMatch }) {
+  if (tournament.team_type === "team") return <TeamStandingsWrapper tournament={tournament} group={group} api={api} onOpenMatch={onOpenMatch} />;
+  return <PlainStandingsTable tournament={tournament} group={group} api={api} />;
+}
+
+// Giải đồng đội: bảng theo thể loại / lượt / từng cặp đấu (mẫu FIS) — dùng chung component với trang quản trị
+function TeamStandingsWrapper({ tournament, group, api, onOpenMatch }) {
+  const rules = useMemo(() => { try { return normalizeTeamRules(tournament.team_rules); } catch { return null; } }, [tournament.team_rules]);
+  const fetchStandings = useCallback((g, leg) => api.tournaments.standings(tournament.id, g || undefined, leg || undefined), [api, tournament.id]);
+  return <TeamStandingsTable tournament={tournament} rules={rules} group={group} fetchStandings={fetchStandings} onOpenMatch={onOpenMatch} />;
+}
+
+function PlainStandingsTable({ tournament, group, api }) {
   const [rows, setRows] = useState([]);
   const doneCount = tournament.matches?.filter(m => m.status === "completed").length ?? 0;
   const isTeam = tournament.team_type === "team";
@@ -599,7 +612,7 @@ function TournamentContent({ tournament, api, onScored }) {
       tabItems.push({
         key: "standings",
         label: "Bảng xếp hạng",
-        children: <StandingsTable tournament={tournament} api={api} />,
+        children: <StandingsTable tournament={tournament} api={api} onOpenMatch={bracketOpen} />,
       });
     }
   }
@@ -636,7 +649,7 @@ function TournamentContent({ tournament, api, onScored }) {
                   style={{ marginBottom: 16 }}
                   {...mobileProps}
                 />
-                <StandingsTable tournament={tournament} group={g} api={api} />
+                <StandingsTable tournament={tournament} group={g} api={api} onOpenMatch={bracketOpen} />
               </>
             ),
           }))}
