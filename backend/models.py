@@ -224,7 +224,7 @@ class Tournament(Base):
     score_pin_hash = Column(String(100), nullable=True)          # hash mã PIN 4 số — cho phép nhập điểm qua public
     public_scoring_enabled = Column(Boolean, default=False)      # công tắc bật/tắt, độc lập với việc đã có PIN
     third_place_enabled = Column(Boolean, default=False)         # có trận tranh giải 3 (knockout/combined) không
-    # Mẫu FIS (2026-10-26): tranh hạng 5-6 (hạng Ba bảng A gặp hạng Ba bảng B) và 7-8 (hạng Tư) — chỉ combined 2 bảng,
+    # 2026-10-26: tranh hạng 5-6 (hạng Ba bảng A gặp hạng Ba bảng B) và 7-8 (hạng Tư) — chỉ combined 2 bảng,
     # tạo khi "Lên vòng loại trực tiếp"
     placement_matches_enabled = Column(Boolean, default=False)
     # Thể thức ĐỒNG ĐỘI (team_type="team"): cách tính điểm, mẫu trận thành phần, điểm/trận, mốc tổng...
@@ -349,7 +349,7 @@ class TournamentMatch(Base):
     loser_next_match_slot = Column(Integer, nullable=True)  # 1 or 2
     # Giải đồng đội: seed xáo thứ tự trận thành phần của trận này (NULL = chưa bốc thăm thứ tự)
     rubber_draw_seed = Column(String(64), nullable=True)
-    # Giải đồng đội: ghi chú của BTC cho trận này (xử thua, đổi sân, sự cố...) — hiện cả trên public (mẫu FIS)
+    # Giải đồng đội: ghi chú của BTC cho trận này (xử thua, đổi sân, sự cố...) — hiện cả trên public
     btc_note = Column(Text, nullable=True)
 
     tournament = relationship("Tournament", back_populates="matches")
@@ -649,7 +649,7 @@ class TournamentTieRubber(Base):
     is_walkover = Column(Boolean, default=False, nullable=False)
     start1 = Column(Integer, default=0, nullable=False)     # điểm xuất phát (PA2 cộng dồn); PA1 luôn 0
     start2 = Column(Integer, default=0, nullable=False)
-    court = Column(String(30), nullable=True)               # sân thi đấu của trận thành phần (mẫu FIS, 2026-10-26)
+    court = Column(String(30), nullable=True)               # sân thi đấu của trận thành phần (2026-10-26)
     created_at = Column(DateTime, nullable=True)
 
     match = relationship("TournamentMatch", back_populates="rubbers")

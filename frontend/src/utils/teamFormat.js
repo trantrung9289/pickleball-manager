@@ -9,7 +9,7 @@ export const RUBBER_CODES = {
   XD: { name: "Đôi Nam Nữ", genders: ["male", "female"] },
   MS: { name: "Đơn Nam", genders: ["male"] },
   WS: { name: "Đơn Nữ", genders: ["female"] },
-  FD: { name: "Đôi tự do", genders: ["any", "any"] },   // mẫu FIS "Đôi LĐ + CBNV": 2 VĐV bất kỳ giới
+  FD: { name: "Đôi tự do", genders: ["any", "any"] },   // 2 VĐV bất kỳ giới
 };
 export const RUBBER_CODE_LIST = ["MD", "WD", "XD", "MS", "WS", "FD"];
 export const DEFAULT_RUBBER_CODES = ["MD", "WD", "XD", "MS", "WS"];
@@ -30,7 +30,7 @@ export const SCORING_LABELS = {
 };
 export const RANKING_LABELS = {
   tie_points: "Điểm bảng theo trận đồng đội thắng (điều lệ PA1/PA2)",
-  point_diff: "Tổng hiệu số điểm trận thành phần → điểm ghi → đối đầu (kiểu FIS / Davis Cup)",
+  point_diff: "Tổng hiệu số điểm trận thành phần → điểm ghi → đối đầu",
 };
 export const RANKING_SHORT = { tie_points: "theo trận đồng đội", point_diff: "theo hiệu số điểm" };
 export const SCORING_SHORT = { match_points: "PA1 · theo trận", cumulative: "PA2 · nối tiếp" };
@@ -92,12 +92,12 @@ export const defaultRubbers = () => DEFAULT_RUBBER_CODES.map((code) => ({ code, 
 export function normalizeTeamRules(raw) {
   const r = raw || {};
   const scoring = r.scoring === "cumulative" ? "cumulative" : "match_points";
-  const ranking = r.ranking === "point_diff" ? "point_diff" : "tie_points";   // cách xếp hạng vòng bảng (mẫu FIS)
+  const ranking = r.ranking === "point_diff" ? "point_diff" : "tie_points";   // cách xếp hạng vòng bảng
   const ppr = Math.max(1, Math.min(99, toInt(r.points_per_rubber, 11) || 11));
   const rubbers = autoLabelRubbers(r.rubbers && r.rubbers.length ? r.rubbers : defaultRubbers());
   if (!rubbers.length) throw new Error("Cần ít nhất 1 trận thành phần");
   if (rubbers.length > 20) throw new Error("Tối đa 20 trận thành phần");
-  // Mẫu FIS: vòng loại trực tiếp có thể dùng bộ thể thức riêng (null = dùng chung) và cách kết thúc riêng
+  // Vòng loại trực tiếp có thể dùng bộ thể thức riêng (null = dùng chung) và cách kết thúc riêng
   const knockout_rubbers = r.knockout_rubbers && r.knockout_rubbers.length ? autoLabelRubbers(r.knockout_rubbers) : null;
   const knockout_play_all = r.knockout_play_all === undefined || r.knockout_play_all === null ? null : !!r.knockout_play_all;
   const n = rubbers.length;
@@ -116,7 +116,7 @@ export function normalizeTeamRules(raw) {
     play_all: r.play_all === undefined ? true : !!r.play_all,
     knockout_rubbers,
     knockout_play_all,
-    // Sĩ số đội tối đa (mẫu FIS "8 nam 2 nữ"): null = không giới hạn; chỉ cảnh báo, không chặn — như backend
+    // Sĩ số đội tối đa (ví dụ "8 nam 2 nữ"): null = không giới hạn; chỉ cảnh báo, không chặn — như backend
     max_male: capOrNull(r.max_male),
     max_female: capOrNull(r.max_female),
     max_players: capOrNull(r.max_players),
@@ -253,7 +253,7 @@ export function teamRosterWarnings(rules, players) {
   return out;
 }
 
-/** Chữ sĩ số đội kiểu FIS: "3 VĐV · 2/8 Nam · 1/2 Nữ" (có trần) hoặc "3 VĐV · 2 Nam · 1 Nữ" (không trần). */
+/** Chữ sĩ số đội: "3 VĐV · 2/8 Nam · 1/2 Nữ" (có trần) hoặc "3 VĐV · 2 Nam · 1 Nữ" (không trần). */
 export function rosterCountText(rules, players) {
   const g = countGenders(players);
   const n = (players || []).length;

@@ -1,4 +1,4 @@
-"""Mẫu FIS đợt 2 (2026-10-26): sân cho từng trận thành phần, ghi chú BTC cho trận đồng đội, sĩ số đội trong team_rules."""
+"""Đợt 2 (2026-10-26): sân cho từng trận thành phần, ghi chú BTC cho trận đồng đội, sĩ số đội trong team_rules."""
 import tournament_engine as eng
 from tests.test_batch19_team_format import _create_team_tournament, _two_teams, _h
 

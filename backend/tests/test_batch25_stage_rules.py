@@ -1,4 +1,4 @@
-"""Mẫu FIS đợt 4 (2026-10-26): thể loại Đôi tự do (FD), bộ thể thức riêng cho vòng loại trực tiếp, dừng khi thắng quá nửa,
+"""Đợt 4 (2026-10-26): thể loại Đôi tự do (FD), bộ thể thức riêng cho vòng loại trực tiếp, dừng khi thắng quá nửa,
 tranh hạng 5-6 / 7-8 cho thể thức kết hợp 2 bảng."""
 import tournament_engine as eng
 from tests.test_batch14_third_place_toggle import _create, _score, _h as _h14

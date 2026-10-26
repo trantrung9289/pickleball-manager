@@ -1,4 +1,4 @@
-// Hàm thuần cho TỔNG QUAN / THỐNG KÊ giải đồng đội (đợt 1 áp dụng mẫu FIS 2026-10-26).
+// Hàm thuần cho TỔNG QUAN / THỐNG KÊ giải đồng đội (đợt 1, 2026-10-26).
 // Không import antd/React để chạy được bằng `node --test src/utils/`. Chỉ đọc dữ liệu đã có trong
 // TournamentOut / PublicTournamentOut (matches[].rubbers, participants, team_players) — không cần API mới.
 import { rubberTotals } from "./teamFormat.js";
@@ -94,13 +94,13 @@ export function finalPlacements(matches) {
   return out.length ? out : null;
 }
 
-/** Số trận (vòng bảng) của một đội trong bảng: đã đấu / tổng — cột "Lượt đủ" kiểu FIS. */
+/** Số trận (vòng bảng) của một đội trong bảng: đã đấu / tổng — cột "Lượt đủ". */
 export function teamRoundsPlayed(matches, pid) {
   const mine = (matches || []).filter((m) => m.phase !== "knockout" && (m.p1_id === pid || m.p2_id === pid) && m.p1_id && m.p2_id);
   return { played: mine.filter((m) => m.status === "completed").length, total: mine.length };
 }
 
-const RANKING_LINE_FIS = "Xếp hạng (kiểu FIS): tổng hiệu số điểm các trận thành phần → tổng điểm ghi được → hiệu số điểm đối đầu → điểm ghi đối đầu; vẫn bằng → ban tổ chức đánh tie-break / bốc thăm.";
+const RANKING_LINE_POINT_DIFF = "Xếp hạng theo hiệu số điểm: tổng hiệu số điểm các trận thành phần → tổng điểm ghi được → hiệu số điểm đối đầu → điểm ghi đối đầu; vẫn bằng → ban tổ chức đánh tie-break / bốc thăm.";
 const FORMAT_TEXT = {
   round_robin: "vòng tròn một lượt", round_robin_double: "vòng tròn hai lượt", knockout: "loại trực tiếp",
   combined: "vòng bảng rồi loại trực tiếp", individual: "thi đấu riêng lẻ",
@@ -129,13 +129,13 @@ export function teamRuleSummary(tournament, rules) {
   if (rules?.scoring === "cumulative") {
     lines.push(`Tính điểm cộng dồn (PA2): mỗi trận thành phần ${rules.points_per_rubber} điểm${rules.win_by_two ? ", cách biệt 2" : ""}; `
       + `đội chạm mốc tổng ${rules.target_total} điểm trước thắng trận đồng đội, các trận còn lại không cần đấu.`);
-    if (rules?.ranking === "point_diff") lines.push(RANKING_LINE_FIS);
+    if (rules?.ranking === "point_diff") lines.push(RANKING_LINE_POINT_DIFF);
     else lines.push("Xếp hạng: điểm bảng (1 điểm/trận đồng đội thắng) → hiệu số tổng điểm tích luỹ → đối đầu trực tiếp → bốc thăm.");
   } else {
     lines.push(`Mỗi trận thành phần chạm ${rules?.points_per_rubber ?? 11} điểm${rules?.win_by_two ? ", cách biệt 2" : ", không cần cách biệt"}; `
       + `${rules?.play_all ? "đánh hết các trận thành phần" : "dừng khi một đội thắng quá nửa số trận"}.`);
     lines.push("Đội thắng nhiều trận thành phần hơn thắng trận đồng đội; hoà số trận → hiệu số điểm → đội thắng trận thành phần cuối.");
-    if (rules?.ranking === "point_diff") lines.push(RANKING_LINE_FIS);
+    if (rules?.ranking === "point_diff") lines.push(RANKING_LINE_POINT_DIFF);
     else lines.push("Xếp hạng: điểm bảng (1 điểm/trận đồng đội thắng) → đối đầu trực tiếp → hiệu số trận thành phần → hiệu số điểm → bốc thăm.");
   }
   lines.push(`Mỗi VĐV tối đa ${rules?.max_rubbers_per_player ?? 2} trận thành phần trong một trận đồng đội (quá giới hạn chỉ cảnh báo).`);

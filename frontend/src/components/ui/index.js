@@ -3,3 +3,4 @@ export { default as StatusChip } from "./StatusChip";
 export { default as StatCard } from "./StatCard";
 export { default as ScoreBox } from "./ScoreBox";
 export { default as MatchScoreCell } from "./MatchScoreCell";
+export { groupColor, matchCardStyle } from "./groupColor";

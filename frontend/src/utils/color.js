@@ -1,6 +1,6 @@
 // Hàm thuần về màu — lớp 1 đổi giao diện (2026-10-26). Không import React/antd để chạy được bằng node --test.
 // Một màu thương hiệu → bộ biến: brand (đủ tương phản 4.5 với chữ trắng), brandStrong (chữ trên nền nhạt),
-// brandSoft (nền chip), brandHover. Bảng màu ngữ nghĩa cố định (mẫu FIS, đã chỉnh tương phản) cho sáng / tối.
+// brandSoft (nền chip), brandHover. Bảng màu ngữ nghĩa cố định (đã chỉnh tương phản) cho sáng / tối.
 
 export const DEFAULT_BRAND = "#1F8A52";   // xanh lá CLB, tối hơn #27A063 một bậc để chữ trắng đạt ≥ 4.5
 
@@ -59,7 +59,7 @@ function ensureContrastLight(hex, bg, min = 4.5) {
   return c;
 }
 
-/** Màu ngữ nghĩa (mẫu FIS, đã chỉnh để chữ "strong" trên nền "soft" ≥ 4.5 và chữ trắng trên màu chính ≥ 4.5). */
+/** Màu ngữ nghĩa (đã chỉnh để chữ "strong" trên nền "soft" ≥ 4.5 và chữ trắng trên màu chính ≥ 4.5). */
 export const SEMANTIC = {
   light: {
     ok: "#0B7A3A", okSoft: "#E6F5EC", okStrong: "#067A35",
@@ -95,6 +95,6 @@ export function cssVariables(brandColor, dark = false) {
 
 /** Bảng màu gợi ý trong bộ chọn màu thương hiệu. */
 export const BRAND_PRESETS = [
-  { label: "Xanh lá (mặc định)", value: DEFAULT_BRAND }, { label: "Cam FIS", value: "#EC671C" }, { label: "Xanh dương", value: "#0065B3" },
+  { label: "Xanh lá (mặc định)", value: DEFAULT_BRAND }, { label: "Cam", value: "#EC671C" }, { label: "Xanh dương", value: "#0065B3" },
   { label: "Tím", value: "#6D28D9" }, { label: "Đỏ", value: "#B42318" }, { label: "Xanh ngọc", value: "#0F766E" }, { label: "Xám than", value: "#334155" },
 ];

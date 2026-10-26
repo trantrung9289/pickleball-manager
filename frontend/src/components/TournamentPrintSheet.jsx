@@ -155,7 +155,7 @@ const signed = (v) => (v > 0 ? `+${v}` : `${v ?? 0}`);
 
 function StandingsShell({ rows, isTeam, pointDiff = false }) {
   if (!rows) return null;
-  // Xếp hạng kiểu FIS (point_diff): cột "Điểm" bảng không còn ý nghĩa → thay bằng Đ.ghi (điểm ghi được)
+  // Xếp hạng theo hiệu số điểm (point_diff): cột "Điểm" bảng không còn ý nghĩa → thay bằng Đ.ghi (điểm ghi được)
   const cols = isTeam ? (pointDiff ? TEAM_STANDINGS_COLS.map((c) => (c.label === "Điểm" ? { label: "Đ.ghi", width: 40 } : c)) : TEAM_STANDINGS_COLS) : STANDINGS_COLS;
   return (
     <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>

@@ -1,4 +1,4 @@
-"""Mẫu FIS đợt 5 (2026-10-26): nhập đội + VĐV cấp giải từ Excel, xuất kết quả Excel."""
+"""Đợt 5 (2026-10-26): nhập đội + VĐV cấp giải từ Excel, xuất kết quả Excel."""
 import io
 import openpyxl
 from tests.test_batch19_team_format import _create_team_tournament, _h

@@ -1,5 +1,5 @@
 /**
- * ScoreBox — cặp ô tỉ số lớn (lớp 2, mẫu FIS): bên thắng nền nhạt màu nhấn + chữ đậm, bên thua nền xám; chưa đấu "–".
+ * ScoreBox — cặp ô tỉ số lớn (lớp 2): bên thắng nền nhạt màu nhấn + chữ đậm, bên thua nền xám; chưa đấu "–".
  * Props: { a, b, winner (1|2|null), size: "lg"|"md"|"sm", live?: bool (viền chấm xanh dương), walkover?: bool }
  */
 import StatusChip from "./StatusChip";

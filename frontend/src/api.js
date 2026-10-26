@@ -122,7 +122,7 @@ export const playersApi = {
 };
 
 export const tournamentsApi = {
-  exportExcel: (tid) => api.get(`/api/tournaments/${tid}/export.xlsx`, { responseType: "blob" }),   // kết quả giải (mẫu FIS)
+  exportExcel: (tid) => api.get(`/api/tournaments/${tid}/export.xlsx`, { responseType: "blob" }),   // kết quả giải
   list: () => api.get("/api/tournaments"),
   get: (id) => api.get(`/api/tournaments/${id}`),
   create: (data) => api.post("/api/tournaments", data),

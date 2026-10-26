@@ -20,7 +20,7 @@ import TeamOverviewPanel from "./team/TeamOverviewPanel";
 import TeamStatsTable from "./team/TeamStatsTable";
 import TeamStandingsTable from "./team/TeamStandingsTable";
 import { isSideMatch } from "../utils/bracketLayout";
-import { MatchScoreCell, StatusChip } from "./ui";
+import { MatchScoreCell, StatusChip, matchCardStyle } from "./ui";
 import TieRubbersInline from "./team/TieRubbersInline";
 import {
   serverOffset, verifyDraw, verifyPartnerDraw, partnerLabelForStep, partnerDrawFinished, partnerDrawStuck,
@@ -295,7 +295,7 @@ function RoundedSchedule({ matches, columns, mobileProps }) {
   const mainMatches = matches.filter(m => !isSideMatch(m));
   const rounds = [...new Set(mainMatches.map(m => m.round_number))].sort((a, b) => a - b);
   const roundCols = columns.filter(c => c.dataIndex !== "round_name");
-  // Mẫu FIS: lọc nhanh các vòng còn thiếu kết quả
+  // lọc nhanh các vòng còn thiếu kết quả
   const [onlyPending, setOnlyPending] = useState(false);
   const byRound = [
     ...rounds.map(r => ({ r, rMatches: mainMatches.filter(m => m.round_number === r) })),
@@ -325,7 +325,7 @@ function RoundedSchedule({ matches, columns, mobileProps }) {
               columns={roundCols}
               dataSource={rMatches}
               rowKey="id" size="small" pagination={false}
-              {...mobileProps}
+              {...mobileProps} mobileCardStyle={matchCardStyle}
             />
           </Card>
         );
@@ -339,7 +339,7 @@ function StandingsTable({ tournament, group, api, onOpenMatch }) {
   return <PlainStandingsTable tournament={tournament} group={group} api={api} />;
 }
 
-// Giải đồng đội: bảng theo thể loại / lượt / từng cặp đấu (mẫu FIS) — dùng chung component với trang quản trị
+// Giải đồng đội: bảng theo thể loại / lượt / từng cặp đấu — dùng chung component với trang quản trị
 function TeamStandingsWrapper({ tournament, group, api, onOpenMatch }) {
   const rules = useMemo(() => { try { return normalizeTeamRules(tournament.team_rules); } catch { return null; } }, [tournament.team_rules]);
   const fetchStandings = useCallback((g, leg) => api.tournaments.standings(tournament.id, g || undefined, leg || undefined), [api, tournament.id]);
@@ -606,7 +606,7 @@ function TournamentContent({ tournament, api, onScored }) {
   );
   const bracketOpen = isTeam ? setTieMatch : undefined;
   const tabItems = [];
-  // Giải đồng đội đã có lịch: tab Tổng quan đứng đầu (mẫu FIS) — dùng chung component với trang quản trị
+  // Giải đồng đội đã có lịch: tab Tổng quan đứng đầu — dùng chung component với trang quản trị
   const teamRulesNorm = isTeam ? (() => { try { return normalizeTeamRules(tournament.team_rules); } catch { return null; } })() : null;
   const fetchStandings = useCallback((g) => api.tournaments.standings(tournament.id, g || undefined), [api, tournament.id]);
   if (isTeam && teamRulesNorm && matches.length > 0) {
@@ -663,7 +663,7 @@ function TournamentContent({ tournament, api, onScored }) {
                   dataSource={groupMatches.filter(m => m.group_name === g)}
                   rowKey="id" size="small" pagination={false}
                   style={{ marginBottom: 16 }}
-                  {...mobileProps}
+                  {...mobileProps} mobileCardStyle={matchCardStyle}
                 />
                 <StandingsTable tournament={tournament} group={g} api={api} onOpenMatch={bracketOpen} />
               </>
@@ -1383,7 +1383,7 @@ export default function PublicTournamentTracker({ api }) {
 
   return (
     <div>
-      {/* Lớp 3 (mẫu FIS): thanh chọn giải + trạng thái trực tiếp DÍNH đầu trang khi cuộn, nền surface + viền mờ */}
+      {/* Lớp 3: thanh chọn giải + trạng thái trực tiếp DÍNH đầu trang khi cuộn, nền surface + viền mờ */}
       <div style={{ position: "sticky", top: 0, zIndex: 20, background: "var(--surface)", margin: "-8px -8px 12px", padding: "8px 8px 6px", borderBottom: "1px solid var(--line)" }}>
       <Space wrap style={{ marginBottom: 8, width: "100%", justifyContent: "space-between" }}>
         <Select

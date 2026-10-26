@@ -137,7 +137,7 @@ def _run_migration():
         ("players", "gender", "VARCHAR(10)", None),
         ("tournaments", "team_rules", "JSON", None),
         ("tournament_matches", "rubber_draw_seed", "VARCHAR(64)", None),
-        # Mẫu FIS (2026-10-26): ghi chú BTC cho trận đồng đội + sân cho từng trận thành phần
+        # 2026-10-26: ghi chú BTC cho trận đồng đội + sân cho từng trận thành phần
         ("tournament_matches", "btc_note", "TEXT", None),
         ("tournament_tie_rubbers", "court", "VARCHAR(30)", None),
         # Bảng tournament_participants — trạng thái bỏ giải giữa chừng
@@ -3584,7 +3584,7 @@ def _standings_profile(t: "models.Tournament") -> str:
         return "default"
     rules = _team_rules(t)
     if rules.get("ranking") == "point_diff":
-        return "team_point_diff"      # mẫu FIS: tổng hiệu số điểm → điểm ghi → đối đầu
+        return "team_point_diff"      # mẫu tham chiếu: tổng hiệu số điểm → điểm ghi → đối đầu
     return "team_cumulative" if rules["scoring"] == "cumulative" else "team_match_points"
 
 
@@ -3856,7 +3856,7 @@ def _stage_key(db: Session, t: "models.Tournament", match: "models.TournamentMat
 
 
 def _match_rules(db: Session, t: "models.Tournament", match: "models.TournamentMatch") -> dict:
-    """Luật đồng đội áp cho MỘT trận: vòng loại trực tiếp có thể dùng bộ thể thức / cách kết thúc riêng (mẫu FIS).
+    """Luật đồng đội áp cho MỘT trận: vòng loại trực tiếp có thể dùng bộ thể thức / cách kết thúc riêng.
     Mọi chỗ tạo biên bản, tính kết quả, ghi điểm, xuất TieOut phải dùng hàm này thay cho _team_rules(t)."""
     return rules_for_stage(_team_rules(t), _stage_key(db, t, match))
 
@@ -4234,7 +4234,7 @@ def assign_tournament_team_players(tid: int, data: schemas.TeamPlayersAssignIn, 
     return {"updated": [_team_player_out(tp) for tp in updated], "pool_count": len(_team_pool(db, t))}
 
 
-# ── Mẫu FIS đợt 5 (2026-10-26): nhập đội + VĐV cấp giải từ Excel, xuất kết quả giải ra Excel ──
+# ── Đợt 5 (2026-10-26): nhập đội + VĐV cấp giải từ Excel, xuất kết quả giải ra Excel ──
 TEAM_IMPORT_HEADERS = ["Đội", "Họ và tên", "Giới tính", "Hạng", "Mã TV", "SĐT"]
 
 
@@ -4385,7 +4385,7 @@ def import_team_players_excel(tid: int, file: UploadFile = File(...), db: Sessio
 
 @app.get("/api/tournaments/{tid}/export.xlsx")
 def export_tournament_excel(tid: int, db: Session = Depends(get_db), perms: ClubPermissions = Depends(get_club_permission)):
-    """Xuất kết quả giải ra Excel (mẫu FIS): Tổng quan, Đội & VĐV (giải đồng đội), Trận đấu (+ trận thành phần),
+    """Xuất kết quả giải ra Excel: Tổng quan, Đội & VĐV (giải đồng đội), Trận đấu (+ trận thành phần),
     Xếp hạng từng bảng (kèm thể loại với giải đồng đội)."""
     perms.require_view()
     t = _get_club_tournament(db, tid, perms)
@@ -4846,7 +4846,7 @@ def set_rubber_players(tid: int, mid: int, rid: int, data: schemas.RubberPlayers
     _require_tie_playable(t, m)
     r = _get_rubber(m, rid)
     if data.court is not None:
-        # Sân thi đấu (mẫu FIS): đổi được cả khi đã có điểm, chỉ ghi log khi thật sự đổi
+        # Sân thi đấu: đổi được cả khi đã có điểm, chỉ ghi log khi thật sự đổi
         new_court = (data.court or "").strip()[:30] or None
         if new_court != r.court:
             r.court = new_court
@@ -4879,7 +4879,7 @@ def set_rubber_players(tid: int, mid: int, rid: int, data: schemas.RubberPlayers
 @app.put("/api/tournaments/{tid}/matches/{mid}/tie/note", response_model=schemas.TieOut)
 def set_tie_note(tid: int, mid: int, data: schemas.MatchNoteIn, db: Session = Depends(get_db),
                  perms: ClubPermissions = Depends(get_club_permission)):
-    """Ghi chú BTC cho một trận đồng đội (mẫu FIS): tự do, hiện ở biên bản admin, public, lịch và bản in.
+    """Ghi chú BTC cho một trận đồng đội: tự do, hiện ở biên bản admin, public, lịch và bản in.
     Không bị chặn bởi trạng thái trận (ghi được cả khi trận đã kết thúc / xử thua) — chỉ cần quyền sửa."""
     perms.require_edit()
     t = _get_club_tournament(db, tid, perms)
@@ -5988,7 +5988,7 @@ PLACEMENT_ROUND_NAMES = ("Tranh hạng 5-6", "Tranh hạng 7-8")
 
 
 def _maybe_add_placement_matches(db: Session, tid: int, t: "models.Tournament", group_standings: dict) -> None:
-    """Mẫu FIS (2026-10-26): tranh hạng 5-6 (hạng Ba bảng A gặp hạng Ba bảng B) và 7-8 (hạng Tư A gặp hạng Tư B)
+    """2026-10-26: tranh hạng 5-6 (hạng Ba bảng A gặp hạng Ba bảng B) và 7-8 (hạng Tư A gặp hạng Tư B)
     khi bật cờ và thể thức kết hợp có ĐÚNG 2 bảng. Tạo một lần lúc lên vòng loại trực tiếp, cùng round_number với
     chung kết, không nối vào cây (không next_match); thiếu đội ở hạng đó (bảng ít đội) thì bỏ trận đó."""
     if not getattr(t, "placement_matches_enabled", False):

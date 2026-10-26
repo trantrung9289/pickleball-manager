@@ -119,11 +119,11 @@ export default function TeamRulesEditor({ value, onChange, disabled = false }) {
         <Space size={6} style={{ marginBottom: 10 }}>
           <Switch size="small" checked={rules.play_all !== false} disabled={disabled} onChange={(v) => emit({ play_all: v })} />
           <Text>Đánh hết các trận thành phần</Text>
-          <Tooltip title="Tắt = dừng ngay khi một đội thắng quá nửa số trận (kiểu FIS: 'đội thắng 4/7 trận giành chiến thắng')"><Text type="secondary">?</Text></Tooltip>
+          <Tooltip title="Tắt = dừng ngay khi một đội thắng quá nửa số trận (ví dụ: đội thắng 4/7 trận giành chiến thắng)"><Text type="secondary">?</Text></Tooltip>
         </Space>
       )}
 
-      {/* Mẫu FIS: vòng loại trực tiếp dùng bộ thể thức riêng (vd vòng bảng 5 trận, chung kết 7 trận) */}
+      {/* Vòng loại trực tiếp dùng bộ thể thức riêng (vd vòng bảng 5 trận, chung kết 7 trận) */}
       <div style={{ border: "1px dashed #d9d9d9", borderRadius: 8, padding: "8px 12px", marginBottom: 12 }}>
         <Space size={6} wrap>
           <Switch size="small" checked={!!(rules.knockout_rubbers && rules.knockout_rubbers.length)} disabled={disabled}
@@ -180,7 +180,7 @@ export default function TeamRulesEditor({ value, onChange, disabled = false }) {
         <Radio.Group value={rules.ranking === "point_diff" ? "point_diff" : "tie_points"} disabled={disabled}
           onChange={(e) => emit({ ranking: e.target.value })}>
           <Radio value="tie_points">Theo trận đồng đội thắng <Text type="secondary">(điều lệ PA1/PA2)</Text></Radio>
-          <Radio value="point_diff">Theo tổng hiệu số điểm trận thành phần <Text type="secondary">(kiểu FIS / Davis Cup: hiệu số → điểm ghi → đối đầu)</Text></Radio>
+          <Radio value="point_diff">Theo tổng hiệu số điểm trận thành phần <Text type="secondary">(hiệu số → điểm ghi → đối đầu)</Text></Radio>
         </Radio.Group>
       </div>
       <Space size={6} wrap style={{ marginBottom: 8 }}>

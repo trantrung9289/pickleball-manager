@@ -1,5 +1,5 @@
 /**
- * TeamImportModal — nhập ĐỘI + VĐV cho giải đồng đội từ Excel (mẫu FIS đợt 5, 2026-10-26).
+ * TeamImportModal — nhập ĐỘI + VĐV cho giải đồng đội từ Excel (đợt 5, 2026-10-26).
  * Tải mẫu → điền → kéo thả; kết quả: số đội tạo, VĐV thêm, khách mời tạo, dòng bỏ qua / lỗi.
  * Props: { tid, onDone(result), onClose }
  */

@@ -68,7 +68,7 @@ export default function Dashboard() {
 
   const activeTournaments = tournaments.filter(t => t.status === "active").length;
   const totalTournaments = tournaments.length;
-  // Lớp 3 (mẫu FIS "cặp đấu chưa xong"): bảng việc còn tồn — gom từ dữ liệu đã có, không thêm API
+  // Lớp 3 (bảng điều khiển việc còn tồn): bảng việc còn tồn — gom từ dữ liệu đã có, không thêm API
   const todos = [];
   tournaments.filter(t => t.status === "active").forEach(t => {
     const ms = t.matches || [];

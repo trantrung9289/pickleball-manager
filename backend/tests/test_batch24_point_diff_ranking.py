@@ -1,4 +1,4 @@
-"""Mẫu FIS đợt 3 (2026-10-26): xếp hạng "point_diff" (hiệu số điểm → điểm ghi → đối đầu) + breakdown BXH theo thể loại /
+"""Đợt 3 (2026-10-26): xếp hạng "point_diff" (hiệu số điểm → điểm ghi → đối đầu) + breakdown BXH theo thể loại /
 lượt / từng cặp đấu + lọc theo lượt (gộp yêu cầu BXH 2026-10-23)."""
 import tournament_engine as eng
 from tests.test_batch19_team_format import _create_team_tournament, _two_teams, _h, _teams, _tie
@@ -11,7 +11,7 @@ def test_ranking_normalized_and_profile():
 
 
 def test_point_diff_profile_orders_by_points_diff_not_tie_wins():
-    # Đội 2 thắng 2 trận đồng đội sít sao, đội 1 thắng 1 trận đậm → FIS: đội 1 (hiệu số +20) trên đội 2 (+2)
+    # Đội 2 thắng 2 trận đồng đội sít sao, đội 1 thắng 1 trận đậm → point_diff: đội 1 (hiệu số +20) trên đội 2 (+2)
     ms = [_tie(1, 3, 3, 0, 33, 13), _tie(2, 1, 2, 1, 30, 29), _tie(2, 3, 2, 1, 31, 30)]
     rows = eng.compute_standings(ms, _teams(3), "A", profile="team_point_diff")
     assert [r["participant_id"] for r in rows] == [1, 2, 3]

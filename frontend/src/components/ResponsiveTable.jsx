@@ -24,6 +24,7 @@ export default function ResponsiveTable({
   mobileTitle,
   mobileHideColumns = [],
   mobileSummary,
+  mobileCardStyle,          // (record) => style thêm cho Card mobile (vd viền trái theo bảng đấu)
   ...rest
 }) {
   const { isMobileView } = useViewMode();
@@ -104,7 +105,8 @@ export default function ResponsiveTable({
               marginBottom: 10,
               borderRadius: 12,
               boxShadow: "0 1px 6px rgba(0,0,0,0.05)",
-              borderColor: selected ? "#1677ff" : undefined,
+              borderColor: selected ? "var(--brand)" : undefined,
+              ...(mobileCardStyle ? mobileCardStyle(record) : {}),
             }}
             styles={{ body: { padding: 12 } }}
           >

@@ -66,7 +66,7 @@ export default function StageLineupModal({ tournament, team, canEdit = false, on
   const lu = lineups[stage];
   const slots = drafts[stage] || {};
   const locked = !!lu?.locked;
-  const stageRules = rulesForStage(rules, stage);   // vòng loại trực tiếp có thể có bộ thể thức riêng (mẫu FIS)
+  const stageRules = rulesForStage(rules, stage);   // vòng loại trực tiếp có thể có bộ thể thức riêng
   const sides = stageRules.rubbers.map((r) => slots[r.label] || []);
   const over = overLimitIds(stageRules, sides);
   const counts = appearanceCounts(sides);

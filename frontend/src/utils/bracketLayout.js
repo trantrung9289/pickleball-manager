@@ -223,7 +223,7 @@ export function buildRealBracketNodes(matches) {
 }
 
 /** Trận tranh giải 3 (nếu có) + 2 trận bán kết đã "thua" vào đây, để hiển thị tên/điểm. */
-/** Trận "bên lề" cây thắng: Tranh giải 3 (đường thua) và Tranh hạng 5-6 / 7-8 (mẫu FIS, không nối cây). */
+/** Trận "bên lề" cây thắng: Tranh giải 3 (đường thua) và Tranh hạng 5-6 / 7-8 (mẫu tham chiếu, không nối cây). */
 export const isSideMatch = (m) => m?.round_name === "Tranh giải 3" || m?.round_name === "Tranh hạng 5-6" || m?.round_name === "Tranh hạng 7-8";
 /** Các trận tranh hạng 5-6 / 7-8 (nếu có), theo tên. */
 export const findPlacementMatches = (matches) => (matches || []).filter((m) => m.round_name === "Tranh hạng 5-6" || m.round_name === "Tranh hạng 7-8");

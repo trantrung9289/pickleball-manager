@@ -48,7 +48,7 @@ export default function TieSheetModal({ tournament, match, canEdit = false, onCl
   const [busy, setBusy] = useState(null);        // rid đang thao tác | "draw"
   const [inputs, setInputs] = useState({});      // rid → {s1, s2}
   const [pendingSides, setPendingSides] = useState({});   // `${rid}:${side}` → ids đang chọn dở (chưa đủ người)
-  const [courts, setCourts] = useState({});               // rid → sân đang gõ (lưu khi rời ô / Enter) — mẫu FIS
+  const [courts, setCourts] = useState({});               // rid → sân đang gõ (lưu khi rời ô / Enter)
   const [note, setNote] = useState("");                   // ghi chú BTC đang gõ
   const [noteDirty, setNoteDirty] = useState(false);
   const onUpdatedRef = useRef(onUpdated);
@@ -342,7 +342,7 @@ export default function TieSheetModal({ tournament, match, canEdit = false, onCl
             {rubbers.map(rubberCard)}
           </div>
 
-          {/* Ghi chú BTC (mẫu FIS): tự do, hiện cả trên public / lịch / bản in */}
+          {/* Ghi chú BTC: tự do, hiện cả trên public / lịch / bản in */}
           <Card size="small" title="Ghi chú BTC" style={{ marginTop: 12 }}
             extra={editable && noteDirty && <Button type="primary" size="small" loading={busy === "note"} onClick={saveNote}>Lưu ghi chú</Button>}>
             {editable ? (

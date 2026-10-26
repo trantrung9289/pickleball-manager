@@ -796,7 +796,7 @@ def compute_standings(
                 → hiệu số ĐIỂM NHỎ toàn bảng → (bốc thăm: giữ nguyên thứ tự, đánh dấu needs_draw).
       profile="team_cumulative" (điều lệ PA2): điểm bảng → hiệu số TỔNG ĐIỂM TÍCH LUỸ toàn bảng → đối đầu trực tiếp
                 → (bốc thăm).
-      profile="team_point_diff" (mẫu FIS / Davis Cup, 2026-10-26): KHÔNG xếp theo điểm bảng — tổng HIỆU SỐ ĐIỂM trận
+      profile="team_point_diff" (2026-10-26): KHÔNG xếp theo điểm bảng — tổng HIỆU SỐ ĐIỂM trận
                 thành phần toàn bảng → tổng ĐIỂM GHI → đối đầu trực tiếp (hiệu số điểm → điểm ghi giữa các đội bằng nhau)
                 → (bốc thăm / tie-break). `points` vẫn = số trận đồng đội thắng để hiển thị.
     """
@@ -898,14 +898,14 @@ def compute_standings(
             if won_h2h:
                 h_points += 1
         if profile == "team_point_diff":
-            return (-(h_pts_for - h_pts_against), -h_pts_for)   # FIS: hiệu số điểm đối đầu → điểm ghi đối đầu
+            return (-(h_pts_for - h_pts_against), -h_pts_for)   # point_diff: hiệu số điểm đối đầu → điểm ghi đối đầu
         if profile != "default":
             return (-h_points,)          # điều lệ: đối đầu trực tiếp chỉ xét kết quả thắng/thua
         return (-h_points, -(h_for - h_against), -h_for)
 
     def primary_key(x: Dict) -> tuple:
         if profile == "team_point_diff":
-            return (-x["pts_diff"], -x["pts_for"])   # FIS: không xếp theo điểm bảng
+            return (-x["pts_diff"], -x["pts_for"])   # point_diff: không xếp theo điểm bảng
         return (-x["points"],)
 
     def secondary_key(x: Dict) -> tuple:
@@ -921,9 +921,9 @@ def compute_standings(
         h2h = head_to_head_key(x["participant_id"], tied_ids)
         if profile == "team_cumulative":
             return secondary_key(x) + h2h     # PA2: hiệu số tích luỹ TRƯỚC, đối đầu SAU
-        return h2h + secondary_key(x)         # default & PA1 & FIS: đối đầu trước
+        return h2h + secondary_key(x)         # default & PA1 & point_diff: đối đầu trước
 
-    # Nhóm theo khoá chính (điểm bảng; FIS: hiệu số điểm + điểm ghi); trong mỗi nhóm bằng nhau áp tie-break theo profile.
+    # Nhóm theo khoá chính (điểm bảng; point_diff: hiệu số điểm + điểm ghi); trong mỗi nhóm bằng nhau áp tie-break theo profile.
     rows.sort(key=lambda x: primary_key(x) + secondary_key(x))
     ordered: List[Dict] = []
     i = 0
@@ -963,7 +963,7 @@ RUBBER_CODES = {
     "XD": ("Đôi Nam Nữ", ("male", "female")),
     "MS": ("Đơn Nam", ("male",)),
     "WS": ("Đơn Nữ", ("female",)),
-    "FD": ("Đôi tự do", ("any", "any")),   # mẫu FIS "Đôi LĐ + CBNV": 2 VĐV bất kỳ giới (2026-10-26)
+    "FD": ("Đôi tự do", ("any", "any")),   # 2 VĐV bất kỳ giới (2026-10-26)
 }
 DEFAULT_RUBBER_CODES = ("MD", "WD", "XD", "MS", "WS")
 TEAM_SCORINGS = ("match_points", "cumulative")
@@ -1026,7 +1026,7 @@ def normalize_team_rules(raw: Optional[Dict]) -> Dict:
         ppr = 11
     ppr = max(1, min(ppr, 99))
     rubbers = _normalize_rubber_list(raw.get("rubbers") or [{"code": c} for c in DEFAULT_RUBBER_CODES])
-    # Mẫu FIS (2026-10-26): vòng loại trực tiếp có thể dùng BỘ THỂ THỨC RIÊNG (vd vòng bảng 5 trận, chung kết 7 trận);
+    # 2026-10-26: vòng loại trực tiếp có thể dùng BỘ THỂ THỨC RIÊNG (vd vòng bảng 5 trận, chung kết 7 trận);
     # None = dùng chung bộ của vòng bảng. knockout_play_all: None = như vòng bảng.
     ko_raw = raw.get("knockout_rubbers")
     knockout_rubbers = _normalize_rubber_list(ko_raw) if ko_raw else None
@@ -1047,15 +1047,15 @@ def normalize_team_rules(raw: Optional[Dict]) -> Dict:
         max_per = 2
 
     def _cap(key: str):
-        # Sĩ số đội tối đa (mẫu FIS "8 nam 2 nữ"): None = không giới hạn; chỉ CẢNH BÁO ở UI, không chặn
+        # Sĩ số đội tối đa (ví dụ "8 nam 2 nữ"): None = không giới hạn; chỉ CẢNH BÁO ở UI, không chặn
         try:
             v = int(raw.get(key)) if raw.get(key) not in (None, "") else None
         except (TypeError, ValueError):
             v = None
         return v if v and v >= 1 else None
 
-    # Cách xếp hạng vòng bảng (mẫu FIS 2026-10-26): "tie_points" = điểm bảng theo trận đồng đội thắng (điều lệ
-    # PA1/PA2, mặc định); "point_diff" = tổng hiệu số điểm trận thành phần → điểm ghi → đối đầu (kiểu Davis Cup)
+    # Cách xếp hạng vòng bảng (2026-10-26): "tie_points" = điểm bảng theo trận đồng đội thắng (điều lệ
+    # PA1/PA2, mặc định); "point_diff" = tổng hiệu số điểm trận thành phần → điểm ghi → đối đầu
     ranking = raw.get("ranking") if raw.get("ranking") in TEAM_RANKINGS else "tie_points"
     return {
         "scoring": scoring,
@@ -1152,7 +1152,7 @@ def tie_result(rules: Dict, rubbers: List[Dict]) -> Dict:
     winner = None
     detail = f"Đang {wins1} – {wins2} trận"
     if not finished and decided and not rules.get("play_all", True):
-        # Mẫu FIS chung kết: "đội thắng quá nửa số trận giành chiến thắng" — các trận còn lại không cần đấu
+        # Chung kết kiểu thắng quá nửa: "đội thắng quá nửa số trận giành chiến thắng" — các trận còn lại không cần đấu
         winner = 1 if wins1 > wins2 else 2
         return {"score1": wins1, "score2": wins2, "winner_side": winner, "decided": True, "finished": True,
                 "detail": f"Thắng {max(wins1, wins2)} – {min(wins1, wins2)} trận (quá nửa, dừng sớm)", "next_start": (0, 0)}
@@ -1388,7 +1388,7 @@ def team_draw_plan(people: List[Dict], team_ids: List[int], rules) -> Dict:
 
 
 def team_standings_breakdown(matches: List[Dict], participants: List[Dict], rules: Dict) -> Dict[int, Dict]:
-    """Phân tích BXH giải đồng đội theo THỂ LOẠI / LƯỢT / TỪNG CẶP ĐẤU (mẫu FIS + yêu cầu 2026-10-23).
+    """Phân tích BXH giải đồng đội theo THỂ LOẠI / LƯỢT / TỪNG CẶP ĐẤU (yêu cầu 2026-10-23).
     matches: dict có p1_id, p2_id, status, winner_id, is_walkover, id, round_name, stage_key ("leg1"|"leg2"|...),
     rubbers: [{label, code, status, score1, score2, start1, start2}]. Chỉ tính trận thành phần đã kết thúc; PA2 trừ điểm
     xuất phát để ra điểm ghi trong trận đó. Trả {participant_id: {by_category, by_leg, h2h}}."""

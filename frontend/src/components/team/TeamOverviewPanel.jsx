@@ -1,5 +1,5 @@
 /**
- * TeamOverviewPanel — tab "Tổng quan" của giải đồng đội (admin & public), áp dụng mẫu bảng điểm FIS (2026-10-26):
+ * TeamOverviewPanel — tab "Tổng quan" của giải đồng đội (admin & public), (2026-10-26):
  * tiến độ trận đồng đội / trận thành phần / VĐV, danh sách "cặp đấu chưa xong" (bấm mở biên bản),
  * đội dẫn đầu từng bảng (từ API xếp hạng), kết quả chung cuộc, tóm tắt thể thức.
  * Props: { tournament, rules, fetchStandings(group|null) → Promise<rows>, onOpenMatch(m)?, isPublic? }

@@ -181,7 +181,7 @@ test("rubberTotals: trận chưa mở biên bản đếm theo thể thức, tr�
   assert.deepEqual(rubberTotals([], rules), { total: 0, done: 0, remaining: 0, perTie: 3 });
 });
 
-test("sĩ số đội tối đa (mẫu FIS): chuẩn hoá null/số, cảnh báo vượt trần, chữ đếm n/N", () => {
+test("sĩ số đội tối đa: chuẩn hoá null/số, cảnh báo vượt trần, chữ đếm n/N", () => {
   const r = normalizeTeamRules({ max_male: "8", max_female: 2, max_players: "", rubbers: [{ code: "MD" }] });
   assert.deepEqual([r.max_male, r.max_female, r.max_players], [8, 2, null]);
   assert.deepEqual([normalizeTeamRules(null).max_male, normalizeTeamRules({ max_male: 0 }).max_male, normalizeTeamRules({ max_male: "x" }).max_male], [null, null, null]);
@@ -200,7 +200,7 @@ test("normalizeTeamRules: ranking mặc định tie_points, point_diff giữ ngu
   assert.equal(normalizeTeamRules({ ranking: "x" }).ranking, "tie_points");
 });
 
-test("mẫu FIS đợt 4: Đôi tự do không ràng buộc giới; bộ thể thức vòng loại riêng + play_all theo giai đoạn", () => {
+test("mẫu tham chiếu đợt 4: Đôi tự do không ràng buộc giới; bộ thể thức vòng loại riêng + play_all theo giai đoạn", () => {
   assert.equal(genderIssue("FD", ["male", null]), "");
   const r = normalizeTeamRules({ scoring: "cumulative", points_per_rubber: 11, rubbers: [{ code: "MD" }, { code: "WD" }],
     knockout_rubbers: [{ code: "MD" }, { code: "WD" }, { code: "XD" }, { code: "FD" }], knockout_play_all: false });

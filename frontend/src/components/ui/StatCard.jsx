@@ -1,5 +1,5 @@
 /**
- * StatCard — ô số liệu dùng chung (lớp 2, mẫu FIS): nhãn nhỏ, số lớn, tuỳ chọn "/ tổng" + thanh tiến độ, dòng phụ.
+ * StatCard — ô số liệu dùng chung (lớp 2): nhãn nhỏ, số lớn, tuỳ chọn "/ tổng" + thanh tiến độ, dòng phụ.
  * tone đổi màu số: ok | warn | danger | info | brand | ink (mặc định). Không dùng antd Statistic để kiểm soát cỡ/màu theo token.
  * Props: { title, value, total?, note?, tone?, icon?, progress? (mặc định true khi có total), compact? }
  */

@@ -1,5 +1,5 @@
 /**
- * TeamStandingsTable — bảng xếp hạng GIẢI ĐỒNG ĐỘI (admin & public), mẫu FIS + yêu cầu 2026-10-23:
+ * TeamStandingsTable — bảng xếp hạng GIẢI ĐỒNG ĐỘI (admin & public), yêu cầu 2026-10-23:
  *  - cột theo từng THỂ LOẠI (thắng–thua trận thành phần), HS trận, HS điểm, điểm ghi/mất, điểm bảng;
  *  - chọn LƯỢT (cả giải / lượt đi / lượt về) với vòng tròn hai lượt — API /standings?leg=;
  *  - hàng mở rộng: từng CẶP ĐẤU với mỗi đối thủ, từng lượt, kết quả từng thể loại;
@@ -107,7 +107,7 @@ export default function TeamStandingsTable({ tournament, rules, group, fetchStan
       : []),
   ];
 
-  // In riêng bảng xếp hạng (mẫu FIS "In bảng xếp hạng"): mở cửa sổ mới chỉ có bảng này rồi gọi in
+  // In riêng bảng xếp hạng: mở cửa sổ mới chỉ có bảng này rồi gọi in
   const printStandings = () => {
     const esc = (v) => String(v ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
     const head = ["#", "Đội", "T.đấu", "Thắng", ...labels, "HS trận", "HS điểm", "Đ.ghi", "Đ.mất", ...(ranking === "tie_points" ? ["Điểm"] : [])];
@@ -136,7 +136,7 @@ table{border-collapse:collapse;width:100%}th,td{border:1px solid #bbb;padding:5p
       <Space wrap style={{ marginBottom: 8, justifyContent: "space-between", width: "100%" }}>
         <Text type="secondary" style={{ fontSize: 12 }}>
           {ranking === "point_diff"
-            ? "Xếp theo tổng hiệu số điểm trận thành phần → điểm ghi → đối đầu (kiểu FIS). Thắng = trận đồng đội thắng/đã đấu."
+            ? "Xếp theo tổng hiệu số điểm trận thành phần → điểm ghi → đối đầu. Thắng = trận đồng đội thắng/đã đấu."
             : "Xếp theo điểm bảng (1 điểm/trận đồng đội thắng) rồi tie-break điều lệ. Cột thể loại: trận thành phần thắng–thua."}
           {" "}Bấm vào hàng để xem từng cặp đấu.
         </Text>

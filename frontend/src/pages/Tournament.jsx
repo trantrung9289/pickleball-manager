@@ -28,7 +28,7 @@ import { TEAM_TYPE_LABELS, defaultTeamRules, normalizeTeamRules, tieScoreLabel, 
 import TeamOverviewPanel from "../components/team/TeamOverviewPanel";
 import TeamStatsTable from "../components/team/TeamStatsTable";
 import TeamStandingsTable from "../components/team/TeamStandingsTable";
-import { StatCard, MatchScoreCell, StatusChip } from "../components/ui";
+import { StatCard, MatchScoreCell, StatusChip, matchCardStyle } from "../components/ui";
 import {
   DRAW_FORMATS, serverOffset, normalizeRank, UNRANKED, partnerPlan, normalizePartnerRules, ranksLabel,
 } from "../utils/drawMath";
@@ -294,7 +294,7 @@ function CreateWizard({ onCreated, onClose }) {
   const [format, setFormat] = useState(null);
   const [teamType, setTeamType] = useState("singles");
   const [thirdPlaceEnabled, setThirdPlaceEnabled] = useState(true);
-  const [placementEnabled, setPlacementEnabled] = useState(false);   // tranh hạng 5-6 / 7-8 (combined 2 bảng, mẫu FIS)
+  const [placementEnabled, setPlacementEnabled] = useState(false);   // tranh hạng 5-6 / 7-8 (combined 2 bảng, mẫu tham chiếu)
   // Giải đồng đội: quy tắc trận thành phần / cách tính điểm (TeamRulesEditor), gửi kèm team_type="team"
   const [teamRules, setTeamRules] = useState(defaultTeamRules);
   // PIN nhập điểm qua public
@@ -667,7 +667,7 @@ function KnockoutBracket({ matches, onScoreClick, renderDetail }) {
   // Trận "Tranh giải 3" đi theo đường thua (loser_next_match_id), không phải cây thắng chính —
   // tách riêng để không lẫn vào cùng cột với Chung kết (cả hai có cùng round_number).
   const thirdPlace = matches.find(m => m.round_name === "Tranh giải 3");
-  const placements = findPlacementMatches(matches);   // tranh hạng 5-6 / 7-8 (mẫu FIS) — không thuộc cây thắng
+  const placements = findPlacementMatches(matches);   // tranh hạng 5-6 / 7-8 — không thuộc cây thắng
   const mainMatches = matches.filter(m => !isSideMatch(m));
   const rounds = [...new Set(mainMatches.map(m => m.round_number))].sort((a, b) => a - b);
 
@@ -946,7 +946,7 @@ function RoundedSchedule({ matches, columns, mobileProps }) {
   [...new Set(sideMatches.map(m => m.round_name))].forEach(name => {
     groups.push({ key: `side-${name}`, rMatches: sideMatches.filter(m => m.round_name === name) });
   });
-  // Mẫu FIS: lọc nhanh các vòng còn thiếu kết quả khi điều hành ngày thi đấu
+  // lọc nhanh các vòng còn thiếu kết quả khi điều hành ngày thi đấu
   const [onlyPending, setOnlyPending] = useState(false);
   const isRoundDone = (rMatches) => rMatches.length > 0 && rMatches.every(m => m.status === "completed");
   const visible = onlyPending ? groups.filter(g => !isRoundDone(g.rMatches)) : groups;
@@ -1036,7 +1036,7 @@ function StandingsTable({ tournament, group, onOpenMatch }) {
   return <PlainStandingsTable tournament={tournament} group={group} />;
 }
 
-// Giải đồng đội: bảng theo thể loại / lượt / từng cặp đấu (mẫu FIS, 2026-10-26)
+// Giải đồng đội: bảng theo thể loại / lượt / từng cặp đấu (2026-10-26)
 function TeamStandingsWrapper({ tournament, group, onOpenMatch }) {
   const rules = useMemo(() => { try { return normalizeTeamRules(tournament.team_rules); } catch { return null; } }, [tournament.team_rules]);
   const fetchStandings = useCallback((g, leg) => tournamentsApi.standings(tournament.id, g || undefined, leg || undefined), [tournament.id]);
@@ -2055,7 +2055,7 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated, autoOpenAdd
   };
 
   const tabItems = [];
-  // Giải đồng đội đã có lịch: tab Tổng quan (tiến độ, cặp đấu chưa xong, dẫn đầu, thể thức) đứng đầu — mẫu FIS
+  // Giải đồng đội đã có lịch: tab Tổng quan (tiến độ, cặp đấu chưa xong, dẫn đầu, thể thức) đứng đầu
   const teamRulesNorm = isTeam ? (() => { try { return normalizeTeamRules(tournament.team_rules); } catch { return null; } })() : null;
   const fetchStandings = useCallback((g) => tournamentsApi.standings(tournament.id, g || undefined), [tournament.id]);
   if (isTeam && teamRulesNorm && matches.length > 0) {
@@ -2204,7 +2204,7 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated, autoOpenAdd
                     dataSource={groupMatches.filter(m => m.group_name === g)}
                     rowKey="id" size="small" pagination={false}
                     style={{ marginBottom: 16 }}
-                    {...matchTableMobileProps}
+                    {...matchTableMobileProps} mobileCardStyle={matchCardStyle}
                   />
                   <StandingsTable tournament={tournament} group={g} onOpenMatch={openMatch} />
                 </>

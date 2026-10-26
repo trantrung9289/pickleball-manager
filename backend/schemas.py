@@ -331,7 +331,7 @@ class TournamentCreate(BaseModel):
     score_pin: Optional[str] = None          # PIN 4 số — cho phép nhập điểm qua public
     public_scoring_enabled: bool = False
     third_place_enabled: bool = False        # có trận tranh giải 3 không (knockout/combined, cần ≥4 đội)
-    placement_matches_enabled: bool = False  # tranh hạng 5-6 / 7-8 (combined đúng 2 bảng) — mẫu FIS
+    placement_matches_enabled: bool = False  # tranh hạng 5-6 / 7-8 (combined đúng 2 bảng)
     team_rules: Optional[Dict[str, Any]] = None   # bắt buộc khi team_type == "team" (xem normalize_team_rules)
 
 

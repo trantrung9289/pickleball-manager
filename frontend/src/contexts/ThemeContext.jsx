@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { theme as antdTheme } from "antd";
 import { brandPalette, cssVariables, SEMANTIC } from "../utils/color";
 
-// Lớp 1 đổi giao diện (2026-10-26, mẫu FIS + macOS): hai chế độ sáng/tối, MÀU THƯƠNG HIỆU theo CLB đang chọn
+// Lớp 1 đổi giao diện (2026-10-26): hai chế độ sáng/tối, MÀU THƯƠNG HIỆU theo CLB đang chọn
 // (App.jsx gọi setBrandColor từ selectedClub.brand_color), thanh bên TRUNG TÍNH (mục chọn nền nhạt chữ đậm, không tô kín),
 // token ngữ nghĩa có bản nhạt. Phông Be Vietnam Pro tải về (fonts.css). THEMES + useAppTheme cùng file là chủ đích.
 const FONT = "'Be Vietnam Pro', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";

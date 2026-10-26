@@ -1,4 +1,4 @@
-// Chạy: npm test (node --test). Ghim hàm thuần Tổng quan / Thống kê giải đồng đội (đợt 1 mẫu FIS).
+// Chạy: npm test (node --test). Ghim hàm thuần Tổng quan / Thống kê giải đồng đội (đợt 1).
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -67,7 +67,7 @@ test("teamRoundsPlayed / teamOverviewCounts / teamRuleSummary", () => {
   assert.ok(lines.some((l) => l.includes("đối đầu trực tiếp → hiệu số trận thành phần")));
 });
 
-test("finalPlacements: tranh hạng 5-6 / 7-8 (mẫu FIS) thêm hạng 5–8", () => {
+test("finalPlacements: tranh hạng 5-6 / 7-8 thêm hạng 5–8", () => {
   const ko = [
     { phase: "knockout", round_number: 2, round_name: "Chung kết", p1_id: 1, p2_id: 4, status: "completed", winner_id: 4 },
     { phase: "knockout", round_number: 2, round_name: "Tranh giải 3", p1_id: 2, p2_id: 3, status: "completed", winner_id: 2 },
