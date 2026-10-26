@@ -4,6 +4,7 @@ import { DeleteOutlined, GiftOutlined, SaveOutlined, StopOutlined } from "@ant-d
 import { tournamentsApi } from "../../api";
 import { useViewMode } from "../../contexts/ViewModeContext";
 import GenderTag from "./GenderTag";
+import { ScoreBox } from "../ui";
 import SlotSelect from "./SlotSelect";
 import {
   SCORING_SHORT, STAGE_LABELS, appearanceCounts, playerIndex, rubberName, rubberSize, rubberStatusLabel, slotIssueText,
@@ -285,8 +286,8 @@ export default function TieSheetModal({ tournament, match, canEdit = false, onCl
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 6 }}>
             <Title level={5} style={{ margin: 0, flex: 1, textAlign: "right", color: res.winner_side === 1 ? "#237804" : undefined }}>{t1}</Title>
             <div style={{ flex: "none", textAlign: "center", minWidth: 110 }}>
-              <div style={{ fontSize: 30, fontWeight: 800, lineHeight: 1 }}>{res.score1} – {res.score2}</div>
-              <Text type="secondary" style={{ fontSize: 11 }}>{pa2 ? `điểm · mốc ${rules.target_total}` : "trận thắng"}</Text>
+              <ScoreBox a={res.score1} b={res.score2} winner={finished ? res.winner_side : null} size="lg" live={!finished && anyScored} />
+              <Text type="secondary" style={{ fontSize: 11, display: "block", marginTop: 2 }}>{pa2 ? `điểm · mốc ${rules.target_total}` : "trận thắng"}</Text>
             </div>
             <Title level={5} style={{ margin: 0, flex: 1, color: res.winner_side === 2 ? "#237804" : undefined }}>{t2}</Title>
           </div>

@@ -20,6 +20,7 @@ import TeamOverviewPanel from "./team/TeamOverviewPanel";
 import TeamStatsTable from "./team/TeamStatsTable";
 import TeamStandingsTable from "./team/TeamStandingsTable";
 import { isSideMatch } from "../utils/bracketLayout";
+import { MatchScoreCell, StatusChip } from "./ui";
 import TieRubbersInline from "./team/TieRubbersInline";
 import {
   serverOffset, verifyDraw, verifyPartnerDraw, partnerLabelForStep, partnerDrawFinished, partnerDrawStuck,
@@ -317,8 +318,8 @@ function RoundedSchedule({ matches, columns, mobileProps }) {
             size="small"
             title={<Text strong style={{ color: "#1677ff" }}>{rName}</Text>}
             extra={done === rMatches.length
-              ? <Tag color="success">Đã đủ kết quả · {done}/{rMatches.length}</Tag>
-              : <Tag color="default">{done}/{rMatches.length}</Tag>}
+              ? <StatusChip tone="ok">Đã đủ kết quả · {done}/{rMatches.length}</StatusChip>
+              : <StatusChip tone={done > 0 ? "info" : "neutral"}>{done}/{rMatches.length}</StatusChip>}
           >
             <ResponsiveTable
               columns={roundCols}
@@ -494,18 +495,7 @@ function matchTableCols(onScore, onOpenTie) {
     },
     {
       title: "Tỉ số", align: "center", width: onOpenTie ? 120 : 90,
-      render: (_, m) => {
-        if (m.status === "completed") return <b style={{ fontSize: 16 }}>{m.score1} – {m.score2}</b>;
-        const live = onOpenTie ? tieScoreText(m) : null;   // giải đồng đội: tỉ số tạm của trận đang đấu dở
-        return live
-          ? (
-            <span style={{ whiteSpace: "nowrap" }}>
-              <b style={{ fontSize: 16, color: "#1677ff" }}>{live}</b>
-              <Tag color="processing" style={{ marginLeft: 4 }}>Đang đấu</Tag>
-            </span>
-          )
-          : <Tag>Chưa đấu</Tag>;
-      },
+      render: (_, m) => <MatchScoreCell match={m} isTeam={!!onOpenTie} />,   // ô tỉ số dùng chung (lớp 2)
     },
     {
       title: "Đội 2",

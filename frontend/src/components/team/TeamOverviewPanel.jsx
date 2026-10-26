@@ -5,7 +5,8 @@
  * Props: { tournament, rules, fetchStandings(group|null) → Promise<rows>, onOpenMatch(m)?, isPublic? }
  */
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Button, Card, Col, Empty, List, Progress, Row, Space, Tag, Typography } from "antd";
+import { Alert, Button, Card, Col, Empty, List, Row, Space, Tag, Typography } from "antd";
+import { StatCard } from "../ui";
 import { FileTextOutlined } from "@ant-design/icons";
 import { tieScoreLabel } from "../../utils/teamFormat";
 import {
@@ -14,20 +15,6 @@ import {
 
 const { Text } = Typography;
 const MEDAL = { 1: "🥇", 2: "🥈", 3: "🥉", 4: "4️⃣" };
-
-function StatCard({ title, value, total, suffix, color }) {
-  const pct = total ? Math.round((value / total) * 100) : 0;
-  return (
-    <Card size="small" style={{ height: "100%" }}>
-      <Text type="secondary" style={{ fontSize: 12 }}>{title}</Text>
-      <div style={{ fontSize: 24, fontWeight: 700, lineHeight: 1.2, color }}>
-        {value}<span style={{ fontSize: 14, color: "#999", fontWeight: 400 }}> / {total}</span>
-      </div>
-      {total > 0 && <Progress percent={pct} size="small" showInfo={false} strokeColor={pct === 100 ? "#52c41a" : "#1677ff"} />}
-      {suffix && <Text type="secondary" style={{ fontSize: 12 }}>{suffix}</Text>}
-    </Card>
-  );
-}
 
 export default function TeamOverviewPanel({ tournament, rules, fetchStandings, onOpenMatch, isPublic = false }) {
   const matches = useMemo(() => tournament.matches || [], [tournament.matches]);
@@ -62,15 +49,11 @@ export default function TeamOverviewPanel({ tournament, rules, fetchStandings, o
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <Row gutter={[12, 12]}>
-        <Col xs={12} md={6}><StatCard title="Trận đồng đội" value={counts.ties.done} total={counts.ties.total} suffix={`${counts.ties.pending.length} chưa xong`} /></Col>
-        <Col xs={12} md={6}><StatCard title="Trận thành phần" value={counts.rubbers.done} total={counts.rubbers.total} suffix={counts.rubbers.perTie ? `${counts.rubbers.perTie} trận / trận đồng đội` : null} /></Col>
-        <Col xs={12} md={6}><StatCard title="VĐV đã vào đội" value={counts.players.assigned} total={counts.players.total} suffix={counts.players.pool ? `${counts.players.pool} chưa phân đội` : "đủ"} color={counts.players.pool ? "#faad14" : undefined} /></Col>
+        <Col xs={12} md={6}><StatCard title="Trận đồng đội" value={counts.ties.done} total={counts.ties.total} note={`${counts.ties.pending.length} chưa xong`} /></Col>
+        <Col xs={12} md={6}><StatCard title="Trận thành phần" value={counts.rubbers.done} total={counts.rubbers.total} note={counts.rubbers.perTie ? `${counts.rubbers.perTie} trận / trận đồng đội` : null} /></Col>
+        <Col xs={12} md={6}><StatCard title="VĐV đã vào đội" value={counts.players.assigned} total={counts.players.total} note={counts.players.pool ? `${counts.players.pool} chưa phân đội` : "đủ"} tone={counts.players.pool ? "warn" : "ink"} /></Col>
         <Col xs={12} md={6}>
-          <Card size="small" style={{ height: "100%" }}>
-            <Text type="secondary" style={{ fontSize: 12 }}>Đội</Text>
-            <div style={{ fontSize: 24, fontWeight: 700, lineHeight: 1.2 }}>{counts.teams}</div>
-            <Text type="secondary" style={{ fontSize: 12 }}>{groups.length ? `${groups.length} bảng: ${groups.join(", ")}` : "một bảng"}</Text>
-          </Card>
+          <StatCard title="Đội" value={counts.teams} note={groups.length ? `${groups.length} bảng: ${groups.join(", ")}` : "một bảng"} />
         </Col>
       </Row>
 

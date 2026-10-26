@@ -58,6 +58,10 @@ body {
   top: 70px !important;
 }
 
+/* Lớp 2: chấm nhấp nháy của chip "đang diễn ra" */
+@keyframes ui-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .ant-btn:active { transform: none; } }
+
 /* Lớp 1 (2026-10-26, kiểu macOS): KHÔNG nhấc thẻ khi rê chuột — thẻ là vật chứa, không phải nút; chuyển động chỉ còn fade ngắn */
 .ant-card {
   transition: border-color 0.15s ease;

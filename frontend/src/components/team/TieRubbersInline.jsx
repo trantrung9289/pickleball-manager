@@ -1,13 +1,14 @@
 import { Tag, Typography } from "antd";
 import { matchRubbersForDisplay, rubberName, rubberScoreView } from "../../utils/teamFormat";
+import { StatusChip } from "../ui";
 
 const { Text } = Typography;
 
 const STATUS = {
-  completed: { label: "Đã đấu", color: "success" },
-  walkover: { label: "Xử thua", color: "gold" },
-  ready: { label: "Chờ đấu", color: "processing" },
-  pending: { label: "Chưa xếp", color: "default" },
+  completed: { label: "Đã đấu", tone: "ok" },
+  walkover: { label: "Xử thua", tone: "warn" },
+  ready: { label: "Chờ đấu", tone: "info" },
+  pending: { label: "Chưa xếp", tone: "neutral" },
 };
 
 const statusOf = (r) => {
@@ -64,7 +65,7 @@ export default function TieRubbersInline({ match, rules, playersById, compact = 
               {sv.own && <div><Text type="secondary" style={{ fontSize: 11 }}>+{sv.own}</Text></div>}
             </span>,
             <Names key={`${r.id}-2`} ids={r.side2_players} byId={playersById} win={sv.winner === 2} align="right" />,
-            <Tag key={`${r.id}-t`} color={st.color} style={{ margin: 0, fontSize: 11, lineHeight: "18px", padding: "0 6px" }}>{st.label}</Tag>,
+            <StatusChip key={`${r.id}-t`} tone={st.tone}>{st.label}</StatusChip>,
           ];
         })}
       </div>

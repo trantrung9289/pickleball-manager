@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Row, Col, Card, Statistic, Typography, Skeleton, Tag } from "antd";
+import { StatCard } from "../components/ui";
 import {
   TeamOutlined, RiseOutlined, FallOutlined, WalletOutlined,
   TrophyOutlined, CalendarOutlined,
@@ -60,31 +61,18 @@ export default function Dashboard() {
 
       {/* KPIs all-time */}
       <Row gutter={[16, 16]} style={{ marginBottom: 8 }}>
-        <Col xs={24} sm={12} lg={6}>
-          <Card>
-            <Statistic title="Tổng thành viên" value={overview.total_members}
-              prefix={<TeamOutlined />} styles={{ content: { color: "#27A063" } }} />
-            <Text type="secondary">Đang hoạt động: <b style={{ color: "#52c41a" }}>{overview.active_members}</b></Text>
-          </Card>
+        <Col xs={12} lg={6}>
+          <StatCard title="Tổng thành viên" value={overview.total_members} icon={<TeamOutlined />} tone="brand"
+            note={<>Đang hoạt động: <b style={{ color: "var(--ok-strong)" }}>{overview.active_members}</b></>} />
         </Col>
-        <Col xs={24} sm={12} lg={6}>
-          <Card>
-            <Statistic title="Tổng thu (tất cả)" value={overview.total_income}
-              formatter={fmt} prefix={<RiseOutlined />} styles={{ content: { color: "#52c41a" } }} />
-          </Card>
+        <Col xs={12} lg={6}>
+          <StatCard title="Tổng thu (tất cả)" value={fmt(overview.total_income)} icon={<RiseOutlined />} tone="ok" />
         </Col>
-        <Col xs={24} sm={12} lg={6}>
-          <Card>
-            <Statistic title="Tổng chi (tất cả)" value={overview.total_expense}
-              formatter={fmt} prefix={<FallOutlined />} styles={{ content: { color: "#ff4d4f" } }} />
-          </Card>
+        <Col xs={12} lg={6}>
+          <StatCard title="Tổng chi (tất cả)" value={fmt(overview.total_expense)} icon={<FallOutlined />} tone="danger" />
         </Col>
-        <Col xs={24} sm={12} lg={6}>
-          <Card>
-            <Statistic title="Số dư tích lũy" value={overview.balance}
-              formatter={fmt} prefix={<WalletOutlined />}
-              styles={{ content: { color: overview.balance >= 0 ? "#52c41a" : "#ff4d4f" } }} />
-          </Card>
+        <Col xs={12} lg={6}>
+          <StatCard title="Số dư tích lũy" value={fmt(overview.balance)} icon={<WalletOutlined />} tone={overview.balance >= 0 ? "ok" : "danger"} />
         </Col>
       </Row>
 
@@ -92,7 +80,7 @@ export default function Dashboard() {
       <Row gutter={[16, 16]} style={{ marginBottom: 24, marginTop: 16 }}>
         <Col xs={24} lg={16}>
           <Card title={<span><CalendarOutlined style={{ marginRight: 8 }} />Tháng {month}/{year}</span>}
-            size="small" style={{ borderTop: "3px solid #27A063" }}>
+            size="small" style={{ borderTop: "3px solid var(--brand)" }}>
             {thisMonth ? (
               <Row gutter={16}>
                 <Col span={8}>

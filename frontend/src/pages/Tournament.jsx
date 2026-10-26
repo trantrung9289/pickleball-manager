@@ -1,10 +1,7 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { createPortal } from "react-dom";
 import {
-  Button, Space, Tag, Modal, Form, Input, Select,
-  message, Typography, Row, Col, Card, Steps,
-  InputNumber, Tabs, Badge, Statistic, Empty,
-  Divider, Alert, Checkbox, Collapse, AutoComplete, Switch, Tooltip, Popover,
+  Button, Space, Tag, Modal, Form, Input, Select, message, Typography, Row, Col, Card, Steps, InputNumber, Tabs, Badge, Empty, Divider, Alert, Checkbox, Collapse, AutoComplete, Switch, Tooltip, Popover,
 } from "antd";
 import {
   PlusOutlined, ThunderboltOutlined, TrophyOutlined,
@@ -35,6 +32,7 @@ import { TEAM_TYPE_LABELS, defaultTeamRules, normalizeTeamRules, tieScoreLabel, 
 import TeamOverviewPanel from "../components/team/TeamOverviewPanel";
 import TeamStatsTable from "../components/team/TeamStatsTable";
 import TeamStandingsTable from "../components/team/TeamStandingsTable";
+import { StatCard, MatchScoreCell, StatusChip } from "../components/ui";
 import {
   DRAW_FORMATS, serverOffset, normalizeRank, UNRANKED, partnerPlan, normalizePartnerRules, ranksLabel,
 } from "../utils/drawMath";
@@ -972,8 +970,8 @@ function RoundedSchedule({ matches, columns, mobileProps }) {
             size="small"
             title={<Text strong style={{ color: key.startsWith("side-") ? "#d48806" : "#1677ff" }}>{rName}</Text>}
             extra={done === rMatches.length
-              ? <Tag color="success">Đã đủ kết quả · {done}/{rMatches.length}</Tag>
-              : <Tag color="default">{done}/{rMatches.length}</Tag>}
+              ? <StatusChip tone="ok">Đã đủ kết quả · {done}/{rMatches.length}</StatusChip>
+              : <StatusChip tone={done > 0 ? "info" : "neutral"}>{done}/{rMatches.length}</StatusChip>}
           >
             <ResponsiveTable
               columns={roundCols}
@@ -1943,9 +1941,6 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated, autoOpenAdd
     if (!isTeam) return null;
     try { return rubberTotals(matches, normalizeTeamRules(tournament.team_rules)); } catch { return null; }
   }, [isTeam, matches, tournament.team_rules]);
-  const rubberNote = (text) => rubberStats && (
-    <Text type="secondary" style={{ fontSize: 12, display: "block", marginTop: 2 }}>{text}</Text>
-  );
   const renderTieDetail = isTeam
     ? (m, compact = false) => <TieRubbersInline match={m} rules={tournament.team_rules} playersById={playersById} compact={compact} />
     : undefined;
@@ -1989,20 +1984,7 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated, autoOpenAdd
     },
     {
       title: "Tỉ số", align: "center", width: 90,
-      render: (_, m) => {
-        if (m.is_walkover) return <Tag color="gold">Xử thắng</Tag>;
-        if (isTeam) {
-          // Tỉ số tổng của trận đồng đội (số trận thắng PA1 / tổng điểm PA2); đang đấu dở → hiện kèm nhãn
-          const t = tieScoreLabel(m);
-          if (m.status === "completed") return <b style={{ fontSize: 16 }}>{t.text}</b>;
-          return t.live
-            ? <span><b style={{ fontSize: 15 }}>{t.text}</b> <Tag color="processing" style={{ marginLeft: 4 }}>Đang đấu</Tag></span>
-            : <Tag>{t.text}</Tag>;
-        }
-        return m.status === "completed"
-          ? <b style={{ fontSize: 16 }}>{m.score1} – {m.score2}</b>
-          : <Tag>Chưa đấu</Tag>;
-      },
+      render: (_, m) => <MatchScoreCell match={m} isTeam={isTeam} />,   // ô tỉ số dùng chung (lớp 2)
     },
     {
       title: "Đội 2",
@@ -2379,30 +2361,21 @@ function TournamentDetail({ tournament: initData, onBack, onUpdated, autoOpenAdd
           } />
       )}
 
-      <Row gutter={16} style={{ marginBottom: 16 }}>
-        <Col xs={6}>
-          <Card size="small">
-            <Statistic title="Số đội" value={tournament.participants.length} prefix={<TrophyOutlined />} />
-          </Card>
+      <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
+        <Col xs={12} md={6}>
+          <StatCard title="Số đội" value={tournament.participants.length} icon={<TrophyOutlined />} compact />
         </Col>
-        <Col xs={6}>
-          <Card size="small">
-            <Statistic title={isTeam ? "Tổng trận đồng đội" : "Tổng trận"} value={matches.length} />
-            {rubberStats && rubberNote(`${rubberStats.total} trận thành phần${rubberStats.perTie ? ` (${rubberStats.perTie}/trận)` : ""}`)}
-          </Card>
+        <Col xs={12} md={6}>
+          <StatCard title={isTeam ? "Trận đồng đội" : "Tổng trận"} value={matches.length} compact
+            note={rubberStats ? `${rubberStats.total} trận thành phần${rubberStats.perTie ? ` (${rubberStats.perTie}/trận)` : ""}` : null} />
         </Col>
-        <Col xs={6}>
-          <Card size="small">
-            <Statistic title="Đã thi đấu" value={doneCount} styles={{ content: { color: "#52c41a" } }} />
-            {rubberStats && rubberNote(`${rubberStats.done} trận thành phần`)}
-          </Card>
+        <Col xs={12} md={6}>
+          <StatCard title="Đã thi đấu" value={doneCount} total={matches.length} tone="ok" compact
+            note={rubberStats ? `${rubberStats.done} trận thành phần` : null} />
         </Col>
-        <Col xs={6}>
-          <Card size="small">
-            <Statistic title="Còn lại" value={matches.length - doneCount}
-              styles={{ content: { color: matches.length - doneCount > 0 ? "#faad14" : "#52c41a" } }} />
-            {rubberStats && rubberNote(`${rubberStats.remaining} trận thành phần`)}
-          </Card>
+        <Col xs={12} md={6}>
+          <StatCard title="Còn lại" value={matches.length - doneCount} tone={matches.length - doneCount > 0 ? "warn" : "ok"} compact
+            note={rubberStats ? `${rubberStats.remaining} trận thành phần` : null} />
         </Col>
       </Row>
 

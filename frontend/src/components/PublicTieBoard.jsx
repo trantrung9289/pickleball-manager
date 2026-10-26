@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Modal, Tag, Typography, Spin, Alert, Space, Button, Badge, Empty } from "antd";
+import { ScoreBox, StatusChip } from "./ui";
 import { ReloadOutlined } from "@ant-design/icons";
 import { useViewMode } from "../contexts/ViewModeContext";
 import { useFastPoll } from "../hooks/useFastPoll";
@@ -192,16 +193,14 @@ export default function PublicTieBoard({ api, tid, match, tournament, onClose, o
         <>
           <div style={{
             display: "grid", gridTemplateColumns: "minmax(0,1fr) auto minmax(0,1fr)", gap: 8, alignItems: "center",
-            padding: "12px 8px", background: "#f5f7fa", borderRadius: 10,
+            padding: "12px 8px", background: "var(--bg)", borderRadius: 10,
           }}>
             <div style={{ textAlign: "center", minWidth: 0 }}>
               <Text strong style={{ fontSize: 15, color: winnerSide === 1 ? "#237804" : undefined, wordBreak: "break-word" }}>
                 {name1}
               </Text>
             </div>
-            <div style={{ fontSize: 30, fontWeight: 800, whiteSpace: "nowrap", color: "#1677ff", lineHeight: 1 }}>
-              {res?.score1 ?? 0} – {res?.score2 ?? 0}
-            </div>
+            <ScoreBox a={res?.score1 ?? 0} b={res?.score2 ?? 0} winner={finished ? winnerSide : null} size="lg" live={!finished && started} />
             <div style={{ textAlign: "center", minWidth: 0 }}>
               <Text strong style={{ fontSize: 15, color: winnerSide === 2 ? "#237804" : undefined, wordBreak: "break-word" }}>
                 {name2}
@@ -210,9 +209,9 @@ export default function PublicTieBoard({ api, tid, match, tournament, onClose, o
           </div>
           <div style={{ textAlign: "center", marginTop: 8 }}>
             <Space size={6} wrap style={{ justifyContent: "center" }}>
-              <Tag color={finished ? "success" : started ? "processing" : "default"} style={{ margin: 0 }}>
+              <StatusChip tone={finished ? "ok" : started ? "info" : "neutral"} dot={!finished && started} pulse={!finished && started} size="md">
                 {finished ? "Đã kết thúc" : started ? "Đang diễn ra" : "Chưa bắt đầu"}
-              </Tag>
+              </StatusChip>
               {res?.detail && <Text type="secondary" style={{ fontSize: 13 }}>{res.detail}</Text>}
             </Space>
           </div>
