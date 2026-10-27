@@ -1076,3 +1076,98 @@ class TeamLogOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+# ── ANNOUNCEMENTS (thông báo trang public / chuông, 2026-10-27) ──────────────
+
+class AnnouncementKind(str, Enum):
+    schedule = "schedule"
+    fee = "fee"
+
+
+class AnnouncementRecurrence(str, Enum):
+    none = "none"
+    weekly = "weekly"
+    monthly = "monthly"
+
+
+class AnnouncementBase(BaseModel):
+    kind: AnnouncementKind = AnnouncementKind.schedule
+    title: str = Field(min_length=1, max_length=200)
+    body: Optional[str] = None
+    fee_type_id: Optional[int] = None
+    recurrence: AnnouncementRecurrence = AnnouncementRecurrence.none
+    weekdays: Optional[List[int]] = None
+    day_of_month: Optional[int] = Field(default=None, ge=1, le=31)
+    start_time: Optional[str] = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    duration_min: Optional[int] = Field(default=None, ge=0, le=1440)
+    lead_days: int = Field(default=3, ge=0, le=60)
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+    is_active: bool = True
+    show_public: bool = True
+    push_telegram: bool = False
+
+    @field_validator("weekdays")
+    @classmethod
+    def _weekdays_valid(cls, v):
+        if v is None:
+            return v
+        v = sorted(set(int(x) for x in v))
+        if any(x < 0 or x > 6 for x in v):
+            raise ValueError("weekdays phải trong 0..6 (0 = Thứ 2)")
+        return v
+
+
+def _check_announcement_rule(m):
+    """Ràng buộc chéo giữa recurrence và các trường kèm theo."""
+    if m.recurrence == AnnouncementRecurrence.weekly and not m.weekdays:
+        raise ValueError("Lặp hàng tuần cần chọn ít nhất một thứ trong tuần")
+    if m.recurrence == AnnouncementRecurrence.monthly and not m.day_of_month:
+        raise ValueError("Lặp hàng tháng cần ngày trong tháng")
+    if m.recurrence == AnnouncementRecurrence.none and not m.start_date:
+        raise ValueError("Thông báo một lần cần ngày (start_date)")
+    if m.kind == AnnouncementKind.fee and not m.fee_type_id:
+        raise ValueError("Thông báo khoản thu cần fee_type_id")
+    if m.start_date and m.end_date and m.end_date < m.start_date:
+        raise ValueError("end_date phải sau start_date")
+    return m
+
+
+class AnnouncementCreate(AnnouncementBase):
+    @field_validator("push_telegram", mode="after")
+    @classmethod
+    def _noop(cls, v):
+        return v
+
+    def model_post_init(self, __context):
+        _check_announcement_rule(self)
+
+
+class AnnouncementUpdate(BaseModel):
+    kind: Optional[AnnouncementKind] = None
+    title: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    body: Optional[str] = None
+    fee_type_id: Optional[int] = None
+    recurrence: Optional[AnnouncementRecurrence] = None
+    weekdays: Optional[List[int]] = None
+    day_of_month: Optional[int] = Field(default=None, ge=1, le=31)
+    start_time: Optional[str] = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    duration_min: Optional[int] = Field(default=None, ge=0, le=1440)
+    lead_days: Optional[int] = Field(default=None, ge=0, le=60)
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+    is_active: Optional[bool] = None
+    show_public: Optional[bool] = None
+    push_telegram: Optional[bool] = None
+
+
+class AnnouncementOut(AnnouncementBase):
+    id: int
+    club_id: int
+    fee_type_name: Optional[str] = None
+    recurrence_label: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    model_config = ConfigDict(from_attributes=True)
+

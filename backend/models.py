@@ -750,3 +750,34 @@ class TournamentTeamDrawStep(Base):
     spun_at_ms = Column(Integer, nullable=False)
 
     draw = relationship("TournamentTeamDraw", back_populates="steps")
+
+
+class Announcement(Base):
+    """Thông báo trên trang public / chuông (2026-10-27, đợt 1): quy tắc lặp, tính lần xuất hiện lúc đọc (announcements.py).
+    kind: schedule (lịch sinh hoạt) | fee (khoản thu, nội dung tự sinh từ người chưa đóng).
+    recurrence: none (một lần, start_date) | weekly (weekdays: [0..6], 0 = Thứ 2) | monthly (day_of_month, kẹp cuối tháng).
+    lead_days: hiện trước bao nhiêu ngày. push_telegram: đợt 3 (cron). Không có bảng log vì public là kéo, không đẩy."""
+    __tablename__ = "announcements"
+
+    id = Column(Integer, primary_key=True, index=True)
+    club_id = Column(Integer, ForeignKey("clubs.id"), nullable=False, index=True)
+    kind = Column(String(20), nullable=False, default="schedule")
+    title = Column(String(200), nullable=False)
+    body = Column(Text, nullable=True)
+    fee_type_id = Column(Integer, ForeignKey("fee_types.id"), nullable=True)
+    recurrence = Column(String(20), nullable=False, default="none")
+    weekdays = Column(JSON, nullable=True)
+    day_of_month = Column(Integer, nullable=True)
+    start_time = Column(String(5), nullable=True)      # "HH:MM" giờ VN
+    duration_min = Column(Integer, nullable=True)
+    lead_days = Column(Integer, nullable=False, default=3)
+    start_date = Column(Date, nullable=True)
+    end_date = Column(Date, nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+    show_public = Column(Boolean, nullable=False, default=True)
+    push_telegram = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    fee_type = relationship("FeeType")
+

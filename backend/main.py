@@ -6375,6 +6375,24 @@ def save_telegram_chat_id(
     return {"ok": True}
 
 
+def _unpaid_members(db: Session, club_id: int, fee_type_id: int, month: int, year: int):
+    """Thành viên đang hoạt động CHƯA có giao dịch khoản thu này trong tháng — dùng chung nhắc phí Telegram + thông báo public."""
+    paid_ids = set(
+        r[0] for r in db.query(models.Transaction.member_id).filter(
+            models.Transaction.club_id == club_id,
+            models.Transaction.fee_type_id == fee_type_id,
+            extract("month", models.Transaction.transaction_date) == month,
+            extract("year", models.Transaction.transaction_date) == year,
+            models.Transaction.member_id.isnot(None),
+        ).all()
+    )
+    return db.query(models.Member).filter(
+        models.Member.club_id == club_id,
+        models.Member.status == "active",
+        models.Member.id.notin_(paid_ids),
+    ).order_by(models.Member.full_name).all()
+
+
 def _build_reminder_data(month: int, year: int, db: Session):
     """Trả về danh sách CLB → fee_types có remind_enabled + thành viên chưa đóng + chat_id admin."""
     fee_types = db.query(models.FeeType).filter(
@@ -6387,20 +6405,7 @@ def _build_reminder_data(month: int, year: int, db: Session):
         club_id = ft.club_id
         if not _club_bot_enabled(db, club_id):
             continue   # superuser tắt bot cho cả CLB → không nhắc phí qua Telegram
-        paid_ids = set(
-            r[0] for r in db.query(models.Transaction.member_id).filter(
-                models.Transaction.club_id == club_id,
-                models.Transaction.fee_type_id == ft.id,
-                extract("month", models.Transaction.transaction_date) == month,
-                extract("year", models.Transaction.transaction_date) == year,
-                models.Transaction.member_id.isnot(None),
-            ).all()
-        )
-        unpaid_members = db.query(models.Member).filter(
-            models.Member.club_id == club_id,
-            models.Member.status == "active",
-            models.Member.id.notin_(paid_ids),
-        ).order_by(models.Member.full_name).all()
+        unpaid_members = _unpaid_members(db, club_id, ft.id, month, year)
 
         # Khách mời đã đóng khoản này trong tháng (thông tin, không tính "chưa đóng")
         guests_paid = db.query(models.Player).join(
@@ -6435,6 +6440,122 @@ def _build_reminder_data(month: int, year: int, db: Session):
             "admin_chat_ids": chat_ids,
         })
     return result
+
+
+# ── THÔNG BÁO (trang public / chuông) — đợt 1 (2026-10-27) ─────────────────────
+# Quy tắc lặp lưu ở bảng announcements; lần xuất hiện tính lúc đọc (announcements.py), không cron, không log.
+# Thông báo khoản thu: nội dung tự sinh từ _unpaid_members (dùng chung với nhắc phí Telegram), public hiện cả tên.
+import announcements as _ann
+
+
+def _announcement_out(a: models.Announcement) -> dict:
+    d = {c.name: getattr(a, c.name) for c in models.Announcement.__table__.columns}
+    d["fee_type_name"] = a.fee_type.name if a.fee_type else None
+    d["recurrence_label"] = _ann.recurrence_label(a)
+    return d
+
+
+def _validate_announcement_payload(db: Session, club_id: int, merged: dict):
+    """Ràng buộc chéo (schemas._check_announcement_rule) + khoản thu phải thuộc CLB. ValueError → 422."""
+    try:
+        schemas.AnnouncementCreate(**merged)
+    except (ValueError, Exception) as e:   # pydantic ValidationError cũng là ValueError
+        raise HTTPException(422, str(e).splitlines()[0] if str(e) else "Dữ liệu không hợp lệ")
+    if merged.get("fee_type_id"):
+        ft = db.query(models.FeeType).filter(models.FeeType.id == merged["fee_type_id"], models.FeeType.club_id == club_id).first()
+        if not ft:
+            raise HTTPException(400, "Khoản thu không thuộc câu lạc bộ này")
+
+
+def _announcement_feed(db: Session, club_id: int, today: date, horizon_days: int = 14,
+                       public_only: bool = False, include_later: bool = False) -> list:
+    """Lần xuất hiện đang hiển thị (và sắp tới nếu include_later) của CLB, đã gắn nội dung khoản thu."""
+    q = db.query(models.Announcement).filter(models.Announcement.club_id == club_id, models.Announcement.is_active.is_(True))
+    if public_only:
+        q = q.filter(models.Announcement.show_public.is_(True))
+    rules = q.all()
+    items = _ann.build_feed_items(rules, today, horizon_days, include_later=include_later)
+    by_id = {r.id: r for r in rules}
+    for it in items:
+        if it["kind"] != "fee":
+            continue
+        r = by_id[it["announcement_id"]]
+        ft = r.fee_type
+        d = date.fromisoformat(it["date"])
+        unpaid = _unpaid_members(db, club_id, r.fee_type_id, d.month, d.year) if ft else []
+        it["fee_type_name"] = ft.name if ft else None
+        it["fee_month"], it["fee_year"] = d.month, d.year
+        it["amount"] = float(ft.default_amount) if ft and ft.default_amount is not None else None
+        it["unpaid_count"] = len(unpaid)
+        it["unpaid_members"] = [{"id": m.id, "full_name": m.full_name} for m in unpaid]
+        auto = f"{ft.name if ft else 'Khoản thu'} tháng {d.month}/{d.year}: hạn {d.strftime('%d/%m')}. " + (
+            f"Còn {len(unpaid)} người chưa đóng." if unpaid else "Tất cả đã đóng.")
+        it["body"] = f"{r.body.strip()}\n{auto}" if r.body and r.body.strip() else auto
+    return items
+
+
+@app.get("/api/announcements", response_model=List[schemas.AnnouncementOut])
+def list_announcements(db: Session = Depends(get_db), perms: ClubPermissions = Depends(get_club_permission)):
+    perms.require_view()
+    rows = db.query(models.Announcement).filter(models.Announcement.club_id == perms.club_id).order_by(models.Announcement.id.desc()).all()
+    return [_announcement_out(a) for a in rows]
+
+
+@app.post("/api/announcements", response_model=schemas.AnnouncementOut, status_code=201)
+def create_announcement(data: schemas.AnnouncementCreate, db: Session = Depends(get_db),
+                        perms: ClubPermissions = Depends(get_club_permission)):
+    perms.require_create()
+    payload = data.model_dump(mode="json")
+    _validate_announcement_payload(db, perms.club_id, payload)
+    a = models.Announcement(**data.model_dump(), club_id=perms.club_id)
+    db.add(a); db.commit(); db.refresh(a)
+    return _announcement_out(a)
+
+
+@app.put("/api/announcements/{aid}", response_model=schemas.AnnouncementOut)
+def update_announcement(aid: int, data: schemas.AnnouncementUpdate, db: Session = Depends(get_db),
+                        perms: ClubPermissions = Depends(get_club_permission)):
+    perms.require_edit()
+    a = db.query(models.Announcement).filter(models.Announcement.id == aid, models.Announcement.club_id == perms.club_id).first()
+    if not a:
+        raise HTTPException(404, "Không tìm thấy thông báo")
+    changes = data.model_dump(exclude_unset=True)
+    merged = {c.name: getattr(a, c.name) for c in models.Announcement.__table__.columns
+              if c.name in schemas.AnnouncementBase.model_fields}
+    merged.update(changes)
+    _validate_announcement_payload(db, perms.club_id, {k: (v.isoformat() if isinstance(v, date) else v) for k, v in merged.items()})
+    for k, v in changes.items():
+        setattr(a, k, v)
+    db.commit(); db.refresh(a)
+    return _announcement_out(a)
+
+
+@app.delete("/api/announcements/{aid}", status_code=204)
+def delete_announcement(aid: int, db: Session = Depends(get_db), perms: ClubPermissions = Depends(get_club_permission)):
+    perms.require_delete()
+    a = db.query(models.Announcement).filter(models.Announcement.id == aid, models.Announcement.club_id == perms.club_id).first()
+    if not a:
+        raise HTTPException(404, "Không tìm thấy thông báo")
+    db.delete(a); db.commit()
+    return None
+
+
+@app.get("/api/announcements/feed")
+def announcements_feed(days: int = Query(14, ge=0, le=90), include_later: bool = False,
+                       db: Session = Depends(get_db), perms: ClubPermissions = Depends(get_club_permission)):
+    """Chuông admin: lần xuất hiện đang hiển thị; include_later=true để xem trước lịch tới (màn quản lý)."""
+    perms.require_view()
+    today = _now_vn().date()
+    return {"today": today.isoformat(), "items": _announcement_feed(db, perms.club_id, today, days, include_later=include_later)}
+
+
+@app.get("/api/public/report/{slug}/announcements")
+@limiter.limit("60/minute")
+def public_announcements(request: Request, slug: str, db: Session = Depends(get_db)):
+    """Chuông trang public: chỉ quy tắc show_public, đang trong cửa sổ hiển thị; thông báo phí kèm tên người chưa đóng."""
+    rec = _validate_token(slug, db)
+    today = _now_vn().date()
+    return {"today": today.isoformat(), "items": _announcement_feed(db, rec.club_id, today, 14, public_only=True)}
 
 
 @app.get("/api/fee-reminders/preview")
