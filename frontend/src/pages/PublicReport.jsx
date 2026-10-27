@@ -13,6 +13,7 @@ import PublicTournamentTracker from "../components/PublicTournamentTracker";
 import { ViewModeProvider, useViewMode } from "../contexts/ViewModeContext";
 import ViewModeSwitcher from "../components/ViewModeSwitcher";
 import ThemeSwitcher from "../components/ThemeSwitcher";
+import NotificationBell from "../components/NotificationBell";
 import { useAppTheme } from "../contexts/ThemeContext";
 import MobileBottomNav from "../components/mobile/MobileBottomNav";
 
@@ -103,15 +104,19 @@ function PublicReportInner({ token }) {
           </Col>
           <Col>
             <Space wrap>
+              {/* Chuông thông báo (đợt 2): cùng cụm với nút giao diện; trên mobile các tag lượt xem/hết hạn xuống dòng riêng */}
+              <NotificationBell scope={`public:${token}`} fetchFeed={api.announcements} dark={isDark} />
               <ThemeSwitcher dark={isDark} />
               <ViewModeSwitcher />
-              <Tag icon={<EyeOutlined />} color="green">{meta.view_count} lượt xem</Tag>
-              {meta.expires_at && (
-                <Tag icon={<CalendarOutlined />} color="orange">
-                  Hết hạn: {dayjs(meta.expires_at).format("DD/MM/YYYY")}
-                </Tag>
-              )}
-              {!meta.expires_at && <Tag color="green">Vĩnh viễn</Tag>}
+              {!isMobileView && <>
+                <Tag icon={<EyeOutlined />} color="green">{meta.view_count} lượt xem</Tag>
+                {meta.expires_at && (
+                  <Tag icon={<CalendarOutlined />} color="orange">
+                    Hết hạn: {dayjs(meta.expires_at).format("DD/MM/YYYY")}
+                  </Tag>
+                )}
+                {!meta.expires_at && <Tag color="green">Vĩnh viễn</Tag>}
+              </>}
             </Space>
           </Col>
         </Row>

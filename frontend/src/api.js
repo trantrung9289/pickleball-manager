@@ -235,6 +235,15 @@ export const pointEventsApi = {
   delete: (id) => api.delete(`/api/point-events/${id}`),
 };
 
+// Thông báo trang public / chuông (đợt 2, 2026-10-27)
+export const announcementsApi = {
+  list: () => api.get("/api/announcements"),
+  create: (data) => api.post("/api/announcements", data),
+  update: (id, data) => api.put(`/api/announcements/${id}`, data),
+  delete: (id) => api.delete(`/api/announcements/${id}`),
+  feed: (params) => api.get("/api/announcements/feed", { params }),   // { days, include_later }
+};
+
 export const reportLinksApi = {
   list: () => api.get("/api/report-links"),
   create: (data) => api.post("/api/report-links", data),
@@ -248,6 +257,7 @@ export const createPublicReportApi = (slug) => {
   const pub = axios.create({ baseURL: BASE_URL });
   return {
     meta: () => pub.get(`/api/public/report/${slug}`),
+    announcements: () => pub.get(`${base}/announcements`),
     reports: {
       summary: (year) => pub.get(`${base}/summary`, { params: { year } }),
       monthlyDetail: (month, year) => pub.get(`${base}/monthly-detail`, { params: { month, year } }),

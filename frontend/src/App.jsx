@@ -4,9 +4,10 @@ import {
   Avatar, Dropdown, Space, Result, Button, Drawer,
 } from "antd";
 import {
-  DashboardOutlined, TeamOutlined, DollarOutlined, SwapOutlined, BarChartOutlined, TrophyOutlined, UserOutlined, LogoutOutlined, LockOutlined, RobotOutlined, UserAddOutlined, BgColorsOutlined,
+  DashboardOutlined, TeamOutlined, DollarOutlined, SwapOutlined, BarChartOutlined, TrophyOutlined, UserOutlined, LogoutOutlined, LockOutlined, RobotOutlined, UserAddOutlined, BgColorsOutlined, NotificationOutlined,
 } from "@ant-design/icons";
 import { AuthProvider, useAuth } from "./context/AuthContext";
+import { announcementsApi } from "./api";
 import BrandColorModal from "./components/BrandColorModal";
 import { ViewModeProvider, useViewMode } from "./contexts/ViewModeContext";
 import { useAppTheme, THEMES } from "./contexts/ThemeContext";
@@ -28,6 +29,8 @@ const Landing = lazy(() => import("./pages/Landing"));
 const AdminPortal = lazy(() => import("./pages/AdminPortal"));
 const ClubSelect = lazy(() => import("./pages/ClubSelect"));
 const PublicReport = lazy(() => import("./pages/PublicReport"));
+const Announcements = lazy(() => import("./pages/Announcements"));
+const NotificationBell = lazy(() => import("./components/NotificationBell"));
 const BotConfigPanel = lazy(() => import("./components/BotConfigPanel"));
 
 function PageSpinner() {
@@ -49,6 +52,7 @@ const ALL_PAGES = {
   transactions: { label: "Giao dịch", icon: <SwapOutlined />, comp: Transactions, requireView: true },
   reports:   { label: "Báo cáo", icon: <BarChartOutlined />, comp: Reports, requireView: true },
   tournaments: { label: "Giải đấu", icon: <TrophyOutlined />, comp: Tournament, requireView: true },
+  announcements: { label: "Thông báo", icon: <NotificationOutlined />, comp: Announcements, requireView: true },   // đợt 2 (2026-10-27)
 };
 
 function NoMembership({ onLogout }) {
@@ -237,6 +241,9 @@ function AppShell() {
               </Title>
             </Space>
             <Space size={isMobileView ? "small" : "middle"}>
+              <Suspense fallback={null}>
+                <NotificationBell key={selectedClub?.id} scope={`club:${selectedClub?.id}`} fetchFeed={announcementsApi.feed} onManage={() => setCurrent("announcements")} />
+              </Suspense>
               <ViewModeSwitcher />
               {!isMobileView && <ThemeSwitcher />}
               {!isMobileView && <ShortcutHelp />}
