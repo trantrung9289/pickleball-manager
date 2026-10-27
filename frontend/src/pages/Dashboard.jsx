@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Row, Col, Card, Statistic, Typography, Skeleton, Tag } from "antd";
-import { StatCard } from "../components/ui";
+import { StatCard, StatCardSkeleton, StatusChip } from "../components/ui";
 import {
   TeamOutlined, RiseOutlined, FallOutlined, WalletOutlined,
   TrophyOutlined, CalendarOutlined,
@@ -10,7 +10,6 @@ import {
 } from "recharts";
 import dayjs from "dayjs";
 import { reportsApi, tournamentsApi, feeTypesApi } from "../api";
-import { StatusChip } from "../components/ui";
 
 const { Title, Text } = Typography;
 
@@ -53,8 +52,8 @@ export default function Dashboard() {
     <div>
       <Row gutter={[16, 16]} style={{ marginBottom: 8 }}>
         {[0,1,2,3].map(i => (
-          <Col key={i} xs={24} sm={12} lg={6}>
-            <Card><Skeleton active paragraph={{ rows: 1 }} /></Card>
+          <Col key={i} xs={12} lg={6}>
+            <StatCardSkeleton />
           </Col>
         ))}
       </Row>
