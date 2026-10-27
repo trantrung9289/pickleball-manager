@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session, selectinload
 from sqlalchemy import func, extract, text, or_, case, update as sa_update
 from sqlalchemy.exc import IntegrityError
 from typing import Optional, List
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 _VN_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
@@ -6556,6 +6556,133 @@ def public_announcements(request: Request, slug: str, db: Session = Depends(get_
     rec = _validate_token(slug, db)
     today = _now_vn().date()
     return {"today": today.isoformat(), "items": _announcement_feed(db, rec.club_id, today, 14, public_only=True)}
+
+
+def _club_admin_chat_ids(db: Session, club_id: int) -> list:
+    """Admin CLB đã liên kết Telegram và còn quyền bot (cờ membership); caller tự kiểm tra cờ CLB `_club_bot_enabled`."""
+    rows = db.query(models.ClubMembership).filter(
+        models.ClubMembership.club_id == club_id,
+        models.ClubMembership.role == models.UserRole.admin,
+        models.ClubMembership.telegram_chat_id.isnot(None),
+        models.ClubMembership.bot_enabled.is_(True),
+    ).all()
+    return [m.telegram_chat_id for m in rows]
+
+
+def _announcement_push_text(item: dict, club_name: str) -> str:
+    """Nội dung Telegram (Markdown) cho một lần xuất hiện: lịch sinh hoạt hoặc khoản thu (kèm tên chưa đóng)."""
+    d = date.fromisoformat(item["date"])
+    when = f"{_ann.WEEKDAY_LABELS[d.weekday()]}, {d.strftime('%d/%m/%Y')}"
+    if item.get("start_time"):
+        when += f" · {item['start_time']}"
+    if item.get("duration_min"):
+        when += f" · {item['duration_min']} phút"
+    head = "🔔" if item["kind"] == "fee" else "📅"
+    lines = [f"{head} *{item['title']}*", f"CLB: {club_name}", when]
+    if item.get("body"):
+        lines.append("")
+        lines.append(item["body"])
+    if item["kind"] == "fee" and item.get("unpaid_members"):
+        lines.append("")
+        lines.append(f"Chưa đóng ({item['unpaid_count']} người):")
+        lines.extend(f"  • {m['full_name']}" for m in item["unpaid_members"])
+    return "\n".join(lines)
+
+
+def _telegram_send(bot_token: str, chat_id: int, text: str) -> None:
+    payload = _json.dumps({"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}).encode()
+    req = _urllib_req.Request(f"https://api.telegram.org/bot{bot_token}/sendMessage", data=payload,
+                              headers={"Content-Type": "application/json"})
+    with _urllib_req.urlopen(req, timeout=10) as resp:
+        resp.read()
+
+
+def _push_announcement_items(db: Session, club_id: int, items: list, today: date, bot_token: str, dedupe: bool = True) -> dict:
+    """Gửi các item tới admin CLB. dedupe=True (cron): bỏ qua (announcement, ngày xuất hiện, chat_id) đã gửi hôm nay."""
+    out = {"sent": 0, "skipped": 0, "errors": []}
+    if not _club_bot_enabled(db, club_id):
+        return out
+    chat_ids = _club_admin_chat_ids(db, club_id)
+    if not chat_ids:
+        return out
+    club = db.query(models.Club).filter(models.Club.id == club_id).first()
+    club_name = club.name if club else str(club_id)
+    for it in items:
+        occ = date.fromisoformat(it["date"])
+        text = _announcement_push_text(it, club_name)
+        for chat_id in chat_ids:
+            if dedupe and db.query(models.AnnouncementPushLog).filter(
+                models.AnnouncementPushLog.announcement_id == it["announcement_id"],
+                models.AnnouncementPushLog.occurrence_date == occ,
+                models.AnnouncementPushLog.chat_id == chat_id,
+                models.AnnouncementPushLog.send_date == today,
+            ).first():
+                out["skipped"] += 1
+                continue
+            try:
+                _telegram_send(bot_token, chat_id, text)
+                if dedupe:   # gửi tay (dedupe=False) không ghi log — như nhắc phí thủ công, gửi bao nhiêu lần tuỳ admin
+                    db.add(models.AnnouncementPushLog(announcement_id=it["announcement_id"], occurrence_date=occ, chat_id=chat_id, send_date=today))
+                    db.commit()
+                out["sent"] += 1
+            except Exception as exc:
+                db.rollback()
+                out["errors"].append({"chat_id": chat_id, "announcement_id": it["announcement_id"], "error": str(exc)})
+    return out
+
+
+def _bot_token_or_500() -> str:
+    tok = _os.environ.get("TELEGRAM_BOT_TOKEN") or _os.environ.get("BOT_TOKEN", "")
+    if not tok:
+        raise HTTPException(500, "BOT_TOKEN chưa được cấu hình")
+    return tok
+
+
+@app.post("/api/internal/send-announcements")
+def send_announcements_internal(db: Session = Depends(get_db), _: None = Depends(_check_internal_secret)):
+    """Cron (notify_bot.py, 14h VN hằng ngày): với quy tắc push_telegram, gửi Telegram tới admin CLB vào NGÀY ĐẦU cửa sổ hiển thị
+    (d - lead_days) và vào ĐÚNG NGÀY d (nếu lead_days > 0). Chống trùng theo announcement_push_log."""
+    bot_token = _bot_token_or_500()
+    today = _now_vn().date()
+    club_ids = [r[0] for r in db.query(models.Announcement.club_id).filter(
+        models.Announcement.is_active.is_(True), models.Announcement.push_telegram.is_(True)).distinct().all()]
+    total = {"sent": 0, "skipped": 0, "errors": [], "clubs": len(club_ids)}
+    for cid in club_ids:
+        items = [it for it in _announcement_feed(db, cid, today, 60)
+                 if it["kind"] in ("schedule", "fee")]
+        rules = {a.id: a for a in db.query(models.Announcement).filter(models.Announcement.club_id == cid, models.Announcement.push_telegram.is_(True)).all()}
+        due = []
+        for it in items:
+            r = rules.get(it["announcement_id"])
+            if not r:
+                continue
+            d = date.fromisoformat(it["date"])
+            first_day = d - timedelta(days=max(0, int(r.lead_days or 0)))
+            if today == first_day or today == d:
+                due.append(it)
+        res = _push_announcement_items(db, cid, due, today, bot_token, dedupe=True)
+        total["sent"] += res["sent"]; total["skipped"] += res["skipped"]; total["errors"].extend(res["errors"])
+    return total
+
+
+@app.post("/api/announcements/{aid}/push")
+def push_announcement_now(aid: int, db: Session = Depends(get_db), perms: ClubPermissions = Depends(get_club_permission)):
+    """Admin bấm "Gửi Telegram ngay": gửi lần xuất hiện gần nhất (trong 60 ngày) tới admin CLB, không chống trùng (như nhắc phí thủ công)."""
+    perms.require_edit()
+    a = db.query(models.Announcement).filter(models.Announcement.id == aid, models.Announcement.club_id == perms.club_id).first()
+    if not a:
+        raise HTTPException(404, "Không tìm thấy thông báo")
+    if not _club_bot_enabled(db, perms.club_id):
+        raise HTTPException(400, "Bot Telegram đã tắt cho câu lạc bộ này")
+    if not _club_admin_chat_ids(db, perms.club_id):
+        raise HTTPException(400, "Chưa có quản trị viên nào liên kết Telegram (đăng nhập bot trước)")
+    bot_token = _bot_token_or_500()
+    today = _now_vn().date()
+    items = [it for it in _announcement_feed(db, perms.club_id, today, 60, include_later=True) if it["announcement_id"] == aid]
+    if not items:
+        raise HTTPException(400, "Quy tắc không có lần xuất hiện nào trong 60 ngày tới")
+    res = _push_announcement_items(db, perms.club_id, items[:1], today, bot_token, dedupe=False)
+    return {"sent": res["sent"], "errors": res["errors"], "date": items[0]["date"]}
 
 
 @app.get("/api/fee-reminders/preview")

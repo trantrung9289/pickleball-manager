@@ -781,3 +781,20 @@ class Announcement(Base):
 
     fee_type = relationship("FeeType")
 
+
+class AnnouncementPushLog(Base):
+    """Đợt 3 (2026-10-27): log đẩy Telegram cho từng lần xuất hiện của thông báo — chống gửi trùng trong ngày theo chat_id.
+    Bảng riêng (không mở rộng reminder_log vì fee_type_id ở đó NOT NULL và khoá theo tháng)."""
+    __tablename__ = "announcement_push_log"
+
+    id = Column(Integer, primary_key=True, index=True)
+    announcement_id = Column(Integer, ForeignKey("announcements.id"), nullable=False, index=True)
+    occurrence_date = Column(Date, nullable=False)
+    chat_id = Column(Integer, nullable=False)
+    send_date = Column(Date, nullable=False)
+    sent_at = Column(DateTime, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("announcement_id", "occurrence_date", "chat_id", "send_date", name="uq_announcement_push_per_day"),
+    )
+

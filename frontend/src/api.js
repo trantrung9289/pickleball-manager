@@ -242,6 +242,7 @@ export const announcementsApi = {
   update: (id, data) => api.put(`/api/announcements/${id}`, data),
   delete: (id) => api.delete(`/api/announcements/${id}`),
   feed: (params) => api.get("/api/announcements/feed", { params }),   // { days, include_later }
+  push: (id) => api.post(`/api/announcements/${id}/push`),             // đợt 3: gửi Telegram ngay tới admin CLB
 };
 
 export const reportLinksApi = {

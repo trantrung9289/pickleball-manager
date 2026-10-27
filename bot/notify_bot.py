@@ -1,5 +1,5 @@
 """
-Script cron: Gửi nhắc đóng phí qua Telegram.
+Script cron: Gửi nhắc đóng phí qua Telegram + đẩy thông báo (lịch sinh hoạt / khoản thu, đợt 3 2026-10-27).
 
 Logic tháng cần nhắc:
 - 5 ngày cuối tháng M  → nhắc phí tháng M+1
@@ -38,35 +38,46 @@ def _determine_reminder_month(today: date):
     return None
 
 
+def _post_internal(path: str) -> dict:
+    req = urllib.request.Request(
+        f"{BACKEND_URL}{path}",
+        method="POST",
+        headers={"X-Internal-Secret": INTERNAL_SECRET, "Content-Length": "0"},
+    )
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        return json.loads(resp.read())
+
+
 def main():
     today = date.today()
-    result = _determine_reminder_month(today)
-    if result is None:
-        print(f"[notify_bot] {today}: không trong khoảng nhắc — bỏ qua")
-        sys.exit(0)
-
-    month, year = result
-    print(f"[notify_bot] {today}: gửi nhắc tháng {month}/{year}")
-
     if not INTERNAL_SECRET:
         print("[notify_bot] ❌ INTERNAL_SECRET chưa cấu hình — dừng")
         sys.exit(1)
+    failed = False
 
-    url = f"{BACKEND_URL}/api/internal/send-fee-reminder?month={month}&year={year}"
-    req = urllib.request.Request(
-        url,
-        method="POST",
-        headers={
-            "X-Internal-Secret": INTERNAL_SECRET,
-            "Content-Length": "0",
-        },
-    )
+    # 1) Nhắc phí (chỉ trong cửa sổ đầu/cuối tháng)
+    result = _determine_reminder_month(today)
+    if result is None:
+        print(f"[notify_bot] {today}: không trong khoảng nhắc phí — bỏ qua bước nhắc phí")
+    else:
+        month, year = result
+        print(f"[notify_bot] {today}: gửi nhắc tháng {month}/{year}")
+        try:
+            body = _post_internal(f"/api/internal/send-fee-reminder?month={month}&year={year}")
+            print(f"[notify_bot] ✅ nhắc phí sent={body.get('sent')} skipped={body.get('skipped_already_sent_today')} errors={body.get('errors')}")
+        except Exception as exc:
+            print(f"[notify_bot] ❌ nhắc phí thất bại: {exc}")
+            failed = True
+
+    # 2) Thông báo có bật đẩy Telegram (mỗi ngày; backend tự chọn ngày đầu cửa sổ / đúng ngày, chống trùng)
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            body = json.loads(resp.read())
-        print(f"[notify_bot] ✅ sent={body.get('sent')} skipped={body.get('skipped_already_sent_today')} errors={body.get('errors')}")
+        body = _post_internal("/api/internal/send-announcements")
+        print(f"[notify_bot] ✅ thông báo sent={body.get('sent')} skipped={body.get('skipped')} clubs={body.get('clubs')} errors={body.get('errors')}")
     except Exception as exc:
-        print(f"[notify_bot] ❌ Thất bại: {exc}")
+        print(f"[notify_bot] ❌ thông báo thất bại: {exc}")
+        failed = True
+
+    if failed:
         sys.exit(1)
 
 

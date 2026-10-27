@@ -1,15 +1,16 @@
 /**
  * Trang "Thông báo" (đợt 2, 2026-10-27): quản lý quy tắc thông báo hiện trên chuông admin + trang public.
  * - Hai loại: lịch sinh hoạt (nội dung tự đặt) và khoản thu (nội dung tự sinh từ người chưa đóng, chọn khoản thu định kỳ).
- * - Lặp: một lần / hàng tuần (chọn thứ) / hàng tháng (ngày). Hiện trước N ngày (lead_days). push_telegram để đợt 3.
+ * - Lặp: một lần / hàng tuần (chọn thứ) / hàng tháng (ngày). Hiện trước N ngày (lead_days).
+ * - Đợt 3: push_telegram → cron gửi Telegram tới admin CLB vào ngày đầu cửa sổ và đúng ngày; nút "Gửi ngay" gửi lần gần nhất.
  * - "Xem trước 4 tuần": feed include_later để kiểm tra quy tắc nổ đúng ngày.
  */
 import { useEffect, useMemo, useState } from "react";
 import {
   Button, Space, Modal, Form, Input, Select, InputNumber, Switch, message, Typography, Row, Col, Card, Radio, Checkbox,
-  DatePicker, TimePicker, Tooltip, Tag, Empty, Spin,
+  DatePicker, TimePicker, Tooltip, Empty, Spin,
 } from "antd";
-import { PlusOutlined, EditOutlined, DeleteOutlined, SaveOutlined, ReloadOutlined } from "@ant-design/icons";
+import { PlusOutlined, EditOutlined, DeleteOutlined, SaveOutlined, ReloadOutlined, SendOutlined } from "@ant-design/icons";
 import dayjs from "dayjs";
 import ResponsiveTable from "../components/ResponsiveTable";
 import { StatusChip } from "../components/ui";
@@ -105,6 +106,13 @@ export default function Announcements({ perms }) {
     await announcementsApi.delete(r.id); message.success("Đã xoá"); load();
   };
 
+  const pushNow = async (r) => {
+    const ok = await confirm({ title: "Gửi Telegram ngay?", content: <div>Gửi lần xuất hiện gần nhất của <b>{r.title}</b> tới các quản trị viên đã liên kết Telegram.</div>, okText: "Gửi" });
+    if (!ok) return;
+    try { const res = await announcementsApi.push(r.id); message.success(`Đã gửi ${res.data.sent} tin (ngày ${dayjs(res.data.date).format("DD/MM")})${res.data.errors?.length ? `, ${res.data.errors.length} lỗi` : ""}`); }
+    catch (err) { message.error(err.response?.data?.detail || "Không gửi được"); }
+  };
+
   const toggle = async (r, field, value) => {
     try { await announcementsApi.update(r.id, { [field]: value }); load(); }
     catch (err) { message.error(err.response?.data?.detail || "Không cập nhật được"); }
@@ -118,11 +126,12 @@ export default function Announcements({ perms }) {
     { title: "Hiệu lực", render: (_, r) => (r.start_date || r.end_date) ? `${r.start_date ? dayjs(r.start_date).format("DD/MM/YY") : "…"} → ${r.end_date ? dayjs(r.end_date).format("DD/MM/YY") : "…"}` : "—" },
     { title: "Public", dataIndex: "show_public", render: (v, r) => <Switch size="small" checked={v} disabled={!canEdit} onChange={(c) => toggle(r, "show_public", c)} /> },
     { title: "Bật", dataIndex: "is_active", render: (v, r) => <Switch size="small" checked={v} disabled={!canEdit} onChange={(c) => toggle(r, "is_active", c)} /> },
-    { title: "Telegram", dataIndex: "push_telegram", render: (v) => <Tooltip title="Đẩy Telegram: đợt 3"><Tag color={v ? "processing" : "default"}>{v ? "Bật" : "Tắt"}</Tag></Tooltip> },
+    { title: "Telegram", dataIndex: "push_telegram", render: (v, r) => <Tooltip title="Cron gửi tới admin CLB vào ngày đầu cửa sổ hiện trước và đúng ngày"><Switch size="small" checked={v} disabled={!canEdit} onChange={(c) => toggle(r, "push_telegram", c)} /></Tooltip> },
     {
-      title: "Thao tác", width: 100,
+      title: "Thao tác", width: 130,
       render: (_, r) => canEdit ? (
         <Space>
+          <Tooltip title="Gửi Telegram ngay"><Button size="small" icon={<SendOutlined />} onClick={() => pushNow(r)} /></Tooltip>
           <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(r)} />
           <Button size="small" danger icon={<DeleteOutlined />} onClick={() => handleDelete(r)} />
         </Space>
@@ -143,13 +152,13 @@ export default function Announcements({ perms }) {
       </Row>
 
       <Row gutter={[16, 16]}>
-        <Col xs={24} xl={15}>
+        <Col xs={24} xxl={15}>
           <Card size="small" title="Quy tắc thông báo">
             <ResponsiveTable columns={columns} dataSource={data} rowKey="id" loading={loading} size="small" pagination={false}
               mobileTitle={(r) => r.title} mobileHideColumns={["Tiêu đề"]} />
           </Card>
         </Col>
-        <Col xs={24} xl={9}>
+        <Col xs={24} xxl={9}>
           <Card size="small" title={<span>Xem trước 4 tuần tới {preview && <StatusChip tone="brand">{preview.items.length}</StatusChip>}</span>}>
             {!preview ? <Spin /> : !preview.items.length ? <Empty description="Không có lần xuất hiện nào trong 28 ngày tới" />
               : previewGroups.map((g) => (
@@ -227,7 +236,7 @@ export default function Announcements({ perms }) {
           <Space size="large" wrap>
             <Form.Item name="show_public" label="Hiện trên trang public" valuePropName="checked" style={{ marginBottom: 0 }}><Switch /></Form.Item>
             <Form.Item name="is_active" label="Bật" valuePropName="checked" style={{ marginBottom: 0 }}><Switch /></Form.Item>
-            <Form.Item name="push_telegram" label={<Tooltip title="Đẩy Telegram đúng ngày: làm ở đợt 3">Đẩy Telegram</Tooltip>} valuePropName="checked" style={{ marginBottom: 0 }}><Switch disabled /></Form.Item>
+            <Form.Item name="push_telegram" label={<Tooltip title="Cron 14h gửi tới admin CLB đã liên kết Telegram: ngày đầu cửa sổ hiện trước và đúng ngày">Đẩy Telegram</Tooltip>} valuePropName="checked" style={{ marginBottom: 0 }}><Switch /></Form.Item>
           </Space>
         </Form>
       </Modal>
