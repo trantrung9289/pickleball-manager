@@ -112,8 +112,9 @@ export default function NotificationBell({ fetchFeed, scope, onManage, dark = fa
     <>
       <Badge count={unread} overflowCount={9} size="small" offset={[-2, 2]}>
         <Button type="text" size="small" aria-label={`Thông báo${unread ? `, ${unread} chưa xem` : ""}`} onClick={handleOpen}
-          className={unread ? "ui-bell ui-bell--ring" : "ui-bell"} style={{ ...btnStyle, height: 28, padding: "0 8px" }}>
+          className={unread ? "ui-bell ui-bell--ring" : "ui-bell"} style={{ ...btnStyle, height: 28, padding: "0 10px" }}>
           <BellOutlined />
+          <span style={{ marginLeft: 6, fontSize: 13 }}>Thông báo</span>
         </Button>
       </Badge>
       <Drawer
