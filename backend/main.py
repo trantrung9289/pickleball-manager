@@ -6518,6 +6518,7 @@ def _build_reminder_data(month: int, year: int, db: Session):
 # Quy tắc lặp lưu ở bảng announcements; lần xuất hiện tính lúc đọc (announcements.py), không cron, không log.
 # Thông báo khoản thu: nội dung tự sinh từ _unpaid_members (dùng chung với nhắc phí Telegram), public hiện cả tên.
 import announcements as _ann
+import webpush_service as _wp
 
 
 def _announcement_out(a: models.Announcement) -> dict:
@@ -6710,51 +6711,183 @@ def _bot_token_or_500() -> str:
     return tok
 
 
+def _due_announcement_items(db: Session, club_id: int, today: date) -> list:
+    """Lần xuất hiện cần đẩy hôm nay cho quy tắc push_telegram: ngày đầu cửa sổ (d − lead_days) và đúng ngày d."""
+    items = _announcement_feed(db, club_id, today, 60)
+    rules = {a.id: a for a in db.query(models.Announcement).filter(
+        models.Announcement.club_id == club_id, models.Announcement.push_telegram.is_(True)).all()}
+    due = []
+    for it in items:
+        r = rules.get(it["announcement_id"])
+        if not r:
+            continue
+        d = date.fromisoformat(it["date"])
+        first_day = d - timedelta(days=max(0, int(r.lead_days or 0)))
+        if today == first_day or today == d:
+            due.append(it)
+    return due
+
+
+def _web_push_payload(it: dict, club_name: str, slug) -> dict:
+    """Nội dung thông báo hệ điều hành: tiêu đề ngắn, thân ≤ 200 ký tự, bấm vào mở trang public."""
+    d = date.fromisoformat(it["date"])
+    when = f"{_ann.WEEKDAY_LABELS[d.weekday()]} {d.strftime('%d/%m')}" + (f" · {it['start_time']}" if it.get("start_time") else "")
+    if it["kind"] == "fee":
+        body = f"{when}. " + (f"Còn {it['unpaid_count']} người chưa đóng." if it.get("unpaid_count") else "Tất cả đã đóng.")
+    else:
+        body = f"{when}. {(it.get('body') or '').strip()}".strip()
+    return {
+        "title": f"{it['title']} — {club_name}",
+        "body": body[:200],
+        "tag": f"ann-{it['announcement_id']}-{it['date']}",
+        "url": f"/public/report/{slug}" if slug else "/",
+    }
+
+
+def _send_web_push_items(db: Session, club_id: int, items: list, today: date, dedupe: bool = True) -> dict:
+    """Gửi Web Push các item tới mọi subscription của CLB. dedupe → bỏ qua (thông báo, ngày, subscription) đã gửi hôm nay.
+    404/410 → xoá subscription; lỗi khác → tăng failures, ≥5 lần thì xoá."""
+    out = {"sent": 0, "skipped": 0, "removed": 0, "errors": 0}
+    if not _wp.enabled():
+        return out
+    subs = db.query(models.PushSubscription).filter(models.PushSubscription.club_id == club_id).all()
+    if not subs or not items:
+        return out
+    club = db.query(models.Club).filter(models.Club.id == club_id).first()
+    club_name = club.name if club else str(club_id)
+    fallback = db.query(models.PublicReportToken).filter(
+        models.PublicReportToken.club_id == club_id, models.PublicReportToken.is_active.is_(True)).first()
+    for sub in subs:
+        slug = (sub.token.slug or sub.token.token) if sub.token else (fallback.slug if fallback else None)
+        sub_info = {"endpoint": sub.endpoint, "keys": {"p256dh": sub.p256dh, "auth": sub.auth}}
+        dead = False
+        for it in items:
+            occ = date.fromisoformat(it["date"])
+            if dedupe and db.query(models.WebPushLog).filter(
+                models.WebPushLog.announcement_id == it["announcement_id"], models.WebPushLog.occurrence_date == occ,
+                models.WebPushLog.subscription_id == sub.id, models.WebPushLog.send_date == today).first():
+                out["skipped"] += 1
+                continue
+            res = _wp.send_push(sub_info, _web_push_payload(it, club_name, slug))
+            if res == "ok":
+                out["sent"] += 1
+                sub.failures = 0
+                if dedupe:
+                    db.add(models.WebPushLog(announcement_id=it["announcement_id"], occurrence_date=occ, subscription_id=sub.id, send_date=today))
+                    db.commit()
+            elif res == "gone":
+                dead = True; break
+            else:
+                out["errors"] += 1
+                sub.failures = (sub.failures or 0) + 1
+                if sub.failures >= 5:
+                    dead = True; break
+        if dead:
+            db.query(models.WebPushLog).filter(models.WebPushLog.subscription_id == sub.id).delete()
+            db.delete(sub); out["removed"] += 1
+        db.commit()
+    return out
+
+
 @app.post("/api/internal/send-announcements")
 def send_announcements_internal(db: Session = Depends(get_db), _: None = Depends(_check_internal_secret)):
-    """Cron (notify_bot.py, 14h VN hằng ngày): với quy tắc push_telegram, gửi Telegram tới admin CLB vào NGÀY ĐẦU cửa sổ hiển thị
-    (d - lead_days) và vào ĐÚNG NGÀY d (nếu lead_days > 0). Chống trùng theo announcement_push_log."""
-    bot_token = _bot_token_or_500()
+    """Cron (notify_bot.py, 14h VN hằng ngày): với quy tắc push_telegram, gửi Telegram tới admin CLB + Web Push tới người xem
+    public đã đăng ký, vào NGÀY ĐẦU cửa sổ hiển thị (d − lead_days) và ĐÚNG NGÀY d. Chống trùng theo announcement_push_log / web_push_log."""
+    bot_token = _os.environ.get("TELEGRAM_BOT_TOKEN") or _os.environ.get("BOT_TOKEN", "")
     today = _now_vn().date()
     club_ids = [r[0] for r in db.query(models.Announcement.club_id).filter(
         models.Announcement.is_active.is_(True), models.Announcement.push_telegram.is_(True)).distinct().all()]
-    total = {"sent": 0, "skipped": 0, "errors": [], "clubs": len(club_ids)}
+    total = {"sent": 0, "skipped": 0, "errors": [], "clubs": len(club_ids),
+             "web_push": {"sent": 0, "skipped": 0, "removed": 0, "errors": 0}}
     for cid in club_ids:
-        items = [it for it in _announcement_feed(db, cid, today, 60)
-                 if it["kind"] in ("schedule", "fee")]
-        rules = {a.id: a for a in db.query(models.Announcement).filter(models.Announcement.club_id == cid, models.Announcement.push_telegram.is_(True)).all()}
-        due = []
-        for it in items:
-            r = rules.get(it["announcement_id"])
-            if not r:
-                continue
-            d = date.fromisoformat(it["date"])
-            first_day = d - timedelta(days=max(0, int(r.lead_days or 0)))
-            if today == first_day or today == d:
-                due.append(it)
-        res = _push_announcement_items(db, cid, due, today, bot_token, dedupe=True)
-        total["sent"] += res["sent"]; total["skipped"] += res["skipped"]; total["errors"].extend(res["errors"])
+        due = _due_announcement_items(db, cid, today)
+        if bot_token:
+            res = _push_announcement_items(db, cid, due, today, bot_token, dedupe=True)
+            total["sent"] += res["sent"]; total["skipped"] += res["skipped"]; total["errors"].extend(res["errors"])
+        wp = _send_web_push_items(db, cid, due, today, dedupe=True)
+        for k in total["web_push"]:
+            total["web_push"][k] += wp[k]
     return total
 
 
 @app.post("/api/announcements/{aid}/push")
 def push_announcement_now(aid: int, db: Session = Depends(get_db), perms: ClubPermissions = Depends(get_club_permission)):
-    """Admin bấm "Gửi Telegram ngay": gửi lần xuất hiện gần nhất (trong 60 ngày) tới admin CLB, không chống trùng (như nhắc phí thủ công)."""
+    """Admin bấm "Gửi ngay": gửi lần xuất hiện gần nhất (trong 60 ngày) tới admin Telegram + Web Push người xem public,
+    không chống trùng (như nhắc phí thủ công). Không yêu cầu Telegram nếu có người đăng ký Web Push."""
     perms.require_edit()
     a = db.query(models.Announcement).filter(models.Announcement.id == aid, models.Announcement.club_id == perms.club_id).first()
     if not a:
         raise HTTPException(404, "Không tìm thấy thông báo")
-    if not _club_bot_enabled(db, perms.club_id):
-        raise HTTPException(400, "Bot Telegram đã tắt cho câu lạc bộ này")
-    if not _club_admin_chat_ids(db, perms.club_id):
-        raise HTTPException(400, "Chưa có quản trị viên nào liên kết Telegram (đăng nhập bot trước)")
-    bot_token = _bot_token_or_500()
     today = _now_vn().date()
     items = [it for it in _announcement_feed(db, perms.club_id, today, 60, include_later=True) if it["announcement_id"] == aid]
     if not items:
         raise HTTPException(400, "Quy tắc không có lần xuất hiện nào trong 60 ngày tới")
-    res = _push_announcement_items(db, perms.club_id, items[:1], today, bot_token, dedupe=False)
-    return {"sent": res["sent"], "errors": res["errors"], "date": items[0]["date"]}
+    tg_ok = _club_bot_enabled(db, perms.club_id) and bool(_club_admin_chat_ids(db, perms.club_id))
+    wp_subs = db.query(models.PushSubscription).filter(models.PushSubscription.club_id == perms.club_id).count() if _wp.enabled() else 0
+    if not tg_ok and not wp_subs:
+        raise HTTPException(400, "Chưa có kênh nhận: không có quản trị viên liên kết Telegram và chưa ai bật thông báo trên thiết bị")
+    res = {"sent": 0, "errors": []}
+    if tg_ok:
+        res = _push_announcement_items(db, perms.club_id, items[:1], today, _bot_token_or_500(), dedupe=False)
+    wp = _send_web_push_items(db, perms.club_id, items[:1], today, dedupe=False) if wp_subs else {"sent": 0, "removed": 0, "errors": 0, "skipped": 0}
+    return {"sent": res["sent"], "errors": res["errors"], "date": items[0]["date"], "web_push_sent": wp["sent"], "web_push_errors": wp["errors"]}
+
+
+# ── Web Push public (2026-10-28): cấu hình, đăng ký/huỷ theo link public, manifest PWA theo CLB ──
+@app.get("/api/public/push/config")
+@limiter.limit("60/minute")
+def public_push_config(request: Request):
+    return {"enabled": _wp.enabled(), "public_key": _wp.public_key(), "ephemeral": _wp.is_ephemeral()}
+
+
+@app.post("/api/public/report/{slug}/push/subscribe")
+@limiter.limit("20/minute")
+def public_push_subscribe(request: Request, slug: str, data: schemas.PushSubscribeIn, db: Session = Depends(get_db)):
+    """Người xem public bật thông báo trên thiết bị: upsert theo endpoint (đổi link → cập nhật CLB/token)."""
+    if not _wp.enabled():
+        raise HTTPException(503, "Máy chủ chưa cấu hình Web Push")
+    rec = _validate_token(slug, db)
+    sub = db.query(models.PushSubscription).filter(models.PushSubscription.endpoint == data.endpoint).first()
+    if sub:
+        sub.club_id, sub.token_id, sub.p256dh, sub.auth, sub.failures = rec.club_id, rec.id, data.keys.p256dh, data.keys.auth, 0
+        sub.user_agent = data.user_agent or sub.user_agent
+    else:
+        sub = models.PushSubscription(club_id=rec.club_id, token_id=rec.id, endpoint=data.endpoint, p256dh=data.keys.p256dh,
+                                      auth=data.keys.auth, user_agent=data.user_agent)
+        db.add(sub)
+    db.commit(); db.refresh(sub)
+    return {"ok": True, "id": sub.id}
+
+
+@app.post("/api/public/report/{slug}/push/unsubscribe")
+@limiter.limit("20/minute")
+def public_push_unsubscribe(request: Request, slug: str, data: schemas.PushUnsubscribeIn, db: Session = Depends(get_db)):
+    _validate_token(slug, db)
+    sub = db.query(models.PushSubscription).filter(models.PushSubscription.endpoint == data.endpoint).first()
+    if sub:
+        db.query(models.WebPushLog).filter(models.WebPushLog.subscription_id == sub.id).delete()
+        db.delete(sub); db.commit()
+    return {"ok": True}
+
+
+@app.get("/api/public/report/{slug}/manifest.webmanifest", include_in_schema=False)
+@limiter.limit("60/minute")
+def public_manifest(request: Request, slug: str, db: Session = Depends(get_db)):
+    """Manifest PWA theo CLB: tên + icon = logo CLB (nếu có), start_url = trang public này → "Thêm vào màn hình chính" mở đúng CLB."""
+    from fastapi.responses import Response as _Resp
+    rec = _validate_token(slug, db)
+    club = db.query(models.Club).filter(models.Club.id == rec.club_id).first()
+    name = (club.name if club else "CLB")
+    color = (club.brand_color if club and club.brand_color else "#1F8A52")
+    icons = ([{"src": club.logo_src, "sizes": "512x512", "type": "image/png", "purpose": "any"}] if club and club.logo_src
+             else [{"src": "/icon-192.png", "sizes": "192x192", "type": "image/png"}, {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png"}])
+    manifest = {
+        "name": name, "short_name": name[:12], "description": f"{name} — thông báo & kết quả",
+        "start_url": f"/public/report/{slug}", "scope": "/", "display": "standalone",
+        "background_color": "#F5F6F8", "theme_color": color, "lang": "vi", "icons": icons,
+    }
+    return _Resp(content=_json.dumps(manifest, ensure_ascii=False), media_type="application/manifest+json",
+                 headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/api/fee-reminders/preview")
@@ -6933,6 +7066,16 @@ def send_fee_reminder(
 if STATIC_DIR.exists():
     app.mount("/assets", StaticFiles(directory=STATIC_DIR / "assets"), name="assets")
 
+    # File tĩnh ở gốc build (sw.js, manifest.webmanifest, icon-*.png, favicon.svg…): phục vụ đúng file + MIME
+    # (trước đây mọi đường dẫn đều trả index.html → service worker nhận text/html, không đăng ký được). Chặn ".." / ẩn.
+    _ROOT_MIME = {".webmanifest": "application/manifest+json", ".js": "application/javascript", ".svg": "image/svg+xml",
+                  ".png": "image/png", ".ico": "image/x-icon", ".txt": "text/plain"}
+
     @app.get("/{full_path:path}", include_in_schema=False)
     async def serve_spa(full_path: str):
+        if full_path and "/" not in full_path and not full_path.startswith("."):
+            candidate = STATIC_DIR / full_path
+            if candidate.is_file():
+                headers = {"Cache-Control": "no-cache"} if full_path in ("sw.js", "manifest.webmanifest") else None
+                return FileResponse(candidate, media_type=_ROOT_MIME.get(candidate.suffix.lower()), headers=headers)
         return FileResponse(STATIC_DIR / "index.html")

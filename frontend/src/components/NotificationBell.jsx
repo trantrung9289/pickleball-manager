@@ -5,6 +5,7 @@
  *  - scope: khoá lưu "đã xem" trong localStorage của trình duyệt (public: slug; admin: club:<id>). Không lưu server.
  *  - onManage: (tuỳ chọn) mở trang quản lý thông báo (admin).
  *  - dark: kiểu nút như ThemeSwitcher (dark=false → nút viền màu thương hiệu trên nền sáng).
+ *  - topPanel: (tuỳ chọn) khối hiện trên đầu Drawer (trang public: PushSettings "Thông báo trên thiết bị").
  * Hành vi: badge = số lần xuất hiện CHƯA XEM (tối đa "9+"); mở Drawer (phải trên desktop, dưới trên mobile) → đánh dấu đã xem;
  * làm mới khi mở và mỗi 60s; rung nhẹ một lần khi có chưa xem (tắt khi prefers-reduced-motion, xem index.css).
  */
@@ -61,7 +62,7 @@ export function FeedItem({ it }) {
   );
 }
 
-export default function NotificationBell({ fetchFeed, scope, onManage, dark = false }) {
+export default function NotificationBell({ fetchFeed, scope, onManage, dark = false, topPanel = null }) {
   const { isMobileView } = useViewMode();
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState(null);          // null = chưa tải lần nào
@@ -124,6 +125,7 @@ export default function NotificationBell({ fetchFeed, scope, onManage, dark = fa
         styles={{ body: { padding: "4px 16px 16px" } }}
         extra={onManage ? <Button size="small" icon={<SettingOutlined />} onClick={() => { handleClose(); onManage(); }}>Quản lý</Button> : null}
       >
+        {topPanel}
         {loading ? <div style={{ textAlign: "center", padding: 24 }}><Spin /></div>
           : !list.length ? <Empty description="Chưa có thông báo nào" style={{ padding: 24 }} />
           : groups.map((g) => (

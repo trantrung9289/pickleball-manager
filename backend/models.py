@@ -805,3 +805,37 @@ class AnnouncementPushLog(Base):
         UniqueConstraint("announcement_id", "occurrence_date", "chat_id", "send_date", name="uq_announcement_push_per_day"),
     )
 
+
+class PushSubscription(Base):
+    """Web Push (2026-10-28): đăng ký nhận đẩy của người xem trang public (ẩn danh), gắn CLB + link public đã mở."""
+    __tablename__ = "push_subscriptions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    club_id = Column(Integer, ForeignKey("clubs.id"), nullable=False, index=True)
+    token_id = Column(Integer, ForeignKey("public_report_tokens.id"), nullable=True)
+    endpoint = Column(Text, nullable=False, unique=True)
+    p256dh = Column(String(200), nullable=False)
+    auth = Column(String(60), nullable=False)
+    user_agent = Column(String(300), nullable=True)
+    failures = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, server_default=func.now())
+    last_seen_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    token = relationship("PublicReportToken")
+
+
+class WebPushLog(Base):
+    """Chống gửi trùng Web Push theo (thông báo, ngày xuất hiện, subscription, ngày gửi)."""
+    __tablename__ = "web_push_log"
+
+    id = Column(Integer, primary_key=True, index=True)
+    announcement_id = Column(Integer, ForeignKey("announcements.id"), nullable=False, index=True)
+    occurrence_date = Column(Date, nullable=False)
+    subscription_id = Column(Integer, ForeignKey("push_subscriptions.id"), nullable=False)
+    send_date = Column(Date, nullable=False)
+    sent_at = Column(DateTime, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("announcement_id", "occurrence_date", "subscription_id", "send_date", name="uq_web_push_per_day"),
+    )
+

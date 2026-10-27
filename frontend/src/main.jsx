@@ -12,3 +12,11 @@ createRoot(document.getElementById("root")).render(
     </ThemeProvider>
   </StrictMode>
 );
+
+// Service worker chỉ phục vụ Web Push (public/sw.js), không cache; lỗi đăng ký thì bỏ qua (không ảnh hưởng app)
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => {});
+  });
+}
+

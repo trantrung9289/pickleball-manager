@@ -14,6 +14,7 @@ import { ViewModeProvider, useViewMode } from "../contexts/ViewModeContext";
 import ViewModeSwitcher from "../components/ViewModeSwitcher";
 import ThemeSwitcher from "../components/ThemeSwitcher";
 import NotificationBell from "../components/NotificationBell";
+import PushSettings from "../components/PushSettings";
 import { useAppTheme } from "../contexts/ThemeContext";
 import MobileBottomNav from "../components/mobile/MobileBottomNav";
 
@@ -31,6 +32,14 @@ function PublicReportInner({ token }) {
   const isDark = themeName === "ai-inspired";
 
   const api = useMemo(() => createPublicReportApi(token), [token]);
+
+  // PWA: manifest theo CLB (tên, logo, start_url = trang này) để "Thêm vào màn hình chính" mở đúng CLB và nhận Web Push
+  useEffect(() => {
+    const link = document.querySelector('link[rel="manifest"]');
+    const prev = link?.getAttribute("href");
+    if (link) link.setAttribute("href", api.manifestUrl);
+    return () => { if (link && prev) link.setAttribute("href", prev); };
+  }, [api]);
 
   const SECTIONS = [
     { key: "monthly-detail", label: "Thống kê tháng", navLabel: "Tháng", icon: <BarChartOutlined />, children: <MonthlyStats year={year} api={api} /> },
@@ -107,7 +116,7 @@ function PublicReportInner({ token }) {
           <Col>
             <Space wrap>
               {/* Chuông thông báo (đợt 2): cùng cụm với nút giao diện; trên mobile các tag lượt xem/hết hạn xuống dòng riêng */}
-              <NotificationBell scope={`public:${token}`} fetchFeed={api.announcements} dark={isDark} />
+              <NotificationBell scope={`public:${token}`} fetchFeed={api.announcements} dark={isDark} topPanel={<PushSettings push={api.push} />} />
               <ThemeSwitcher dark={isDark} />
               <ViewModeSwitcher />
               {!isMobileView && <>

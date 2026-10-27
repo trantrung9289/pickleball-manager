@@ -264,6 +264,12 @@ export const createPublicReportApi = (slug) => {
   return {
     meta: () => pub.get(`/api/public/report/${slug}`),
     announcements: () => pub.get(`${base}/announcements`),
+    manifestUrl: `${base}/manifest.webmanifest`,   // manifest PWA theo CLB (tên, logo, start_url = trang này)
+    push: {   // Web Push cho người xem public (2026-10-28)
+      config: () => pub.get("/api/public/push/config"),
+      subscribe: (body) => pub.post(`${base}/push/subscribe`, body),
+      unsubscribe: (body) => pub.post(`${base}/push/unsubscribe`, body),
+    },
     reports: {
       summary: (year) => pub.get(`${base}/summary`, { params: { year } }),
       monthlyDetail: (month, year) => pub.get(`${base}/monthly-detail`, { params: { month, year } }),

@@ -1172,3 +1172,20 @@ class AnnouncementOut(AnnouncementBase):
     updated_at: Optional[datetime] = None
     model_config = ConfigDict(from_attributes=True)
 
+
+# ── WEB PUSH (người xem public, 2026-10-28) ──────────────────────────────────
+
+class PushKeys(BaseModel):
+    p256dh: str = Field(min_length=10, max_length=200)
+    auth: str = Field(min_length=5, max_length=60)
+
+
+class PushSubscribeIn(BaseModel):
+    endpoint: str = Field(min_length=20, max_length=2000, pattern=r"^https://")
+    keys: PushKeys
+    user_agent: Optional[str] = Field(default=None, max_length=300)
+
+
+class PushUnsubscribeIn(BaseModel):
+    endpoint: str = Field(min_length=20, max_length=2000)
+
