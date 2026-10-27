@@ -81,7 +81,7 @@ export default function Dashboard() {
   (unpaid || []).forEach(u => todos.push({ key: `fee-${u.fee_type_name}`, tone: "danger", text: `${u.count} thành viên chưa đóng "${u.fee_type_name}" tháng ${month}` }));
 
   return (
-    <div>
+    <div className="ui-glass-scope">{/* mọi Card trong Dashboard dùng kiểu kính (index.css) */}
       <Title level={3} style={{ marginBottom: 24 }}>Tổng quan</Title>
 
       {/* KPIs all-time */}

@@ -84,7 +84,7 @@ function PublicReportInner({ token }) {
   const labelTextColor = isDark ? "#5dd49a" : "#1a7a4a";
 
   return (
-    <div style={{ minHeight: "100vh", background: antToken.colorBgLayout }}>
+    <div className="ui-glass-scope" style={{ minHeight: "100vh", background: antToken.colorBgLayout }}>{/* đồng bộ kiểu kính với Dashboard */}
       {/* Header */}
       <div style={{
         background: antToken.colorBgContainer,
@@ -131,7 +131,7 @@ function PublicReportInner({ token }) {
         padding: isMobileView ? "16px 12px" : "24px 16px",
         paddingBottom: isMobileView ? "calc(64px + env(safe-area-inset-bottom, 0px))" : undefined,
       }}>
-        <Card bordered={false} style={{ marginBottom: 16, borderRadius: 12, background: antToken.colorBgContainer }}>
+        <Card bordered={false} style={{ marginBottom: 16, borderRadius: 12 }}>
           <Row justify="space-between" align="middle">
             <Title level={5} style={{ margin: 0, color: antToken.colorText }}>Năm tài chính</Title>
             <Select value={year} onChange={setYear} style={{ width: 100 }}>

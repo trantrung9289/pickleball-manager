@@ -67,27 +67,37 @@ body {
   transition: border-color 0.15s ease;
 }
 
-/* 2026-10-27: ô số liệu StatCard kiểu "kính" — nền mờ bán trong suốt + backdrop-filter, viền mảnh, nhấc 2px khi rê chuột.
-   Ngoại lệ duy nhất của quy tắc "không nhấc thẻ" ở trên (theo yêu cầu người dùng, phương án A). Tắt chuyển động khi reduced-motion. */
-.ui-stat-card.ant-card {
+/* 2026-10-27: kiểu "kính" — nền mờ bán trong suốt + backdrop-filter, viền mảnh. Áp cho ô số liệu (.ui-stat-card) và mọi .ant-card
+   bên trong vùng .ui-glass-scope (Dashboard, trang public). Thẻ có background inline riêng (ô màu cân đối quỹ…) vẫn giữ màu đó.
+   Chỉ .ui-stat-card nhấc 2px khi rê chuột — ngoại lệ duy nhất của quy tắc "không nhấc thẻ" ở trên. Tắt chuyển động khi reduced-motion. */
+.ui-stat-card.ant-card,
+.ui-glass-scope .ant-card {
   background: rgba(255, 255, 255, 0.72);
   -webkit-backdrop-filter: blur(14px) saturate(1.4);
   backdrop-filter: blur(14px) saturate(1.4);
   border: 1px solid rgba(255, 255, 255, 0.65);
   box-shadow: 0 1px 2px rgba(16, 24, 40, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.6);
+}
+.ui-stat-card.ant-card {
   transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.15s ease;
 }
 .ui-stat-card.ant-card:hover {
   transform: translateY(-2px);
   box-shadow: 0 6px 18px rgba(16, 24, 40, 0.10), inset 0 1px 0 rgba(255, 255, 255, 0.6);
 }
-[data-theme="dark"] .ui-stat-card.ant-card {
+[data-theme="dark"] .ui-stat-card.ant-card,
+[data-theme="dark"] .ui-glass-scope .ant-card {
   background: rgba(30, 35, 43, 0.62);
   border-color: rgba(255, 255, 255, 0.08);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 [data-theme="dark"] .ui-stat-card.ant-card:hover {
   box-shadow: 0 8px 22px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+/* Thẻ lồng trong thẻ kính: bỏ blur lớp trong để không chồng mờ, chỉ giữ nền nhạt */
+.ui-glass-scope .ant-card .ant-card {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 @media (prefers-reduced-motion: reduce) {
   .ui-stat-card.ant-card { transition: none; }
