@@ -153,6 +153,9 @@ def _run_migration():
         # Bảng clubs — superuser cấp/tắt quyền dùng bot Telegram cho CẢ CLB (mặc định bật, không khoá CLB đang dùng)
         ("clubs", "bot_enabled", "BOOLEAN DEFAULT 1 NOT NULL", None),
         ("clubs", "brand_color", "VARCHAR(9)", None),
+        # 2026-10-28: logo CLB lưu trong DB (PNG chuẩn hoá bằng Pillow) + hash để cache
+        ("clubs", "logo_png", "BLOB", None),
+        ("clubs", "logo_hash", "VARCHAR(16)", None),
         # Bảng tournaments — quy tắc ghép ĐỒNG ĐỘI cho vòng quay ghép đội (giải đôi)
         ("tournaments", "partner_rules", "JSON", None),
         # Bảng clubs — danh sách hạng cấu hình ở cấp CLB (NULL → DEFAULT_RANK_LEVELS)
@@ -729,6 +732,74 @@ def set_club_appearance(data: schemas.ClubAppearanceIn, db: Session = Depends(ge
     club.brand_color = data.brand_color.upper() if data.brand_color else None
     db.commit(); db.refresh(club)
     return club
+
+
+# ── Logo CLB (2026-10-28): lưu trong DB, chuẩn hoá PNG ≤ LOGO_MAX_PX bằng Pillow; phục vụ public kèm cache theo hash ──
+LOGO_MAX_PX = 512
+LOGO_MAX_UPLOAD = 5 * 1024 * 1024
+
+
+def _normalize_logo(raw: bytes) -> bytes:
+    """Mở ảnh (PNG/JPEG/WebP/GIF…), thu nhỏ vừa khung LOGO_MAX_PX giữ tỉ lệ, xuất PNG RGBA tối ưu. Ảnh hỏng/SVG → ValueError."""
+    from PIL import Image, UnidentifiedImageError
+    try:
+        img = Image.open(io.BytesIO(raw))
+        img.load()
+    except (UnidentifiedImageError, OSError) as e:
+        raise ValueError("File không phải ảnh PNG/JPEG/WebP hợp lệ") from e
+    if img.format == "SVG":
+        raise ValueError("Không nhận SVG")
+    img = img.convert("RGBA")
+    img.thumbnail((LOGO_MAX_PX, LOGO_MAX_PX), Image.LANCZOS)
+    out = io.BytesIO()
+    img.save(out, format="PNG", optimize=True)
+    return out.getvalue()
+
+
+@app.post("/api/club/logo", response_model=schemas.ClubOut)
+async def upload_club_logo(file: UploadFile = File(...), db: Session = Depends(get_db),
+                           perms: ClubPermissions = Depends(get_club_permission)):
+    """Club admin tải logo cho CLB đang chọn: ≤ 5MB, PNG/JPEG/WebP; lưu PNG đã thu nhỏ vào clubs.logo_png."""
+    perms.require_edit()
+    club = db.query(models.Club).filter(models.Club.id == perms.club_id).first()
+    if not club:
+        raise HTTPException(404, "Không tìm thấy CLB")
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(400, "File rỗng")
+    if len(raw) > LOGO_MAX_UPLOAD:
+        raise HTTPException(400, "Ảnh quá lớn (tối đa 5MB)")
+    try:
+        png = _normalize_logo(raw)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    club.logo_png = png
+    club.logo_hash = hashlib.sha1(png).hexdigest()[:12]
+    db.commit(); db.refresh(club)
+    return club
+
+
+@app.delete("/api/club/logo", response_model=schemas.ClubOut)
+def delete_club_logo(db: Session = Depends(get_db), perms: ClubPermissions = Depends(get_club_permission)):
+    perms.require_edit()
+    club = db.query(models.Club).filter(models.Club.id == perms.club_id).first()
+    if not club:
+        raise HTTPException(404, "Không tìm thấy CLB")
+    club.logo_png = None; club.logo_hash = None
+    db.commit(); db.refresh(club)
+    return club
+
+
+@app.get("/api/public/club-logo/{club_id}", include_in_schema=False)
+def public_club_logo(club_id: int, v: Optional[str] = None, db: Session = Depends(get_db)):
+    """Ảnh logo PNG, không cần đăng nhập (logo vốn hiện trên trang public). Có ?v= đúng hash → cache 1 năm; không → no-cache."""
+    club = db.query(models.Club).filter(models.Club.id == club_id).first()
+    if not club or not club.logo_png:
+        raise HTTPException(404, "CLB chưa có logo")
+    from fastapi.responses import Response
+    cache = "public, max-age=31536000, immutable" if v and v == club.logo_hash else "no-cache"
+    return Response(content=club.logo_png, media_type="image/png",
+                    headers={"Cache-Control": cache, "ETag": f'"{club.logo_hash}"'})
 
 
 # ── Club admin: cấp quyền dùng bot Telegram cho từng tài khoản trong CLB ──
@@ -2109,6 +2180,7 @@ def public_report_meta(request: Request, slug: str, db: Session = Depends(get_db
         "label": rec.label,
         "club_name": club.name if club else "",
         "club_sport": club.sport if club else "",
+        "club_logo_src": club.logo_src if club else None,
         "expires_at": rec.expires_at.isoformat() if rec.expires_at else None,
         "view_count": rec.view_count,
     }

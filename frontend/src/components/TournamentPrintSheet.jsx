@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { tournamentsApi } from "../api";
 import { useAuth } from "../context/AuthContext";
+import { logoSrc } from "../api";
 import {
   projectedKnockoutSlots, buildProjectedBracketNodes, buildRealBracketNodes, computeBracketGeometry,
   findThirdPlaceMatch,
@@ -39,7 +40,9 @@ const BRACKET_MIN_SCALE = 0.5; // dưới mức này chữ quá nhỏ để ghi 
 // ── Khối tiêu đề dùng chung mọi trang in ─────────────────────────────────────
 function SheetHeader({ tournament, subtitle }) {
   // Portal vào document.body vẫn giữ React context → đọc được CLB đang chọn.
-  const clubName = useAuth()?.selectedClub?.name;
+  const selectedClub = useAuth()?.selectedClub;
+  const clubName = selectedClub?.name;
+  const clubLogo = logoSrc(selectedClub?.logo_src);
   // Giải đồng đội: tổng số trận đồng đội + trận thành phần (cùng cách đếm với thống kê đầu trang giải)
   let teamCounts = null;
   if (tournament.team_type === "team") {
@@ -53,12 +56,15 @@ function SheetHeader({ tournament, subtitle }) {
       display: "flex", justifyContent: "space-between", alignItems: "flex-start",
       borderBottom: "3px solid #141413", paddingBottom: 10, marginBottom: 10,
     }}>
-      <div>
-        <div style={{ fontSize: 11, letterSpacing: ".08em", textTransform: "uppercase", color: "#888" }}>
-          {clubName || "CLB: ___________________"}
+      <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+        {clubLogo && <img src={clubLogo} alt="" style={{ width: 44, height: 44, objectFit: "contain", flexShrink: 0 }} />}
+        <div>
+          <div style={{ fontSize: 11, letterSpacing: ".08em", textTransform: "uppercase", color: "#888" }}>
+            {clubName || "CLB: ___________________"}
+          </div>
+          <div style={{ fontSize: 20, fontWeight: 800, marginTop: 3 }}>{subtitle}</div>
+          <div style={{ fontSize: 12.5, color: "#555", marginTop: 2 }}>Tên giải: {tournament.name}</div>
         </div>
-        <div style={{ fontSize: 20, fontWeight: 800, marginTop: 3 }}>{subtitle}</div>
-        <div style={{ fontSize: 12.5, color: "#555", marginTop: 2 }}>Tên giải: {tournament.name}</div>
       </div>
       <div style={{ textAlign: "right", fontSize: 12, color: "#555", lineHeight: 1.6, whiteSpace: "nowrap" }}>
         Ngày: ____ / ____ / {new Date().getFullYear()} &nbsp;·&nbsp; Số đội: <b>{tournament.participants.length}</b>

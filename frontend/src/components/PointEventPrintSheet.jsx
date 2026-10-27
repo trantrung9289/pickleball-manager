@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useAuth } from "../context/AuthContext";
+import { logoSrc } from "../api";
 
 /**
  * Bản in sự kiện thành tích cá nhân (Mini game) — render ẩn (display:none ngoài màn hình in, xem
@@ -106,19 +107,24 @@ function buildRows(participants) {
 // ── Khối tiêu đề dùng chung mọi trang in (mẫu SheetHeader của TournamentPrintSheet) ─────────────
 function SheetHeader({ event, subtitle, activeCount, scoreCount }) {
   // Portal vào document.body vẫn giữ React context → đọc được CLB đang chọn (public không có → gạch trống).
-  const clubName = useAuth()?.selectedClub?.name;
+  const selectedClub = useAuth()?.selectedClub;
+  const clubName = selectedClub?.name;
+  const clubLogo = logoSrc(selectedClub?.logo_src);
   return (
     <div style={{
       display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16,
       borderBottom: "3px solid #141413", paddingBottom: 10, marginBottom: 10,
     }}>
-      <div style={{ minWidth: 0 }}>
+      <div style={{ minWidth: 0, display: "flex", gap: 10, alignItems: "flex-start" }}>
+        {clubLogo && <img src={clubLogo} alt="" style={{ width: 44, height: 44, objectFit: "contain", flexShrink: 0 }} />}
+        <div style={{ minWidth: 0 }}>
         <div style={{ fontSize: 11, letterSpacing: ".08em", textTransform: "uppercase", color: "#888" }}>
           {clubName || "CLB: ___________________"}
         </div>
         <div style={{ fontSize: 20, fontWeight: 800, marginTop: 3 }}>{subtitle}</div>
         <div style={{ fontSize: 12.5, color: "#555", marginTop: 2, wordBreak: "break-word" }}>
           Sự kiện: <b style={{ color: "#141413" }}>{event.name}</b>
+        </div>
         </div>
       </div>
       <div style={{ textAlign: "right", fontSize: 12, color: "#555", lineHeight: 1.6, whiteSpace: "nowrap" }}>

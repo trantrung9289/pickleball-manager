@@ -9,6 +9,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { Button, Segmented, Space, Table, Tag, Tooltip, Typography } from "antd";
 import { PrinterOutlined } from "@ant-design/icons";
+import { useAuth } from "../../context/AuthContext";
+import { logoSrc } from "../../api";
 
 const { Text } = Typography;
 const LEG_LABEL = { leg1: "Lượt đi", leg2: "Lượt về", knockout: "Loại trực tiếp" };
@@ -107,6 +109,8 @@ export default function TeamStandingsTable({ tournament, rules, group, fetchStan
       : []),
   ];
 
+  // Logo + tên CLB cho bản in (public không có context đăng nhập → bỏ qua)
+  const printClub = useAuth()?.selectedClub;
   // In riêng bảng xếp hạng: mở cửa sổ mới chỉ có bảng này rồi gọi in
   const printStandings = () => {
     const esc = (v) => String(v ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
@@ -122,7 +126,7 @@ export default function TeamStandingsTable({ tournament, rules, group, fetchStan
     const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title>
 <style>body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;padding:16px;color:#141413}h2{margin:0 0 4px}p{margin:0 0 10px;color:#555;font-size:12px}
 table{border-collapse:collapse;width:100%}th,td{border:1px solid #bbb;padding:5px 7px;font-size:12.5px;text-align:center}th{background:#eef3f8}td:nth-child(2){text-align:left;font-weight:600}
-@media print{body{padding:0}}</style></head><body><h2>${esc(title)}</h2>
+@media print{body{padding:0}}.hd{display:flex;align-items:center;gap:10px;margin-bottom:6px}.hd img{width:40px;height:40px;object-fit:contain}.hd span{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#888}</style></head><body>${printClub ? `<div class="hd">${printClub.logo_src ? `<img src="${esc(logoSrc(printClub.logo_src))}" alt="">` : ""}<span>${esc(printClub.name)}</span></div>` : ""}<h2>${esc(title)}</h2>
 <p>${ranking === "point_diff" ? "Xếp theo tổng hiệu số điểm trận thành phần → điểm ghi → đối đầu." : "Xếp theo điểm bảng (1 điểm/trận đồng đội thắng) rồi tie-break điều lệ."} Cột thể loại: trận thành phần thắng–thua. In lúc ${new Date().toLocaleString("vi-VN")}.</p>
 <table><thead><tr>${head.map((h) => `<th>${esc(h)}</th>`).join("")}</tr></thead><tbody>${body.map((r) => `<tr>${r.map((c) => `<td>${esc(c)}</td>`).join("")}</tr>`).join("")}</tbody></table>
 <script>window.onload=function(){window.print();}</script></body></html>`;

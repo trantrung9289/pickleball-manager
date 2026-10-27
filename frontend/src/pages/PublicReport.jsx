@@ -7,7 +7,7 @@ import {
   BarChartOutlined, TeamOutlined, DollarOutlined,
 } from "@ant-design/icons";
 import dayjs from "dayjs";
-import { createPublicReportApi } from "../api";
+import { createPublicReportApi, logoSrc } from "../api";
 import { YearlySummary, MonthlyStats, MemberContributions, FeeStatusTracker } from "../components/ReportContent";
 import PublicTournamentTracker from "../components/PublicTournamentTracker";
 import { ViewModeProvider, useViewMode } from "../contexts/ViewModeContext";
@@ -95,7 +95,9 @@ function PublicReportInner({ token }) {
         <Row justify="space-between" align="middle">
           <Col>
             <Space align="center">
-              <TrophyOutlined style={{ fontSize: 22, color: themeConfig.sidebarActive }} />
+              {meta.club_logo_src
+                ? <img src={logoSrc(meta.club_logo_src)} alt="" style={{ width: 40, height: 40, borderRadius: 10, objectFit: "contain" }} />
+                : <TrophyOutlined style={{ fontSize: 22, color: themeConfig.sidebarActive }} />}
               <div>
                 <Title level={4} style={{ margin: 0, lineHeight: 1.2, color: antToken.colorText }}>{meta.club_name}</Title>
                 <Text style={{ fontSize: 12, color: antToken.colorTextSecondary }}>{meta.club_sport} · Báo cáo tài chính</Text>

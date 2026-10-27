@@ -4,11 +4,11 @@ import {
   Avatar, Dropdown, Space, Result, Button, Drawer,
 } from "antd";
 import {
-  DashboardOutlined, TeamOutlined, DollarOutlined, SwapOutlined, BarChartOutlined, TrophyOutlined, UserOutlined, LogoutOutlined, LockOutlined, RobotOutlined, UserAddOutlined, BgColorsOutlined, NotificationOutlined,
+  DashboardOutlined, TeamOutlined, DollarOutlined, SwapOutlined, BarChartOutlined, TrophyOutlined, UserOutlined, LogoutOutlined, LockOutlined, RobotOutlined, UserAddOutlined, SettingOutlined, NotificationOutlined,
 } from "@ant-design/icons";
 import { AuthProvider, useAuth } from "./context/AuthContext";
-import { announcementsApi } from "./api";
-import BrandColorModal from "./components/BrandColorModal";
+import { announcementsApi, logoSrc } from "./api";
+import ClubSettingsModal from "./components/ClubSettingsModal";
 import { ViewModeProvider, useViewMode } from "./contexts/ViewModeContext";
 import { useAppTheme, THEMES } from "./contexts/ThemeContext";
 import ViewModeSwitcher from "./components/ViewModeSwitcher";
@@ -171,7 +171,7 @@ function AppShell() {
       },
       { type: "divider" },
       { key: "bot_config", label: "Cài đặt Telegram Bot", icon: <RobotOutlined /> },
-      ...(perms.canEdit ? [{ key: "brand", label: "Màu thương hiệu CLB", icon: <BgColorsOutlined /> }] : []),
+      ...(perms.canEdit ? [{ key: "brand", label: "Cài đặt CLB", icon: <SettingOutlined /> }] : []),   // logo + màu thương hiệu
       ...(memberships.length > 1 ? [{ key: "switch_club", label: "Đổi câu lạc bộ", icon: <SwapOutlined /> }] : []),
       { key: "logout", label: "Đăng xuất", icon: <LogoutOutlined />, danger: true },
     ],
@@ -201,8 +201,11 @@ function AppShell() {
   const sidebarContent = (
     <>
       <div style={{ padding: "16px 24px", borderBottom: `1px solid ${themeConfig.sidebarBorder}`, background: themeConfig.sidebar }}>
-        <Title level={5} style={{ color: themeConfig.sidebarText, margin: 0, fontSize: 14 }}>
-          🏆 {selectedClub?.name || "Quản lý CLB"}
+        <Title level={5} style={{ color: themeConfig.sidebarText, margin: 0, fontSize: 14, display: "flex", alignItems: "center", gap: 8 }}>
+          {selectedClub?.logo_src
+            ? <img src={logoSrc(selectedClub.logo_src)} alt="" style={{ width: 28, height: 28, borderRadius: 8, objectFit: "contain", flexShrink: 0 }} />
+            : <span>🏆</span>}
+          <span style={{ minWidth: 0 }}>{selectedClub?.name || "Quản lý CLB"}</span>
         </Title>
         <div style={{ color: themeConfig.sidebarSubText, fontSize: 12 }}>
           {selectedClub?.sport || "Câu lạc bộ thể thao"}
@@ -265,7 +268,7 @@ function AppShell() {
       </Layout>
 
       {brandOpen && (
-        <BrandColorModal club={selectedClub} onClose={() => setBrandOpen(false)}
+        <ClubSettingsModal club={selectedClub} onClose={() => setBrandOpen(false)}
           onSaved={async () => { setBrandOpen(false); await refreshAll?.(); }} />
       )}
 

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Date, DateTime, Numeric, Boolean, Enum, ForeignKey, Text, JSON, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Date, DateTime, Numeric, Boolean, Enum, ForeignKey, Text, JSON, UniqueConstraint, LargeBinary
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 import enum
@@ -122,7 +122,9 @@ class Club(Base):
     name = Column(String(200), nullable=False)
     sport = Column(String(100), default="Pickleball")
     description = Column(Text, nullable=True)
-    logo_url = Column(String(500), nullable=True)
+    logo_url = Column(String(500), nullable=True)   # cột cũ, không dùng; logo nay lưu trong DB (logo_png) — xem logo_url_public
+    logo_png = Column(LargeBinary, nullable=True)   # 2026-10-28: logo CLB đã chuẩn hoá PNG ≤512px (Pillow), ≤ ~300KB
+    logo_hash = Column(String(16), nullable=True)   # sha1 rút gọn → tham số ?v= để trình duyệt cache đúng khi đổi logo
     founded_year = Column(Integer, nullable=True)
     address = Column(String(300), nullable=True)
     phone = Column(String(20), nullable=True)
@@ -137,6 +139,11 @@ class Club(Base):
     # không vào được bot ở CLB này, không liên kết Telegram, không nhận nhắc phí — bất kể cờ theo tài khoản.
     bot_enabled = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime, server_default=func.now())
+
+    @property
+    def logo_src(self):
+        """Đường dẫn ảnh logo (public, không cần đăng nhập) kèm ?v= để cache; None khi chưa có logo."""
+        return f"/api/public/club-logo/{self.id}?v={self.logo_hash}" if self.logo_hash else None
 
 
 class User(Base):

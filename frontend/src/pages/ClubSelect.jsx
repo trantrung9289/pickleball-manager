@@ -1,6 +1,7 @@
 import { Typography, Row, Col, Tag, Button } from "antd";
 import { TrophyOutlined, LogoutOutlined, EnvironmentOutlined } from "@ant-design/icons";
 import { useAuth } from "../context/AuthContext";
+import { logoSrc } from "../api";
 
 const { Title, Text } = Typography;
 
@@ -52,7 +53,9 @@ export default function ClubSelect({ onBack }) {
                 e.currentTarget.style.transform = "translateY(0)";
               }}
             >
-              <TrophyOutlined style={{ fontSize: 40, color: "#1677ff", marginBottom: 12, display: "block" }} />
+              {m.club?.logo_src
+                ? <img src={logoSrc(m.club.logo_src)} alt="" style={{ width: 56, height: 56, borderRadius: 14, objectFit: "contain", marginBottom: 12, display: "block", background: "rgba(255,255,255,0.9)", padding: 4 }} />
+                : <TrophyOutlined style={{ fontSize: 40, color: "#1677ff", marginBottom: 12, display: "block" }} />}
               <Title level={4} style={{ color: "#fff", margin: "0 0 6px", fontSize: 16 }}>
                 {m.club?.name || `CLB #${m.club_id}`}
               </Title>

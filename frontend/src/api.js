@@ -32,6 +32,9 @@ api.interceptors.response.use(
   }
 );
 
+/** Ảnh logo CLB: logo_src là đường dẫn tương đối "/api/public/club-logo/{id}?v=hash" → ghép BASE_URL (dev tách cổng). */
+export const logoSrc = (path) => (path ? `${BASE_URL}${path}` : null);
+
 export const authApi = {
   status: () => api.get("/api/club/status"),
   setup: (data) => api.post("/api/club/setup", data),
@@ -40,6 +43,8 @@ export const authApi = {
   getClub: () => api.get("/api/club"),
   updateClub: (data) => api.put("/api/club", data),
   updateAppearance: (data) => api.put("/api/club/appearance", data),   // {brand_color: "#RRGGBB" | null} — CLB đang chọn
+  uploadLogo: (file) => { const f = new FormData(); f.append("file", file); return api.post("/api/club/logo", f, { headers: { "Content-Type": "multipart/form-data" } }); },
+  deleteLogo: () => api.delete("/api/club/logo"),
   myMemberships: () => api.get("/api/my-memberships"),
   // Cấu hình danh sách hạng của CLB (dùng chung Thành viên / Khách mời / quy tắc ghép đội)
   rankLevels: () => api.get("/api/club/rank-levels"),

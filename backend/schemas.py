@@ -41,6 +41,7 @@ class ClubOut(BaseModel):
     email: Optional[str] = None
     bot_enabled: bool = True
     brand_color: Optional[str] = None     # "#RRGGBB" | None = mặc định
+    logo_src: Optional[str] = None        # "/api/public/club-logo/{id}?v=hash" | None (2026-10-28, logo lưu trong DB)
     class Config:
         from_attributes = True
 
