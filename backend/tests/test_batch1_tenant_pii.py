@@ -117,6 +117,8 @@ def test_report_links_require_edit_and_delete(client, world):
     hv = World.headers(world.viewer1, world.club1)
     ha = World.headers(world.admin1, world.club1)
     assert client.post("/api/report-links", json={"label": "x"}, headers=hv).status_code == 403
+    # Từ 2026-10-28 mỗi CLB chỉ 1 link: xoá token1 (conftest) trước khi tạo
+    assert client.delete(f"/api/report-links/{world.token1.id}", headers=ha).status_code == 200
     r = client.post("/api/report-links", json={"label": "x"}, headers=ha)
     assert r.status_code == 200
     link_id = r.json()["id"]
