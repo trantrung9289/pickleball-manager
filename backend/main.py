@@ -644,6 +644,32 @@ def admin_delete_user(uid: int, db: Session = Depends(get_db), su = Depends(requ
     db.delete(user); db.commit()
     return {"ok": True}
 
+@app.get("/api/admin/storage")
+def admin_storage(su = Depends(require_superuser)):
+    """Superuser: dung lượng ổ chứa DB (/data trên Fly), kích thước DB + WAL, số bản/dung lượng sao lưu; warn ≥ 70%, danger ≥ 85%.
+    (2026-10-28, đợt 3 trò chuyện: lịch sử không tự xoá nên cần theo dõi.)"""
+    import shutil
+    from database import SQLALCHEMY_DATABASE_URL as _DB_URL
+    db_path = Path(_DB_URL.replace("sqlite:///", "")) if _DB_URL.startswith("sqlite:///") else Path("clb.db")
+    base = db_path.parent if db_path.parent.exists() else Path(".")
+    try:
+        usage = shutil.disk_usage(base)
+    except OSError:
+        usage = None
+    db_bytes = sum((db_path.parent / f"{db_path.name}{sfx}").stat().st_size for sfx in ("", "-wal", "-shm")
+                   if (db_path.parent / f"{db_path.name}{sfx}").exists()) if db_path.exists() else 0
+    bdir = Path(_os.environ.get("BACKUP_DIR") or (db_path.parent / "backups"))
+    backups = sorted(bdir.glob("clb-*.db.gz")) if bdir.exists() else []
+    pct = round(usage.used * 100 / usage.total, 1) if usage and usage.total else None
+    return {
+        "path": str(base), "total_bytes": usage.total if usage else None, "used_bytes": usage.used if usage else None,
+        "free_bytes": usage.free if usage else None, "used_pct": pct,
+        "db_bytes": db_bytes, "backup_count": len(backups), "backup_bytes": sum(f.stat().st_size for f in backups),
+        "backup_tiered": _os.environ.get("BACKUP_TIERED", "1") != "0",
+        "level": "danger" if pct is not None and pct >= 85 else "warn" if pct is not None and pct >= 70 else "ok",
+    }
+
+
 @app.get("/api/admin/clubs", response_model=List[schemas.ClubOut])
 def admin_list_clubs(db: Session = Depends(get_db), su = Depends(require_superuser)):
     return db.query(models.Club).order_by(models.Club.id).all()
@@ -7030,7 +7056,7 @@ def _poll_out(db: Session, poll: models.ChatPoll, me_id) -> dict:
     return {
         "id": poll.id, "question": poll.question, "multi": poll.multi, "anonymous": poll.anonymous, "allow_add": poll.allow_add,
         "closes_at": poll.closes_at.isoformat() if poll.closes_at else None, "closed": closed,
-        "creator_id": poll.participant_id, "creator_name": poll.creator.display_name if poll.creator else None,
+        "creator_id": poll.participant_id, "creator_name": poll.creator.display_name if poll.creator else ADMIN_CHAT_NAME,
         "total_voters": len(voters),
         "options": [{"id": o["id"], "text": o["text"], "count": len(by_opt.get(o["id"], [])),
                      "voters": [names.get(pid, "?") for pid in by_opt.get(o["id"], [])][:30] if not poll.anonymous else []}
@@ -7039,9 +7065,13 @@ def _poll_out(db: Session, poll: models.ChatPoll, me_id) -> dict:
     }
 
 
+ADMIN_CHAT_NAME = "Ban quản trị"
+
+
 def _chat_message_out(db: Session, m: models.ChatMessage, me_id, names: dict) -> dict:
     out = {
-        "id": m.id, "kind": m.kind, "participant_id": m.participant_id, "name": names.get(m.participant_id, "?"),
+        "id": m.id, "kind": m.kind, "participant_id": m.participant_id,
+        "name": ADMIN_CHAT_NAME if m.participant_id is None else names.get(m.participant_id, "?"),
         "body": None if m.deleted_at else m.body, "deleted": m.deleted_at is not None, "pinned": m.pinned,
         "reply_to_id": m.reply_to_id, "mention_ids": m.mention_ids or [], "mine": m.participant_id == me_id,
         "created_at": m.created_at.isoformat() if m.created_at else None,
@@ -7255,6 +7285,127 @@ def chat_close_poll(request: Request, slug: str, pid: int, db: Session = Depends
         raise HTTPException(403, "Chỉ người tạo mới đóng được bình chọn")
     poll.closed = True; db.commit()
     return _poll_out(db, poll, part.id)
+
+
+# ── TRÒ CHUYỆN — QUẢN TRỊ (đợt 2): xem, ghim, xoá tin, tắt tiếng, khoá kênh, xoá theo khoảng ngày, tạo bình chọn ──
+@app.get("/api/chat/messages")
+def admin_chat_messages(before_id: Optional[int] = None, after_id: Optional[int] = None, limit: int = Query(50, ge=1, le=200),
+                        db: Session = Depends(get_db), perms: ClubPermissions = Depends(get_club_permission)):
+    perms.require_view()
+    q = db.query(models.ChatMessage).filter(models.ChatMessage.club_id == perms.club_id)
+    if after_id:
+        rows = q.filter(models.ChatMessage.id > after_id).order_by(models.ChatMessage.id.asc()).limit(limit).all()
+    elif before_id:
+        rows = list(reversed(q.filter(models.ChatMessage.id < before_id).order_by(models.ChatMessage.id.desc()).limit(limit).all()))
+    else:
+        rows = list(reversed(q.order_by(models.ChatMessage.id.desc()).limit(limit).all()))
+    names = _chat_names(db, perms.club_id)
+    club = db.query(models.Club).filter(models.Club.id == perms.club_id).first()
+    return {"messages": [_chat_message_out(db, m, None, names) for m in rows], "locked": bool(club and club.chat_locked),
+            "total": q.count(), "participants": db.query(models.ChatParticipant).filter(models.ChatParticipant.club_id == perms.club_id).count()}
+
+
+@app.get("/api/chat/participants")
+def admin_chat_participants(db: Session = Depends(get_db), perms: ClubPermissions = Depends(get_club_permission)):
+    perms.require_view()
+    rows = db.query(models.ChatParticipant).filter(models.ChatParticipant.club_id == perms.club_id).order_by(models.ChatParticipant.display_name).all()
+    counts = dict(db.query(models.ChatMessage.participant_id, func.count(models.ChatMessage.id)).filter(
+        models.ChatMessage.club_id == perms.club_id).group_by(models.ChatMessage.participant_id).all())
+    return [{"id": p.id, "display_name": p.display_name, "muted": p.muted, "messages": counts.get(p.id, 0),
+             "created_at": p.created_at.isoformat() if p.created_at else None,
+             "last_seen_at": p.last_seen_at.isoformat() if p.last_seen_at else None} for p in rows]
+
+
+@app.patch("/api/chat/participants/{pid}/mute")
+def admin_chat_mute(pid: int, db: Session = Depends(get_db), perms: ClubPermissions = Depends(get_club_permission)):
+    perms.require_edit()
+    p = db.query(models.ChatParticipant).filter(models.ChatParticipant.id == pid, models.ChatParticipant.club_id == perms.club_id).first()
+    if not p:
+        raise HTTPException(404, "Không tìm thấy người tham gia")
+    p.muted = not p.muted; db.commit()
+    return {"id": p.id, "muted": p.muted}
+
+
+@app.patch("/api/chat/messages/{mid}/pin")
+def admin_chat_pin(mid: int, db: Session = Depends(get_db), perms: ClubPermissions = Depends(get_club_permission)):
+    perms.require_edit()
+    m = db.query(models.ChatMessage).filter(models.ChatMessage.id == mid, models.ChatMessage.club_id == perms.club_id).first()
+    if not m or m.deleted_at:
+        raise HTTPException(404, "Không tìm thấy tin")
+    m.pinned = not m.pinned; db.commit()
+    return {"id": m.id, "pinned": m.pinned}
+
+
+@app.delete("/api/chat/messages/{mid}")
+def admin_chat_delete(mid: int, db: Session = Depends(get_db), perms: ClubPermissions = Depends(get_club_permission)):
+    """Admin xoá một tin: xoá mềm (hiện 'Tin đã thu hồi'), bỏ ghim."""
+    perms.require_edit()
+    m = db.query(models.ChatMessage).filter(models.ChatMessage.id == mid, models.ChatMessage.club_id == perms.club_id).first()
+    if not m:
+        raise HTTPException(404, "Không tìm thấy tin")
+    m.deleted_at = datetime.utcnow(); m.pinned = False; db.commit()
+    return {"ok": True}
+
+
+@app.put("/api/chat/settings")
+def admin_chat_settings(data: schemas.ChatSettingsIn, db: Session = Depends(get_db), perms: ClubPermissions = Depends(get_club_permission)):
+    perms.require_edit()
+    club = db.query(models.Club).filter(models.Club.id == perms.club_id).first()
+    club.chat_locked = data.locked; db.commit()
+    return {"locked": club.chat_locked}
+
+
+@app.post("/api/chat/purge")
+def admin_chat_purge(data: schemas.ChatPurgeIn, db: Session = Depends(get_db), perms: ClubPermissions = Depends(get_club_permission)):
+    """Xoá CỨNG tin (và bình chọn/phiếu đi kèm) có created_at trong [after, before] theo giờ VN — quyết định người dùng: không tự xoá,
+    admin xoá theo khoảng thời gian tuỳ chọn. Trả số tin đã xoá."""
+    perms.require_delete()
+    # created_at lưu UTC (utcnow) → đổi mốc ngày VN sang UTC: 00:00 VN = 17:00 UTC hôm trước; hết ngày 'before' = 16:59:59 UTC ngày đó
+    end_utc = datetime.combine(data.before, datetime.max.time()) - timedelta(hours=7)
+    q = db.query(models.ChatMessage).filter(models.ChatMessage.club_id == perms.club_id, models.ChatMessage.created_at <= end_utc)
+    if data.after:
+        q = q.filter(models.ChatMessage.created_at >= datetime.combine(data.after, datetime.min.time()) - timedelta(hours=7))
+    rows = q.all()
+    ids = [m.id for m in rows]
+    poll_ids = [m.poll_id for m in rows if m.poll_id]
+    if ids:
+        # tin trả lời tới tin bị xoá → bỏ liên kết (không xoá tin trả lời)
+        db.query(models.ChatMessage).filter(models.ChatMessage.reply_to_id.in_(ids)).update({models.ChatMessage.reply_to_id: None}, synchronize_session=False)
+        if poll_ids:
+            db.query(models.ChatVote).filter(models.ChatVote.poll_id.in_(poll_ids)).delete(synchronize_session=False)
+        db.query(models.ChatMessage).filter(models.ChatMessage.id.in_(ids)).delete(synchronize_session=False)
+        if poll_ids:
+            db.query(models.ChatPoll).filter(models.ChatPoll.id.in_(poll_ids)).delete(synchronize_session=False)
+        db.commit()
+    return {"deleted": len(ids)}
+
+
+@app.post("/api/chat/polls")
+def admin_chat_create_poll(data: schemas.ChatPollIn, db: Session = Depends(get_db), perms: ClubPermissions = Depends(get_club_permission)):
+    """Admin tạo bình chọn (hiện tên 'Ban quản trị'), đẩy Web Push tới mọi thiết bị CLB."""
+    perms.require_edit()
+    options = [{"id": secrets.token_hex(3), "text": t} for t in data.options]
+    poll = models.ChatPoll(club_id=perms.club_id, participant_id=None, question=data.question.strip(), options=options,
+                           multi=data.multi, anonymous=data.anonymous, allow_add=data.allow_add,
+                           closes_at=data.closes_at.replace(tzinfo=None) if data.closes_at else None)
+    db.add(poll); db.flush()
+    m = models.ChatMessage(club_id=perms.club_id, participant_id=None, kind="poll", poll_id=poll.id, body=poll.question, pinned=True)
+    db.add(m); db.commit(); db.refresh(m)
+    tok = db.query(models.PublicReportToken).filter(models.PublicReportToken.club_id == perms.club_id, models.PublicReportToken.is_active.is_(True)).first()
+    subs = db.query(models.PushSubscription).filter(models.PushSubscription.club_id == perms.club_id).all()
+    pushed = _web_push_to_subs(db, subs, {"title": f"Bình chọn mới: {poll.question[:80]}", "body": f"{ADMIN_CHAT_NAME} mời bạn bình chọn",
+                                          "tag": f"chat-poll-{poll.id}", "url": f"/public/report/{tok.slug or tok.token}#chat" if tok else "/"})
+    return {**_chat_message_out(db, m, None, _chat_names(db, perms.club_id)), "pushed": pushed}
+
+
+@app.patch("/api/chat/polls/{pid}/close")
+def admin_chat_close_poll(pid: int, db: Session = Depends(get_db), perms: ClubPermissions = Depends(get_club_permission)):
+    perms.require_edit()
+    poll = db.query(models.ChatPoll).filter(models.ChatPoll.id == pid, models.ChatPoll.club_id == perms.club_id).first()
+    if not poll:
+        raise HTTPException(404, "Không tìm thấy bình chọn")
+    poll.closed = True; db.commit()
+    return _poll_out(db, poll, None)
 
 
 @app.get("/api/public/report/{slug}/manifest.webmanifest", include_in_schema=False)

@@ -75,7 +75,7 @@ function MessageRow({ m, meId, onReply, onDelete, onPollUpdated, api }) {
   );
 }
 
-function PollModal({ open, onClose, api, onCreated }) {
+export function PollModal({ open, onClose, api, onCreated }) {
   const [form] = Form.useForm();
   const [busy, setBusy] = useState(false);
   const submit = async () => {

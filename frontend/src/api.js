@@ -52,6 +52,7 @@ export const authApi = {
 };
 
 export const adminApi = {
+  storage: () => api.get("/api/admin/storage"),   // dung lượng ổ / DB / sao lưu (superuser, 2026-10-28)
   // Users
   listUsers: () => api.get("/api/admin/users"),
   createUser: (data) => api.post("/api/admin/users", data),
@@ -248,6 +249,19 @@ export const announcementsApi = {
   delete: (id) => api.delete(`/api/announcements/${id}`),
   feed: (params) => api.get("/api/announcements/feed", { params }),   // { days, include_later }
   push: (id) => api.post(`/api/announcements/${id}/push`),             // đợt 3: gửi Telegram ngay tới admin CLB
+};
+
+// Trò chuyện — quản trị (đợt 2, 2026-10-28)
+export const chatAdminApi = {
+  messages: (params) => api.get("/api/chat/messages", { params }),
+  participants: () => api.get("/api/chat/participants"),
+  mute: (id) => api.patch(`/api/chat/participants/${id}/mute`),
+  pin: (id) => api.patch(`/api/chat/messages/${id}/pin`),
+  delete: (id) => api.delete(`/api/chat/messages/${id}`),
+  settings: (locked) => api.put("/api/chat/settings", { locked }),
+  purge: (body) => api.post("/api/chat/purge", body),         // { before: "YYYY-MM-DD", after?: "YYYY-MM-DD" }
+  createPoll: (body) => api.post("/api/chat/polls", body),
+  closePoll: (id) => api.patch(`/api/chat/polls/${id}/close`),
 };
 
 export const reportLinksApi = {

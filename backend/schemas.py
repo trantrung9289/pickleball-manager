@@ -1233,3 +1233,13 @@ class ChatVoteIn(BaseModel):
 class ChatOptionIn(BaseModel):
     text: str = Field(min_length=1, max_length=80)
 
+
+class ChatSettingsIn(BaseModel):
+    locked: bool
+
+
+class ChatPurgeIn(BaseModel):
+    """Xoá cứng tin trong khoảng ngày (giờ VN, cả hai đầu); bỏ trống 'after' = từ đầu."""
+    before: date
+    after: Optional[date] = None
+

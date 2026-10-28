@@ -17,6 +17,21 @@ import { useViewMode } from "../contexts/ViewModeContext";
 const { Header, Content, Sider } = Layout;
 const { Title, Text } = Typography;
 
+const fmtBytes = (b) => (b == null ? "—" : b >= 1e9 ? `${(b / 1e9).toFixed(2)} GB` : b >= 1e6 ? `${(b / 1e6).toFixed(1)} MB` : `${Math.round(b / 1e3)} KB`);
+
+/** Ổ dữ liệu trên máy chủ: % đã dùng, DB, sao lưu — cảnh báo vàng ≥70%, đỏ ≥85% (đợt 3 trò chuyện: lịch sử không tự xoá). */
+function StorageBadge() {
+  const [st, setSt] = useState(null);
+  useEffect(() => { adminApi.storage().then((r) => setSt(r.data)).catch(() => {}); }, []);
+  if (!st || st.used_pct == null) return null;
+  const color = st.level === "danger" ? "red" : st.level === "warn" ? "orange" : "green";
+  return (
+    <Tooltip title={<div>Ổ {st.path}: {fmtBytes(st.used_bytes)} / {fmtBytes(st.total_bytes)} đã dùng<br />DB: {fmtBytes(st.db_bytes)} · Sao lưu: {st.backup_count} bản, {fmtBytes(st.backup_bytes)}{st.backup_tiered ? " (xoay 7 ngày + 4 tuần + 3 tháng)" : ""}<br />Cảnh báo từ 70%, nguy hiểm từ 85%.</div>}>
+      <Tag color={color} style={{ cursor: "help" }}>Ổ đĩa {st.used_pct}%</Tag>
+    </Tooltip>
+  );
+}
+
 export default function AdminPortal({ onBack }) {
   const { user, logout, refreshAll } = useAuth();
   const { token } = theme.useToken();
@@ -642,6 +657,7 @@ export default function AdminPortal({ onBack }) {
           <Row justify="space-between" align="middle" style={{ height: "100%" }}>
             <Title level={4} style={{ margin: 0 }}>{sectionTitles[section]}</Title>
             <Space>
+              <StorageBadge />
               <ThemeSwitcher />
               <Dropdown menu={userMenu} placement="bottomRight">
                 <Avatar style={{ background: themeConfig.avatar, cursor: "pointer" }} icon={<UserOutlined />} />

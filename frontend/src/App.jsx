@@ -4,7 +4,7 @@ import {
   Avatar, Dropdown, Space, Result, Button, Drawer,
 } from "antd";
 import {
-  DashboardOutlined, TeamOutlined, DollarOutlined, SwapOutlined, BarChartOutlined, TrophyOutlined, UserOutlined, LogoutOutlined, LockOutlined, RobotOutlined, UserAddOutlined, SettingOutlined, NotificationOutlined,
+  DashboardOutlined, TeamOutlined, DollarOutlined, SwapOutlined, BarChartOutlined, TrophyOutlined, UserOutlined, LogoutOutlined, LockOutlined, RobotOutlined, UserAddOutlined, SettingOutlined, NotificationOutlined, MessageOutlined,
 } from "@ant-design/icons";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { announcementsApi, logoSrc } from "./api";
@@ -30,6 +30,7 @@ const AdminPortal = lazy(() => import("./pages/AdminPortal"));
 const ClubSelect = lazy(() => import("./pages/ClubSelect"));
 const PublicReport = lazy(() => import("./pages/PublicReport"));
 const Announcements = lazy(() => import("./pages/Announcements"));
+const ChatAdmin = lazy(() => import("./pages/Chat"));
 const NotificationBell = lazy(() => import("./components/NotificationBell"));
 const BotConfigPanel = lazy(() => import("./components/BotConfigPanel"));
 
@@ -53,6 +54,7 @@ const ALL_PAGES = {
   reports:   { label: "Báo cáo", icon: <BarChartOutlined />, comp: Reports, requireView: true },
   tournaments: { label: "Giải đấu", icon: <TrophyOutlined />, comp: Tournament, requireView: true },
   announcements: { label: "Thông báo", icon: <NotificationOutlined />, comp: Announcements, requireView: true },   // đợt 2 (2026-10-27)
+  chat: { label: "Trò chuyện", icon: <MessageOutlined />, comp: ChatAdmin, requireView: true },   // quản trị kênh public (2026-10-28)
 };
 
 function NoMembership({ onLogout }) {

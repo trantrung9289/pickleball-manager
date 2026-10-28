@@ -69,9 +69,61 @@ def make_backup(db_path: Path, out_dir: Path, tag: str = "daily") -> Path:
 
 
 def rotate(out_dir: Path, keep: int) -> list:
-    """Giữ lại `keep` bản mới nhất (theo tên file = theo thời gian), xoá phần còn lại."""
+    """Giữ lại `keep` bản mới nhất (theo tên file = theo thời gian), xoá phần còn lại. (chế độ cũ, BACKUP_TIERED=0)"""
     files = sorted(out_dir.glob("clb-*.db.gz"))
     to_delete = files[:-keep] if keep > 0 and len(files) > keep else []
+    for f in to_delete:
+        f.unlink()
+    return to_delete
+
+
+def _stamp_date(path: Path):
+    """clb-YYYYMMDD-HHMMSS-tag.db.gz → date, None nếu tên không đúng mẫu."""
+    try:
+        return datetime.strptime(path.name.split("-")[1], "%Y%m%d").date()
+    except (IndexError, ValueError):
+        return None
+
+
+def tiered_keep(names: list, today, daily: int = 7, weekly: int = 4, monthly: int = 3) -> set:
+    """Tập tên file GIỮ LẠI theo bậc (hàm thuần để test): `daily` bản mới nhất; bản SỚM NHẤT của mỗi tuần ISO trong `weekly` tuần gần đây;
+    bản SỚM NHẤT của mỗi tháng trong `monthly` tháng gần đây. File không đúng mẫu tên → giữ (không đụng)."""
+    dated = []
+    keep = set()
+    for n in sorted(names):
+        d = _stamp_date(Path(n))
+        if d is None:
+            keep.add(n)
+        else:
+            dated.append((d, n))
+    dated.sort()
+    keep.update(n for _, n in dated[-daily:])
+    week_first, month_first = {}, {}
+    for d, n in dated:
+        iso = d.isocalendar()[:2]
+        week_first.setdefault(iso, n)
+        month_first.setdefault((d.year, d.month), n)
+    cur_week = today.isocalendar()[:2]
+    for (y, w), n in week_first.items():
+        # số tuần cách hiện tại (xấp xỉ theo ngày thứ Hai)
+        from datetime import date as _date
+        monday = _date.fromisocalendar(y, w, 1)
+        cur_monday = _date.fromisocalendar(cur_week[0], cur_week[1], 1)
+        if 0 <= (cur_monday - monday).days // 7 < weekly:
+            keep.add(n)
+    for (y, m), n in month_first.items():
+        months_ago = (today.year - y) * 12 + (today.month - m)
+        if 0 <= months_ago < monthly:
+            keep.add(n)
+    return keep
+
+
+def rotate_tiered(out_dir: Path, today=None, daily: int = 7, weekly: int = 4, monthly: int = 3) -> list:
+    """Xoay theo bậc (2026-10-28, chuẩn bị cho trò chuyện làm DB lớn dần): thay vì 14 bản ngày, giữ 7 ngày + 4 tuần + 3 tháng."""
+    today = today or datetime.now(_VN_TZ).date()
+    files = sorted(out_dir.glob("clb-*.db.gz"))
+    keep = tiered_keep([f.name for f in files], today, daily, weekly, monthly)
+    to_delete = [f for f in files if f.name not in keep]
     for f in to_delete:
         f.unlink()
     return to_delete
@@ -128,9 +180,9 @@ def main(argv=None) -> int:
     size_kb = final.stat().st_size / 1024
     print(f"[backup] ✅ {final} ({size_kb:.1f} KB)")
 
-    deleted = rotate(out_dir, args.keep)
+    deleted = rotate_tiered(out_dir) if os.environ.get("BACKUP_TIERED", "1") != "0" else rotate(out_dir, args.keep if hasattr(args, 'keep') else DEFAULT_KEEP)
     if deleted:
-        print(f"[backup] Đã xoá {len(deleted)} bản cũ, giữ {args.keep} bản mới nhất")
+        print(f"[backup] Đã xoá {len(deleted)} bản cũ (" + ("xoay theo bậc 7 ngày + 4 tuần + 3 tháng" if os.environ.get("BACKUP_TIERED", "1") != "0" else f"giữ {args.keep} bản mới nhất") + ")")
 
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     chat_id = os.environ.get("BACKUP_TELEGRAM_CHAT_ID")
