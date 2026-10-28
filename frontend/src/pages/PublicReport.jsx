@@ -36,9 +36,9 @@ function PublicReportInner({ token }) {
   const [year, setYear] = useState(dayjs().year());
   const [activeSection, setActiveSection] = useState("monthly-detail");
   const { token: antToken } = theme.useToken();
-  const { themeConfig, themeName } = useAppTheme();
+  const { themeConfig } = useAppTheme();
   const { isMobileView } = useViewMode();
-  const isDark = themeName === "ai-inspired";
+  const isDark = !!themeConfig?.dark;   // Tối và Galaxy đều là nền tối
 
   const api = useMemo(() => createPublicReportApi(token), [token]);
   const install = useInstallPrompt();
@@ -166,9 +166,9 @@ function PublicReportInner({ token }) {
   const labelTextColor = isDark ? "#5dd49a" : "#1a7a4a";
 
   return (
-    <div className="ui-glass-scope" style={{ minHeight: "100vh", background: antToken.colorBgLayout }}>{/* đồng bộ kiểu kính với Dashboard */}
+    <div className="ui-glass-scope public-root" style={{ minHeight: "100vh", background: antToken.colorBgLayout }}>{/* đồng bộ kiểu kính với Dashboard; Galaxy: CSS làm trong suốt */}
       {/* Header */}
-      <div style={{
+      <div className="public-header" style={{
         background: antToken.colorBgContainer,
         borderBottom: `1px solid ${antToken.colorBorderSecondary}`,
         padding: "12px 24px",

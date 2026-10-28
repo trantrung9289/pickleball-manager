@@ -1,7 +1,7 @@
 // Chạy: npm test (node --test). Lớp 1 đổi giao diện: màu thương hiệu → bộ màu đủ tương phản.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { brandPalette, contrast, cssVariables, DEFAULT_BRAND, ensureContrast, isHex, mix, SEMANTIC } from "./color.js";
+import { brandPalette, contrast, cssVariables, DEFAULT_BRAND, ensureContrast, isHex, mix, SEMANTIC, semanticFor } from "./color.js";
 
 test("isHex / mix", () => {
   assert.equal(isHex("#EC671C"), true); assert.equal(isHex("orange"), false); assert.equal(isHex("#abc"), false);
@@ -36,3 +36,20 @@ test("SEMANTIC: chữ strong trên nền soft và chữ trắng trên màu chín
   const v = cssVariables("#EC671C");
   assert.ok(v["--brand"] && v["--ok-soft"] && v["--sidebar"] === undefined);
 });
+
+test("galaxy: brand nổi trên surface xanh đen ≥ 4.5, strong trên soft ≥ 4.5, chữ/ phụ trên surface ≥ 4.5, cssVariables theo mode", () => {
+  const g = SEMANTIC.galaxy;
+  assert.equal(semanticFor("galaxy"), g); assert.equal(semanticFor(true), SEMANTIC.dark); assert.equal(semanticFor(false), SEMANTIC.light);
+  assert.ok(contrast(g.ink, g.surface) >= 4.5 && contrast(g.muted, g.surface) >= 4.5);
+  for (const k of ["ok", "warn", "danger", "info"]) assert.ok(contrast(g[`${k}Strong`], g[`${k}Soft`]) >= 4.5, k);
+  for (const c of ["#1F8A52", "#EC671C", "#0065B3", "#6D28D9", "#B42318", "#334155"]) {
+    const p = brandPalette(c, true, g.surface);
+    assert.ok(contrast(p.brand, g.surface) >= 4.5, c);
+    assert.ok(contrast(p.brandStrong, p.brandSoft) >= 4.5, c);
+  }
+  const v = cssVariables("#1F8A52", "galaxy");
+  assert.equal(v["--bg"], g.bg); assert.equal(v["--surface"], g.surface);
+  assert.equal(cssVariables("#1F8A52", true)["--bg"], SEMANTIC.dark.bg);
+  assert.equal(cssVariables("#1F8A52", false)["--bg"], SEMANTIC.light.bg);
+});
+

@@ -58,6 +58,7 @@ export default function Login({ onBack, adminMode = false, onSwitchMode }) {
   const gradientMap = {
     "ai-minimalist": "linear-gradient(135deg, #1A4D3A 0%, #2BA56C 60%, #4DBFA0 100%)",
     "ai-inspired":   "linear-gradient(135deg, #0A0D12 0%, #14181F 50%, #0D1F2A 100%)",
+    galaxy:          "radial-gradient(60% 50% at 15% 10%, rgba(124,58,237,.45) 0%, transparent 60%), radial-gradient(50% 45% at 85% 25%, rgba(37,99,235,.4) 0%, transparent 60%), linear-gradient(180deg, #0B0E1A 0%, #0D1120 100%)",
   };
   const bgGradient = gradientMap[themeName] || gradientMap["ai-minimalist"];
 

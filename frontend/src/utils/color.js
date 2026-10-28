@@ -39,7 +39,7 @@ export function ensureContrast(hex, text = "#FFFFFF", min = 4.5) {
  * Bộ màu thương hiệu từ một màu gốc. Sáng: nền trắng → brand tối đủ tương phản, soft = 90% trắng, strong = chữ trên soft.
  * Tối: nền #1E232B → brand sáng hơn để nổi, soft = pha 80% nền, strong = brand sáng.
  */
-export function brandPalette(input, dark = false) {
+export function brandPalette(input, dark = false, surfaceHex = null) {
   const base = isHex(input) ? input.trim().toUpperCase() : DEFAULT_BRAND;
   if (!dark) {
     const brand = ensureContrast(base, "#FFFFFF", 4.5);
@@ -47,7 +47,7 @@ export function brandPalette(input, dark = false) {
     const strong = ensureContrast(mix(base, "#000000", 0.15), soft, 4.5);
     return { base, brand, brandHover: mix(brand, "#000000", 0.12), brandSoft: soft, brandStrong: strong, brandLine: mix(base, "#FFFFFF", 0.7) };
   }
-  const surface = "#1E232B";
+  const surface = surfaceHex || "#1E232B";   // galaxy truyền surface xanh đen của nó
   let brand = base;
   for (let i = 0; i < 20 && contrast(brand, surface) < 4.5; i++) brand = mix(brand, "#FFFFFF", 0.06);
   const soft = mix(base, surface, 0.78);
@@ -77,12 +77,27 @@ export const SEMANTIC = {
     ink: "#EAEDF2", muted: "#9AA5B4", line: "#2A313C", bg: "#14181F", surface: "#1E232B",
     sidebar: "#15181D", sidebarText: "#EAEDF2", sidebarMuted: "#9AA5B4", sidebarLine: "#2A313C",
   },
+  // Galaxy (2026-10-28, phương án A): nền xanh đen có tinh vân tím/xanh (index.css), bề mặt kính; màu ngữ nghĩa sáng hơn để nổi.
+  // surface là màu ĐỤC dùng cho tính tương phản + bảng dữ liệu; thẻ kính dùng rgba trong CSS.
+  galaxy: {
+    ok: "#3DDC84", okSoft: "#143A2A", okStrong: "#86EFAC",
+    warn: "#FBBF24", warnSoft: "#3F2E0A", warnStrong: "#FDE68A",
+    danger: "#FB7185", dangerSoft: "#43182A", dangerStrong: "#FDA4AF",
+    info: "#7DD3FC", infoSoft: "#15304A", infoStrong: "#BAE6FD",
+    ink: "#F1F3FA", muted: "#A7B0C8", line: "#2C3350", bg: "#0B0E1A", surface: "#161B2E",
+    sidebar: "#0F1324", sidebarText: "#F1F3FA", sidebarMuted: "#A7B0C8", sidebarLine: "#262D47",
+  },
 };
 
+/** Chọn bộ màu ngữ nghĩa theo chế độ: "light" | "dark" | "galaxy". */
+export const semanticFor = (mode) => SEMANTIC[mode] || (mode === true ? SEMANTIC.dark : SEMANTIC.light);
+
 /** Biến CSS đặt lên :root để component thuần (bản in, chip tự vẽ) dùng cùng màu với antd. */
-export function cssVariables(brandColor, dark = false) {
-  const p = brandPalette(brandColor, dark);
-  const s = dark ? SEMANTIC.dark : SEMANTIC.light;
+export function cssVariables(brandColor, mode = false) {
+  // mode: false/true (tương thích cũ) hoặc "light" | "dark" | "galaxy"
+  const name = mode === true ? "dark" : mode === false ? "light" : mode;
+  const s = semanticFor(name);
+  const p = brandPalette(brandColor, name !== "light", name === "galaxy" ? s.surface : null);
   return {
     "--brand": p.brand, "--brand-hover": p.brandHover, "--brand-soft": p.brandSoft, "--brand-strong": p.brandStrong, "--brand-line": p.brandLine,
     "--ok": s.ok, "--ok-soft": s.okSoft, "--ok-strong": s.okStrong,
