@@ -59,3 +59,21 @@ def test_delete_logo(client, world):
     r = client.delete("/api/club/logo", headers=h1)
     assert r.status_code == 200 and r.json()["logo_src"] is None
     assert client.get(f"/api/public/club-logo/{world.club1.id}").status_code == 404
+
+
+def test_apple_touch_icon_from_logo_and_manifest_id(client, world, db):
+    h1 = World.headers(world.admin1, world.club1)
+    assert client.get(f"/api/public/club-logo/{world.club1.id}/apple-touch-icon.png").status_code == 404
+    client.put("/api/club/appearance", json={"brand_color": "#EC671C"}, headers=h1)
+    client.post("/api/club/logo", files={"file": ("l.png", _img_bytes(400, 200, "PNG", (0, 0, 255)), "image/png")}, headers=h1)
+    meta = client.get(f"/api/public/report/{world.token1.slug}").json()
+    assert meta["club_apple_icon_src"].startswith(f"/api/public/club-logo/{world.club1.id}/apple-touch-icon.png?v=") and "&c=EC671C" in meta["club_apple_icon_src"]
+    r = client.get(meta["club_apple_icon_src"])
+    assert r.status_code == 200 and r.headers["content-type"] == "image/png" and "immutable" in r.headers["cache-control"]
+    img = Image.open(io.BytesIO(r.content))
+    assert img.size == (180, 180) and img.mode == "RGB"
+    assert img.getpixel((2, 2)) == (236, 103, 28)        # góc: nền màu thương hiệu
+    assert img.getpixel((20, 20)) == (255, 255, 255)     # ô trắng bên trong
+    assert img.getpixel((90, 90)) == (0, 0, 255)         # logo ở giữa
+    m = client.get(f"/api/public/report/{world.token1.slug}/manifest.webmanifest").json()
+    assert m["id"] == f"/public/report/{world.token1.slug}" and m["icons"][0]["src"].startswith("/api/public/club-logo/")

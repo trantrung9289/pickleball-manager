@@ -62,7 +62,7 @@ export function FeedItem({ it }) {
   );
 }
 
-export default function NotificationBell({ fetchFeed, scope, onManage, dark = false, topPanel = null }) {
+export default function NotificationBell({ fetchFeed, scope, onManage, dark = false, topPanel = null, openSignal = 0 }) {
   const { isMobileView } = useViewMode();
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState(null);          // null = chưa tải lần nào
@@ -103,6 +103,11 @@ export default function NotificationBell({ fetchFeed, scope, onManage, dark = fa
     load();
   };
   const handleClose = () => { openRef.current = false; setOpen(false); };
+  // openSignal đổi (>0) → mở Drawer từ bên ngoài (PublicReport mời bật thông báo lần đầu chạy từ màn hình chính)
+  useEffect(() => {
+    if (!openSignal) return;
+    Promise.resolve().then(() => { openRef.current = true; setOpen(true); load(); });
+  }, [openSignal, load]);
 
   const btnStyle = dark
     ? { border: "1px solid rgba(255,255,255,0.25)", color: "rgba(255,255,255,0.85)", background: "rgba(255,255,255,0.08)" }

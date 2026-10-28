@@ -15,6 +15,9 @@ import ViewModeSwitcher from "../components/ViewModeSwitcher";
 import ThemeSwitcher from "../components/ThemeSwitcher";
 import NotificationBell from "../components/NotificationBell";
 import PushSettings from "../components/PushSettings";
+import { InstallButton, InstallBanner, InstallGuide } from "../components/InstallApp";
+import useInstallPrompt from "../hooks/useInstallPrompt";
+import { shouldShowInstallBanner, bannerKey, nudgeKey, readLS, writeLS } from "../utils/install";
 import { useAppTheme } from "../contexts/ThemeContext";
 import MobileBottomNav from "../components/mobile/MobileBottomNav";
 
@@ -32,6 +35,18 @@ function PublicReportInner({ token }) {
   const isDark = themeName === "ai-inspired";
 
   const api = useMemo(() => createPublicReportApi(token), [token]);
+  const install = useInstallPrompt();
+  const [guideOpen, setGuideOpen] = useState(false);
+  const [bellSignal, setBellSignal] = useState(0);
+  const showBanner = shouldShowInstallBanner({ platform: install.platform, dismissedAt: readLS(bannerKey(token)) });
+
+  // Lần đầu mở từ màn hình chính (đã cài) → tự mở chuông với khối "Thông báo trên thiết bị", chỉ một lần theo slug
+  useEffect(() => {
+    if (!install.standalone || readLS(nudgeKey(token))) return;
+    writeLS(nudgeKey(token), Date.now());
+    const t = setTimeout(() => setBellSignal((n) => n + 1), 800);
+    return () => clearTimeout(t);
+  }, [install.standalone, token]);
 
   // PWA: manifest theo CLB (tên, logo, start_url = trang này) để "Thêm vào màn hình chính" mở đúng CLB và nhận Web Push
   useEffect(() => {
@@ -40,6 +55,14 @@ function PublicReportInner({ token }) {
     if (link) link.setAttribute("href", api.manifestUrl);
     return () => { if (link && prev) link.setAttribute("href", prev); };
   }, [api]);
+  // iPhone lấy icon từ apple-touch-icon: logo CLB ghép nền màu thương hiệu + ô trắng (backend); không có logo → icon chung
+  useEffect(() => {
+    const link = document.querySelector('link[rel="apple-touch-icon"]');
+    if (!link || !meta?.club_apple_icon_src) return undefined;
+    const prev = link.getAttribute("href");
+    link.setAttribute("href", logoSrc(meta.club_apple_icon_src));
+    return () => { if (prev) link.setAttribute("href", prev); };
+  }, [meta?.club_apple_icon_src]);
 
   const SECTIONS = [
     { key: "monthly-detail", label: "Thống kê tháng", navLabel: "Tháng", icon: <BarChartOutlined />, children: <MonthlyStats year={year} api={api} /> },
@@ -116,7 +139,8 @@ function PublicReportInner({ token }) {
           <Col>
             <Space wrap>
               {/* Chuông thông báo (đợt 2): cùng cụm với nút giao diện; trên mobile các tag lượt xem/hết hạn xuống dòng riêng */}
-              <NotificationBell scope={`public:${token}`} fetchFeed={api.announcements} dark={isDark} topPanel={<PushSettings push={api.push} />} />
+              <NotificationBell scope={`public:${token}`} fetchFeed={api.announcements} dark={isDark} topPanel={<PushSettings push={api.push} />} openSignal={bellSignal} />
+              <InstallButton install={install} dark={isDark} onGuide={() => setGuideOpen(true)} />
               <ThemeSwitcher dark={isDark} />
               <ViewModeSwitcher />
               {!isMobileView && <>
@@ -139,6 +163,9 @@ function PublicReportInner({ token }) {
           <LockOutlined /> {meta.label} · Chỉ xem — không thể chỉnh sửa
         </Text>
       </div>
+      {/* Thanh mời cài đặt lần đầu (ẩn khi đã cài / trong app khác / đã "Để sau" trong 14 ngày) */}
+      {showBanner && <InstallBanner install={install} slug={token} onGuide={() => setGuideOpen(true)} />}
+      <InstallGuide open={guideOpen} onClose={() => setGuideOpen(false)} platform={install.platform} isMobileView={isMobileView} />
 
       {/* Nội dung */}
       <div style={{

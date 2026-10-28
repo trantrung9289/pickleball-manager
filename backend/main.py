@@ -790,6 +790,38 @@ def delete_club_logo(db: Session = Depends(get_db), perms: ClubPermissions = Dep
     return club
 
 
+def _apple_touch_icon_png(logo_png: bytes, brand_hex: str, size: int = 180) -> bytes:
+    """Icon iOS từ logo CLB: nền màu thương hiệu (iOS tự bo góc, không chấp nhận trong suốt), ô trắng bo góc bên trong, logo vừa ô."""
+    from PIL import Image, ImageDraw
+    try:
+        r, g, b = tuple(int(brand_hex.lstrip("#")[i:i + 2], 16) for i in (0, 2, 4))
+    except Exception:
+        r, g, b = (31, 138, 82)
+    img = Image.new("RGBA", (size, size), (r, g, b, 255))
+    d = ImageDraw.Draw(img)
+    inset = int(size * 0.07)
+    d.rounded_rectangle((inset, inset, size - inset - 1, size - inset - 1), radius=int(size * 0.16), fill=(255, 255, 255, 255))
+    logo = Image.open(io.BytesIO(logo_png)).convert("RGBA")
+    box = size - 2 * int(size * 0.17)
+    logo.thumbnail((box, box), Image.LANCZOS)
+    img.alpha_composite(logo, ((size - logo.width) // 2, (size - logo.height) // 2))
+    out = io.BytesIO()
+    img.convert("RGB").save(out, format="PNG", optimize=True)
+    return out.getvalue()
+
+
+@app.get("/api/public/club-logo/{club_id}/apple-touch-icon.png", include_in_schema=False)
+def public_club_apple_icon(club_id: int, v: Optional[str] = None, db: Session = Depends(get_db)):
+    """Icon "Thêm vào màn hình chính" trên iPhone (180px, không trong suốt). 404 khi CLB chưa có logo → frontend dùng icon chung."""
+    club = db.query(models.Club).filter(models.Club.id == club_id).first()
+    if not club or not club.logo_png:
+        raise HTTPException(404, "CLB chưa có logo")
+    from fastapi.responses import Response
+    png = _apple_touch_icon_png(club.logo_png, club.brand_color or "#1F8A52")
+    cache = "public, max-age=31536000, immutable" if v and v == club.logo_hash else "no-cache"
+    return Response(content=png, media_type="image/png", headers={"Cache-Control": cache, "ETag": f'"{club.logo_hash}-apple"'})
+
+
 @app.get("/api/public/club-logo/{club_id}", include_in_schema=False)
 def public_club_logo(club_id: int, v: Optional[str] = None, db: Session = Depends(get_db)):
     """Ảnh logo PNG, không cần đăng nhập (logo vốn hiện trên trang public). Có ?v= đúng hash → cache 1 năm; không → no-cache."""
@@ -2181,6 +2213,8 @@ def public_report_meta(request: Request, slug: str, db: Session = Depends(get_db
         "club_name": club.name if club else "",
         "club_sport": club.sport if club else "",
         "club_logo_src": club.logo_src if club else None,
+        "club_apple_icon_src": (f"/api/public/club-logo/{club.id}/apple-touch-icon.png?v={club.logo_hash}&c={(club.brand_color or '').lstrip('#')}"
+                                if club and club.logo_hash else None),
         "expires_at": rec.expires_at.isoformat() if rec.expires_at else None,
         "view_count": rec.view_count,
     }
@@ -6883,7 +6917,7 @@ def public_manifest(request: Request, slug: str, db: Session = Depends(get_db)):
              else [{"src": "/icon-192.png", "sizes": "192x192", "type": "image/png"}, {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png"}])
     manifest = {
         "name": name, "short_name": name[:12], "description": f"{name} — thông báo & kết quả",
-        "start_url": f"/public/report/{slug}", "scope": "/", "display": "standalone",
+        "id": f"/public/report/{slug}", "start_url": f"/public/report/{slug}", "scope": "/", "display": "standalone",
         "background_color": "#F5F6F8", "theme_color": color, "lang": "vi", "icons": icons,
     }
     return _Resp(content=_json.dumps(manifest, ensure_ascii=False), media_type="application/manifest+json",
