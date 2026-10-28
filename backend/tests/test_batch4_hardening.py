@@ -1,4 +1,4 @@
-"""Đợt 4: rate-limit key theo IP thật, ReminderLog theo chat_id, PRAGMA SQLite, index, cascade xoá."""
+"""Đợt 4: rate-limit key theo IP thật, ReminderLog (bảng cũ) theo giờ VN, PRAGMA SQLite, index, cascade xoá."""
 import sqlite3
 from datetime import date
 
@@ -29,56 +29,7 @@ def test_rate_limit_key_prefers_fly_client_ip():
 
 # ── ReminderLog theo chat_id ─────────────────────────────────────────────────
 
-def _setup_two_admins_one_unpaid(db, world):
-    world.admin1.club_memberships[0] if False else None  # no-op, readability
-    m = db.query(models.ClubMembership).filter(models.ClubMembership.club_id == world.club1.id).first()
-    m.telegram_chat_id = 111
-    admin1b = models.User(username="admin1b", full_name="Admin 1b", password_hash="x", role=models.UserRole.member)
-    db.add(admin1b); db.flush()
-    m2 = models.ClubMembership(user_id=admin1b.id, club_id=world.club1.id, role=models.UserRole.admin,
-                               can_view=True, can_create=True, can_edit=True, can_delete=True,
-                               telegram_chat_id=222)
-    db.add(m2)
-    ft = world.fee1
-    ft.remind_enabled = True
-    db.commit()
-    return ft
-
-
-def test_reminder_log_is_per_chat_id_not_per_club(client, world, db, monkeypatch):
-    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "000:fake")
-    # _INTERNAL_SECRET được đọc 1 lần lúc import main.py — monkeypatch thẳng biến module
-    monkeypatch.setattr(main, "_INTERNAL_SECRET", "s3cr3t")
-    ft = _setup_two_admins_one_unpaid(db, world)
-
-    sent_ids = []
-
-    def fake_urlopen(req, timeout=10):
-        import json
-        body = json.loads(req.data)
-        sent_ids.append(body["chat_id"])
-        class R:
-            def read(self_inner): return b"{}"
-            def __enter__(self_inner): return self_inner
-            def __exit__(self_inner, *a): return False
-        return R()
-    monkeypatch.setattr(main._urllib_req, "urlopen", fake_urlopen)
-
-    r = client.post("/api/internal/send-fee-reminder", params={"month": 9, "year": 2026},
-                    headers={"X-Internal-Secret": "s3cr3t"})
-    assert r.status_code == 200, r.text
-    body = r.json()
-    assert sorted(sent_ids) == [111, 222], "cả 2 admin cùng CLB phải nhận được nhắc phí, không chỉ admin đầu"
-    assert body["sent"] == 2 and body["skipped_already_sent_today"] == 0
-
-    logs = db.query(models.ReminderLog).filter(models.ReminderLog.fee_type_id == ft.id).all()
-    assert sorted(l.chat_id for l in logs) == [111, 222]
-
-    # Gọi lại trong ngày → cả 2 admin đều bị coi là đã gửi (không phải chỉ 1)
-    sent_ids.clear()
-    r2 = client.post("/api/internal/send-fee-reminder", params={"month": 9, "year": 2026},
-                     headers={"X-Internal-Secret": "s3cr3t"})
-    assert r2.json()["skipped_already_sent_today"] == 2 and sent_ids == []
+# (test send-fee-reminder đã gỡ 2026-10-28 — nhắc phí Telegram chuyển thành quy tắc thông báo, xem test_batch29/31/32)
 
 
 def test_reminder_log_uses_vn_date_not_utc(db, world):

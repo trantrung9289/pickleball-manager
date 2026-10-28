@@ -9,7 +9,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from "recharts";
 import dayjs from "dayjs";
-import { reportsApi, tournamentsApi, feeTypesApi } from "../api";
+import { reportsApi, tournamentsApi, announcementsApi } from "../api";
 
 const { Title, Text } = Typography;
 
@@ -23,7 +23,7 @@ export default function Dashboard() {
   const [monthly, setMonthly] = useState([]);
   const [thisMonth, setThisMonth] = useState(null);
   const [tournaments, setTournaments] = useState([]);
-  const [unpaid, setUnpaid] = useState(null);   // [{fee_type_name, count}] khoản thu định kỳ (bật nhắc) còn người chưa đóng tháng này
+  const [unpaid, setUnpaid] = useState(null);   // [{fee_type_name, count}] khoản thu có quy tắc thông báo phí đang bật, còn người chưa đóng tháng này
   const year = dayjs().year();
   const month = dayjs().month() + 1;
 
@@ -34,14 +34,15 @@ export default function Dashboard() {
     );
     reportsApi.monthlyDetail(month, year).then((r) => setThisMonth(r.data));
     tournamentsApi.list().then((r) => setTournaments(r.data));
-    // Việc cần làm: khoản thu định kỳ đang bật nhắc → đếm thành viên chưa đóng tháng này (lỗi → bỏ qua, không chặn trang)
-    feeTypesApi.list().then(async (r) => {
-      const types = (r.data || []).filter((ft) => ft.remind_enabled && ft.type === "income");
-      const rows = await Promise.all(types.map(async (ft) => {
+    // Việc cần làm: khoản thu có quy tắc thông báo phí đang bật (thay cờ nhắc Telegram cũ) → đếm thành viên chưa đóng tháng này
+    announcementsApi.list().then(async (r) => {
+      const seen = new Map();
+      (r.data || []).filter((a) => a.kind === "fee" && a.is_active && a.fee_type_id).forEach((a) => { if (!seen.has(a.fee_type_id)) seen.set(a.fee_type_id, a.fee_type_name || a.title); });
+      const rows = await Promise.all([...seen.entries()].map(async ([id, name]) => {
         try {
-          const res = await reportsApi.feeStatus(month, year, ft.id);
+          const res = await reportsApi.feeStatus(month, year, id);
           const list = Array.isArray(res.data) ? res.data : (res.data?.members || []);
-          return { fee_type_name: ft.name, count: list.filter((m) => !m.paid).length };
+          return { fee_type_name: name, count: list.filter((m) => !m.paid).length };
         } catch { return null; }
       }));
       setUnpaid(rows.filter((x) => x && x.count > 0));

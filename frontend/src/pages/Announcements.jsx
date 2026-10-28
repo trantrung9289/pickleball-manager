@@ -43,6 +43,7 @@ const fromForm = (v) => ({
   start_time: v.start_time ? v.start_time.format("HH:mm") : null,
   duration_min: v.duration_min ?? null,
   lead_days: v.lead_days ?? 3,
+  repeat_daily: v.repeat_daily ?? false,
   start_date: v.start_date ? v.start_date.format("YYYY-MM-DD") : null,
   end_date: v.end_date ? v.end_date.format("YYYY-MM-DD") : null,
   is_active: v.is_active ?? true, show_public: v.show_public ?? true, push_telegram: v.push_telegram ?? false,
@@ -82,7 +83,7 @@ export default function Announcements({ perms }) {
   const openCreate = () => {
     setEditing(null);
     form.resetFields();
-    form.setFieldsValue({ kind: "schedule", recurrence: "weekly", weekdays: [], lead_days: 3, is_active: true, show_public: true, push_telegram: false });
+    form.setFieldsValue({ kind: "schedule", recurrence: "weekly", weekdays: [], lead_days: 3, repeat_daily: false, is_active: true, show_public: true, push_telegram: false });
     setModalOpen(true);
   };
   const openEdit = (r) => { setEditing(r); form.setFieldsValue(toForm(r)); setModalOpen(true); };
@@ -122,7 +123,7 @@ export default function Announcements({ perms }) {
     { title: "Tiêu đề", dataIndex: "title", render: (v, r) => <span><b>{v}</b>{r.kind === "fee" && r.fee_type_name && <Text type="secondary"> · {r.fee_type_name}</Text>}</span> },
     { title: "Loại", dataIndex: "kind", render: (v) => <StatusChip tone={v === "fee" ? "warn" : "brand"}>{KIND_LABELS[v] || v}</StatusChip> },
     { title: "Lặp", dataIndex: "recurrence_label" },
-    { title: "Hiện trước", dataIndex: "lead_days", render: (v) => `${v} ngày` },
+    { title: "Hiện trước", dataIndex: "lead_days", render: (v, r) => `${v} ngày${r.repeat_daily ? " · nhắc hằng ngày" : ""}` },
     { title: "Hiệu lực", render: (_, r) => (r.start_date || r.end_date) ? `${r.start_date ? dayjs(r.start_date).format("DD/MM/YY") : "…"} → ${r.end_date ? dayjs(r.end_date).format("DD/MM/YY") : "…"}` : "—" },
     { title: "Public", dataIndex: "show_public", render: (v, r) => <Switch size="small" checked={v} disabled={!canEdit} onChange={(c) => toggle(r, "show_public", c)} /> },
     { title: "Bật", dataIndex: "is_active", render: (v, r) => <Switch size="small" checked={v} disabled={!canEdit} onChange={(c) => toggle(r, "is_active", c)} /> },
@@ -237,6 +238,7 @@ export default function Announcements({ perms }) {
             <Form.Item name="show_public" label="Hiện trên trang public" valuePropName="checked" style={{ marginBottom: 0 }}><Switch /></Form.Item>
             <Form.Item name="is_active" label="Bật" valuePropName="checked" style={{ marginBottom: 0 }}><Switch /></Form.Item>
             <Form.Item name="push_telegram" label={<Tooltip title="Gửi Telegram cho admin + đẩy tới thiết bị đã bật: ngay khi lưu nếu đã đến ngày, và mỗi 15 phút">Đẩy thông báo</Tooltip>} valuePropName="checked" style={{ marginBottom: 0 }}><Switch /></Form.Item>
+            <Form.Item name="repeat_daily" label={<Tooltip title="Đẩy lại mỗi ngày trong cửa sổ hiện trước (một lần/ngày), thay vì chỉ ngày đầu và đúng ngày. Dùng cho nhắc đóng phí.">Nhắc lại hằng ngày</Tooltip>} valuePropName="checked" style={{ marginBottom: 0 }}><Switch /></Form.Item>
           </Space>
         </Form>
       </Modal>

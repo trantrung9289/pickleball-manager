@@ -156,6 +156,8 @@ def _run_migration():
         # 2026-10-28: logo CLB lưu trong DB (PNG chuẩn hoá bằng Pillow) + hash để cache
         ("clubs", "logo_png", "BLOB", None),
         ("clubs", "logo_hash", "VARCHAR(16)", None),
+        # 2026-10-28: thông báo nhắc lại mỗi ngày trong cửa sổ (thay nhắc phí Telegram cũ)
+        ("announcements", "repeat_daily", "BOOLEAN DEFAULT 0 NOT NULL", None),
         # Bảng tournaments — quy tắc ghép ĐỒNG ĐỘI cho vòng quay ghép đội (giải đôi)
         ("tournaments", "partner_rules", "JSON", None),
         # Bảng clubs — danh sách hạng cấu hình ở cấp CLB (NULL → DEFAULT_RANK_LEVELS)
@@ -182,6 +184,29 @@ def _run_migration():
         conn.commit()
 
 _run_migration()
+
+
+def _migrate_fee_reminders_to_announcements() -> None:
+    """2026-10-28: gỡ "Nhắc đóng phí qua Telegram" — mỗi khoản thu đang bật remind_enabled được chuyển thành MỘT quy tắc thông báo
+    khoản thu tương đương (hàng tháng, đến hạn mùng 5, hiện trước 9 ngày = cửa sổ 26 → 5 như cũ, nhắc lại mỗi ngày, đẩy Telegram/Web Push),
+    rồi tắt cờ để không chuyển lại. Khoản đã có quy tắc thông báo phí thì chỉ tắt cờ."""
+    db = SessionLocal()
+    try:
+        fts = db.query(models.FeeType).filter(models.FeeType.remind_enabled.is_(True)).all()
+        for ft in fts:
+            exists = db.query(models.Announcement).filter(models.Announcement.fee_type_id == ft.id, models.Announcement.kind == "fee").first()
+            if not exists and ft.club_id:
+                db.add(models.Announcement(club_id=ft.club_id, kind="fee", title=f"Nhắc đóng {ft.name}", fee_type_id=ft.id,
+                                           recurrence="monthly", day_of_month=5, lead_days=9, repeat_daily=True,
+                                           is_active=True, show_public=True, push_telegram=True))
+            ft.remind_enabled = False
+        if fts:
+            db.commit()
+            print(f"[migration] chuyển {len(fts)} khoản thu nhắc Telegram → quy tắc thông báo")
+    except Exception as exc:   # noqa: BLE001
+        db.rollback(); print(f"[migration] chuyển nhắc phí thất bại: {exc}")
+    finally:
+        db.close()
 
 
 def _migrate_team_players_pool() -> None:
@@ -212,6 +237,7 @@ def _migrate_team_players_pool() -> None:
 
 
 _migrate_team_players_pool()
+_migrate_fee_reminders_to_announcements()
 
 
 # Bảng phẳng có club_id (thứ tự xoá: con trước cha). tournaments/point_events xoá qua ORM để cascade con.
@@ -6481,8 +6507,18 @@ def save_telegram_chat_id(
     return {"ok": True}
 
 
+def _guests_paid(db: Session, club_id: int, fee_type_id: int, month: int, year: int):
+    """Khách mời đã đóng khoản này trong tháng (thông tin thêm cho admin; khách không có nghĩa vụ định kỳ nên không "chưa đóng")."""
+    return db.query(models.Player).join(models.Transaction, models.Transaction.player_id == models.Player.id).filter(
+        models.Transaction.club_id == club_id,
+        models.Transaction.fee_type_id == fee_type_id,
+        extract("month", models.Transaction.transaction_date) == month,
+        extract("year", models.Transaction.transaction_date) == year,
+    ).order_by(models.Player.name).all()
+
+
 def _unpaid_members(db: Session, club_id: int, fee_type_id: int, month: int, year: int):
-    """Thành viên đang hoạt động CHƯA có giao dịch khoản thu này trong tháng — dùng chung nhắc phí Telegram + thông báo public."""
+    """Thành viên đang hoạt động CHƯA có giao dịch khoản thu này trong tháng — dùng cho thông báo khoản thu (chuông, public, Telegram, Web Push)."""
     paid_ids = set(
         r[0] for r in db.query(models.Transaction.member_id).filter(
             models.Transaction.club_id == club_id,
@@ -6497,55 +6533,6 @@ def _unpaid_members(db: Session, club_id: int, fee_type_id: int, month: int, yea
         models.Member.status == "active",
         models.Member.id.notin_(paid_ids),
     ).order_by(models.Member.full_name).all()
-
-
-def _build_reminder_data(month: int, year: int, db: Session):
-    """Trả về danh sách CLB → fee_types có remind_enabled + thành viên chưa đóng + chat_id admin."""
-    fee_types = db.query(models.FeeType).filter(
-        models.FeeType.remind_enabled == True,
-        models.FeeType.type == models.FeeTypeCategory.income,
-    ).all()
-
-    result = []
-    for ft in fee_types:
-        club_id = ft.club_id
-        if not _club_bot_enabled(db, club_id):
-            continue   # superuser tắt bot cho cả CLB → không nhắc phí qua Telegram
-        unpaid_members = _unpaid_members(db, club_id, ft.id, month, year)
-
-        # Khách mời đã đóng khoản này trong tháng (thông tin, không tính "chưa đóng")
-        guests_paid = db.query(models.Player).join(
-            models.Transaction, models.Transaction.player_id == models.Player.id
-        ).filter(
-            models.Transaction.club_id == club_id,
-            models.Transaction.fee_type_id == ft.id,
-            extract("month", models.Transaction.transaction_date) == month,
-            extract("year", models.Transaction.transaction_date) == year,
-        ).order_by(models.Player.name).all()
-
-        admin_memberships = db.query(models.ClubMembership).filter(
-            models.ClubMembership.club_id == club_id,
-            models.ClubMembership.role == models.UserRole.admin,
-            models.ClubMembership.telegram_chat_id.isnot(None),
-            models.ClubMembership.bot_enabled.is_(True),  # tắt bot = không nhận nhắc phí
-        ).all()
-        chat_ids = [m.telegram_chat_id for m in admin_memberships]
-
-        club = db.query(models.Club).filter(models.Club.id == club_id).first()
-        result.append({
-            "club_id": club_id,
-            "club_name": club.name if club else str(club_id),
-            "fee_type_id": ft.id,
-            "fee_type_name": ft.name,
-            "month": month,
-            "year": year,
-            "unpaid_count": len(unpaid_members),
-            "unpaid_members": [{"id": m.id, "full_name": m.full_name, "phone": m.phone} for m in unpaid_members],
-            "guest_paid_count": len(guests_paid),
-            "guests_paid": [{"id": p.id, "full_name": p.name} for p in guests_paid],
-            "admin_chat_ids": chat_ids,
-        })
-    return result
 
 
 # ── THÔNG BÁO (trang public / chuông) — đợt 1 (2026-10-27) ─────────────────────
@@ -6590,11 +6577,15 @@ def _announcement_feed(db: Session, club_id: int, today: date, horizon_days: int
         ft = r.fee_type
         d = date.fromisoformat(it["date"])
         unpaid = _unpaid_members(db, club_id, r.fee_type_id, d.month, d.year) if ft else []
+        guests = _guests_paid(db, club_id, r.fee_type_id, d.month, d.year) if ft else []
         it["fee_type_name"] = ft.name if ft else None
         it["fee_month"], it["fee_year"] = d.month, d.year
         it["amount"] = float(ft.default_amount) if ft and ft.default_amount is not None else None
         it["unpaid_count"] = len(unpaid)
-        it["unpaid_members"] = [{"id": m.id, "full_name": m.full_name} for m in unpaid]
+        # Public: chỉ tên (không lộ số điện thoại); admin/Telegram: kèm số điện thoại như nhắc phí cũ
+        it["unpaid_members"] = [({"id": m.id, "full_name": m.full_name} if public_only else {"id": m.id, "full_name": m.full_name, "phone": m.phone}) for m in unpaid]
+        it["guest_paid_count"] = len(guests)
+        it["guests_paid"] = [{"id": g.id, "full_name": g.name} for g in guests]
         auto = f"{ft.name if ft else 'Khoản thu'} tháng {d.month}/{d.year}: hạn {d.strftime('%d/%m')}. " + (
             f"Còn {len(unpaid)} người chưa đóng." if unpaid else "Tất cả đã đóng.")
         it["body"] = f"{r.body.strip()}\n{auto}" if r.body and r.body.strip() else auto
@@ -6715,7 +6706,10 @@ def _announcement_push_text(item: dict, club_name: str) -> str:
     if item["kind"] == "fee" and item.get("unpaid_members"):
         lines.append("")
         lines.append(f"Chưa đóng ({item['unpaid_count']} người):")
-        lines.extend(f"  • {m['full_name']}" for m in item["unpaid_members"])
+        lines.extend(f"  • {m['full_name']}" + (f" ({m['phone']})" if m.get("phone") else "") for m in item["unpaid_members"])
+    if item["kind"] == "fee" and item.get("guest_paid_count"):
+        lines.append("")
+        lines.append(f"Khách mời đã đóng ({item['guest_paid_count']} người): " + ", ".join(g["full_name"] for g in item["guests_paid"]))
     return "\n".join(lines)
 
 
@@ -6769,7 +6763,8 @@ def _bot_token_or_500() -> str:
 
 
 def _due_announcement_items(db: Session, club_id: int, today: date) -> list:
-    """Lần xuất hiện cần đẩy hôm nay cho quy tắc push_telegram: ngày đầu cửa sổ (d − lead_days) và đúng ngày d."""
+    """Lần xuất hiện cần đẩy hôm nay cho quy tắc push_telegram: ngày đầu cửa sổ (d − lead_days) và đúng ngày d;
+    repeat_daily → mọi ngày trong cửa sổ (chống trùng theo ngày ở log)."""
     items = _announcement_feed(db, club_id, today, 60)
     rules = {a.id: a for a in db.query(models.Announcement).filter(
         models.Announcement.club_id == club_id, models.Announcement.push_telegram.is_(True)).all()}
@@ -6780,7 +6775,10 @@ def _due_announcement_items(db: Session, club_id: int, today: date) -> list:
             continue
         d = date.fromisoformat(it["date"])
         first_day = d - timedelta(days=max(0, int(r.lead_days or 0)))
-        if today == first_day or today == d:
+        if r.repeat_daily:
+            if first_day <= today <= d:          # nhắc lại mỗi ngày trong cửa sổ (như nhắc phí Telegram cũ)
+                due.append(it)
+        elif today == first_day or today == d:
             due.append(it)
     return due
 
@@ -6945,178 +6943,6 @@ def public_manifest(request: Request, slug: str, db: Session = Depends(get_db)):
     }
     return _Resp(content=_json.dumps(manifest, ensure_ascii=False), media_type="application/manifest+json",
                  headers={"Cache-Control": "no-cache"})
-
-
-@app.get("/api/fee-reminders/preview")
-def preview_fee_reminders_frontend(
-    month: int,
-    year: int,
-    db: Session = Depends(get_db),
-    perms: ClubPermissions = Depends(get_club_permission),
-):
-    """Xem trước danh sách thành viên chưa đóng phí — admin CLB."""
-    perms.require_view()
-    data = _build_reminder_data(month, year, db)
-    return [item for item in data if item["club_id"] == perms.club_id]
-
-
-@app.post("/api/fee-reminders/send")
-def send_fee_reminders_frontend(
-    month: int,
-    year: int,
-    db: Session = Depends(get_db),
-    perms: ClubPermissions = Depends(get_club_permission),
-):
-    """Gửi nhắc đóng phí thủ công — admin CLB."""
-    perms.require_edit()
-    bot_token = _os.environ.get("TELEGRAM_BOT_TOKEN") or _os.environ.get("BOT_TOKEN", "")
-    if not bot_token:
-        raise HTTPException(500, "BOT_TOKEN chưa được cấu hình")
-    data = [item for item in _build_reminder_data(month, year, db) if item["club_id"] == perms.club_id]
-    sent_count = 0
-    errors = []
-    for item in data:
-        if not item["admin_chat_ids"]:
-            continue
-        for chat_id in item["admin_chat_ids"]:
-            unpaid_count = item["unpaid_count"]
-            guest_line = ""
-            if item.get("guest_paid_count"):
-                guest_names = ", ".join(g["full_name"] for g in item["guests_paid"])
-                guest_line = f"\n\nKhách mời đã đóng ({item['guest_paid_count']} người): {guest_names}"
-            if unpaid_count > 0:
-                names = "\n".join(
-                    f"  • {m['full_name']}" + (f" ({m['phone']})" if m.get("phone") else "")
-                    for m in item["unpaid_members"]
-                )
-                text = (
-                    f"🔔 *Nhắc đóng phí tháng {month}/{year}*\n"
-                    f"CLB: {item['club_name']}\n"
-                    f"Khoản: {item['fee_type_name']}\n\n"
-                    f"Thành viên chưa đóng ({unpaid_count} người):\n{names}"
-                    f"{guest_line}"
-                )
-            else:
-                text = (
-                    f"✅ *Phí tháng {month}/{year} — {item['fee_type_name']}*\n"
-                    f"CLB: {item['club_name']}\n\n"
-                    f"Tất cả thành viên đã đóng phí!"
-                    f"{guest_line}"
-                )
-            try:
-                payload = _json.dumps({"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}).encode()
-                req = _urllib_req.Request(
-                    f"https://api.telegram.org/bot{bot_token}/sendMessage",
-                    data=payload,
-                    headers={"Content-Type": "application/json"},
-                )
-                with _urllib_req.urlopen(req, timeout=10) as resp:
-                    resp.read()
-                sent_count += 1
-            except Exception as exc:
-                errors.append({"chat_id": chat_id, "error": str(exc)})
-    return {"sent": sent_count, "errors": errors}
-
-
-@app.get("/api/internal/fee-reminders")
-def preview_fee_reminders(
-    month: int,
-    year: int,
-    db: Session = Depends(get_db),
-    _: None = Depends(_check_internal_secret),
-):
-    return _build_reminder_data(month, year, db)
-
-
-@app.post("/api/internal/send-fee-reminder")
-def send_fee_reminder(
-    month: int,
-    year: int,
-    db: Session = Depends(get_db),
-    _: None = Depends(_check_internal_secret),
-):
-    bot_token = _os.environ.get("TELEGRAM_BOT_TOKEN") or _os.environ.get("BOT_TOKEN", "")
-    if not bot_token:
-        raise HTTPException(500, "BOT_TOKEN chưa được cấu hình")
-
-    data = _build_reminder_data(month, year, db)
-    today = _now_vn().date()   # giờ VN, không phải UTC của máy chủ Fly
-    sent_count = 0
-    skipped_count = 0
-    errors = []
-
-    for item in data:
-        if not item["admin_chat_ids"]:
-            continue
-        if item["unpaid_count"] == 0:
-            continue
-
-        for chat_id in item["admin_chat_ids"]:
-            # Kiểm tra ĐÚNG chat_id này đã gửi hôm nay chưa (trước đây chỉ theo club/fee_type/ngày
-            # nên admin thứ 2 trở đi của cùng CLB luôn bị coi là "đã gửi" ngay sau admin đầu tiên)
-            existing = db.query(models.ReminderLog).filter(
-                models.ReminderLog.club_id == item["club_id"],
-                models.ReminderLog.fee_type_id == item["fee_type_id"],
-                models.ReminderLog.month == month,
-                models.ReminderLog.year == year,
-                models.ReminderLog.send_date == today,
-                models.ReminderLog.chat_id == chat_id,
-            ).first()
-            if existing:
-                skipped_count += 1
-                continue
-
-            names = "\n".join(
-                f"  • {m['full_name']}" + (f" ({m['phone']})" if m.get("phone") else "")
-                for m in item["unpaid_members"]
-            )
-            guest_line = ""
-            if item.get("guest_paid_count"):
-                guest_names = ", ".join(g["full_name"] for g in item["guests_paid"])
-                guest_line = f"\n\nKhách mời đã đóng ({item['guest_paid_count']} người): {guest_names}"
-            text = (
-                f"🔔 *Nhắc đóng phí tháng {month}/{year}*\n"
-                f"CLB: {item['club_name']}\n"
-                f"Khoản: {item['fee_type_name']}\n\n"
-                f"Thành viên chưa đóng ({item['unpaid_count']} người):\n{names}"
-                f"{guest_line}"
-            )
-
-            try:
-                payload = _json.dumps({
-                    "chat_id": chat_id,
-                    "text": text,
-                    "parse_mode": "Markdown",
-                }).encode()
-                req = _urllib_req.Request(
-                    f"https://api.telegram.org/bot{bot_token}/sendMessage",
-                    data=payload,
-                    headers={"Content-Type": "application/json"},
-                )
-                with _urllib_req.urlopen(req, timeout=10) as resp:
-                    resp.read()
-
-                # Ghi log theo đúng chat_id (UNIQUE constraint tránh trùng)
-                log = models.ReminderLog(
-                    club_id=item["club_id"],
-                    fee_type_id=item["fee_type_id"],
-                    month=month,
-                    year=year,
-                    send_date=today,
-                    chat_id=chat_id,
-                )
-                db.add(log)
-                db.commit()
-                sent_count += 1
-            except Exception as exc:
-                db.rollback()   # commit thất bại (vd IntegrityError) không được để rớt sang vòng lặp sau
-                errors.append({"chat_id": chat_id, "error": str(exc)})
-
-    return {
-        "sent": sent_count,
-        "skipped_already_sent_today": skipped_count,
-        "errors": errors,
-    }
 
 
 # ── SERVE REACT FRONTEND ──────────────────────────────────

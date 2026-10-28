@@ -69,19 +69,45 @@ def test_requires_edit_permission_and_club_scope(client, world):
     assert r.status_code == 404
 
 
-def test_disabled_admin_excluded_from_fee_reminders(client, world):
-    """Tắt bot cho admin đã liên kết Telegram → không còn nằm trong admin_chat_ids nhắc phí."""
-    # admin1 liên kết Telegram và bật nhắc cho khoản thu
+def _fake_tg(monkeypatch):
+    import main
+    sent = []
+
+    def fake_urlopen(req, timeout=10):
+        import json
+        sent.append(json.loads(req.data)["chat_id"])
+
+        class R:
+            def read(self_inner): return b"{}"
+            def __enter__(self_inner): return self_inner
+            def __exit__(self_inner, *a): return False
+        return R()
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "000:fake")
+    monkeypatch.setattr(main._urllib_req, "urlopen", fake_urlopen)
+    return sent
+
+
+def _fee_rule(client, world):
+    """Quy tắc thông báo khoản thu hôm nay (thay cờ remind_enabled cũ)."""
+    import datetime as _dt
+    today = _dt.date.fromisoformat(client.get("/api/announcements/feed", headers=_h(world.admin1, world.club1)).json()["today"])
+    r = client.post("/api/announcements", json={"kind": "fee", "title": "Phí", "fee_type_id": world.fee1.id, "recurrence": "monthly",
+                                                 "day_of_month": today.day, "lead_days": 0}, headers=_h(world.admin1, world.club1))
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+def test_disabled_admin_excluded_from_fee_reminders(client, world, monkeypatch):
+    """Tắt bot cho admin đã liên kết Telegram → không còn nhận đẩy thông báo khoản thu (thay nhắc phí cũ)."""
+    sent = _fake_tg(monkeypatch)
+    aid = _fee_rule(client, world)
     assert client.patch("/api/my-memberships/telegram-chat-id", json={"chat_id": 777},
                         headers=_h(world.admin1, world.club1)).status_code == 200
-    assert client.put(f"/api/fee-types/{world.fee1.id}", json={"remind_enabled": True},
-                      headers=_h(world.admin1, world.club1)).status_code == 200
 
     def chat_ids():
-        r = client.get("/api/fee-reminders/preview", params={"month": 1, "year": 2030},
-                       headers=_h(world.admin1, world.club1))
-        assert r.status_code == 200, r.text
-        return [cid for item in r.json() for cid in item.get("admin_chat_ids", [])]
+        sent.clear()
+        r = client.post(f"/api/announcements/{aid}/push", headers=_h(world.admin1, world.club1))
+        return list(sent) if r.status_code == 200 else []
 
     assert 777 in chat_ids()
 
@@ -130,21 +156,20 @@ def test_superuser_toggles_membership_bot_flag_even_for_sole_admin(client, world
                       headers=_h(world.admin1, world.club1)).status_code == 403
 
 
-def test_club_bot_flag_blocks_link_reminders_and_is_exposed_to_bot(client, world):
+def test_club_bot_flag_blocks_link_reminders_and_is_exposed_to_bot(client, world, monkeypatch):
     su = _su_headers(world)
+    sent = _fake_tg(monkeypatch)
     clubs = {c["id"]: c for c in client.get("/api/admin/clubs", headers=su).json()}
     assert clubs[world.club1.id]["bot_enabled"] is True      # mặc định bật cho CLB đang có
-    # admin1 liên kết Telegram + bật nhắc phí khi CLB còn được dùng bot
+    # quy tắc thông báo phí + admin1 liên kết Telegram khi CLB còn được dùng bot
+    aid = _fee_rule(client, world)
     assert client.patch("/api/my-memberships/telegram-chat-id", json={"chat_id": 888},
                         headers=_h(world.admin1, world.club1)).status_code == 200
-    assert client.put(f"/api/fee-types/{world.fee1.id}", json={"remind_enabled": True},
-                      headers=_h(world.admin1, world.club1)).status_code == 200
 
     def preview_chat_ids():
-        r = client.get("/api/fee-reminders/preview", params={"month": 1, "year": 2030},
-                       headers=_h(world.admin1, world.club1))
-        assert r.status_code == 200, r.text
-        return [cid for item in r.json() for cid in item.get("admin_chat_ids", [])]
+        sent.clear()
+        r = client.post(f"/api/announcements/{aid}/push", headers=_h(world.admin1, world.club1))
+        return list(sent) if r.status_code == 200 else []
     assert 888 in preview_chat_ids()
 
     # Superuser tắt bot cho cả CLB 1

@@ -84,7 +84,7 @@ else
   log "⚠️  Thiếu TELEGRAM_BOT_TOKEN — không chạy bot."
 fi
 
-# ── 4. Cron: nhắc phí (7h UTC = 14h VN) + backup hằng ngày (18h UTC = 1h VN) ──
+# ── 4. Cron: thông báo mỗi 15 phút + backup hằng ngày (18h UTC = 1h VN) ──
 # Secret đưa vào file env mode 0600 thay vì ghi thẳng vào dòng cron (0644, lộ qua ps).
 umask 077
 python - <<'PY'
@@ -101,17 +101,15 @@ umask 022
 {
   echo "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
   echo "0 18 * * * root . /run/clb.env && cd /app && python backup_db.py --tag daily > ${CRON_LOG} 2>&1"
-  if [ -n "${INTERNAL_SECRET:-}" ] && [ -n "${TELEGRAM_BOT_TOKEN:-}" ]; then
-    echo "0 7 * * * root . /run/clb.env && cd /bot && python notify_bot.py > ${CRON_LOG} 2>&1"
-  fi
-  # Thông báo (Telegram + Web Push) mỗi 15 phút — backend chống trùng theo ngày; không cần token Telegram (Web Push vẫn chạy)
+  # Thông báo (Telegram + Web Push) mỗi 15 phút — backend chống trùng theo ngày; không cần token Telegram (Web Push vẫn chạy).
+  # Nhắc phí Telegram cũ (7h UTC) đã gỡ 2026-10-28 — thay bằng quy tắc thông báo khoản thu "nhắc lại hằng ngày".
   if [ -n "${INTERNAL_SECRET:-}" ]; then
     echo "*/15 * * * * root . /run/clb.env && cd /bot && python notify_bot.py --announcements-only > ${CRON_LOG} 2>&1"
   fi
 } > /etc/cron.d/clb
 chmod 0644 /etc/cron.d/clb
 cron
-log "⏰ Cron đã khởi động (backup 18h UTC$( [ -n "${INTERNAL_SECRET:-}" ] && [ -n "${TELEGRAM_BOT_TOKEN:-}" ] && echo ', nhắc phí 7h UTC')$( [ -n "${INTERNAL_SECRET:-}" ] && echo ', thông báo mỗi 15 phút'))"
+log "⏰ Cron đã khởi động (backup 18h UTC$( [ -n "${INTERNAL_SECRET:-}" ] && echo ', thông báo mỗi 15 phút'))"
 
 # ── 5. Chờ backend (tiến trình chính) ───────────────────────────────────────
 wait "$BACKEND_PID"

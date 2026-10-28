@@ -83,7 +83,7 @@ class FeeType(Base):
     description = Column(Text, nullable=True)
     default_amount = Column(Numeric(15, 2), default=0)
     is_recurring = Column(Boolean, default=False)
-    remind_enabled = Column(Boolean, default=False)   # bật nhắc đóng phí qua Telegram
+    remind_enabled = Column(Boolean, default=False)   # CŨ (nhắc phí Telegram, gỡ 2026-10-28): giữ cột, đã chuyển thành quy tắc thông báo
     created_at = Column(DateTime, server_default=func.now())
 
     transactions = relationship("Transaction", back_populates="fee_type")
@@ -778,6 +778,7 @@ class Announcement(Base):
     start_time = Column(String(5), nullable=True)      # "HH:MM" giờ VN
     duration_min = Column(Integer, nullable=True)
     lead_days = Column(Integer, nullable=False, default=3)
+    repeat_daily = Column(Boolean, nullable=False, default=False)   # đẩy lại MỖI NGÀY trong cửa sổ hiện trước (thay nhắc phí cũ)
     start_date = Column(Date, nullable=True)
     end_date = Column(Date, nullable=True)
     is_active = Column(Boolean, nullable=False, default=True)

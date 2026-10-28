@@ -1,10 +1,9 @@
 import { useEffect, useState, useCallback } from "react";
 import {
   Card, Input, Button, message, Space, Typography, Tree,
-  Switch, Table, Modal, DatePicker, Spin, Tag, Divider, Tooltip, Alert,
+  Switch, Table, Tag, Tooltip, Alert,
 } from "antd";
-import { SaveOutlined, ReloadOutlined, BellOutlined, EyeOutlined, SendOutlined, TeamOutlined } from "@ant-design/icons";
-import dayjs from "dayjs";
+import { SaveOutlined, ReloadOutlined, TeamOutlined } from "@ant-design/icons";
 
 const { Text } = Typography;
 const API_BASE = import.meta.env.VITE_API_URL || "";
@@ -75,13 +74,6 @@ export default function BotConfigPanel() {
   const [checkedKeys, setCheckedKeys]   = useState(ALL_KEYS);
   const [clubBotEnabled, setClubBotEnabled] = useState(true);   // cờ cấp CLB do quản trị hệ thống đặt
 
-  const [feeTypes, setFeeTypes]             = useState([]);
-  const [savingFeeType, setSavingFeeType]   = useState(null);
-  const [reminderMonth, setReminderMonth]   = useState(dayjs());
-  const [previewData, setPreviewData]       = useState(null);
-  const [previewLoading, setPreviewLoading] = useState(false);
-  const [sending, setSending]               = useState(false);
-  const [showPreview, setShowPreview]       = useState(false);
 
   // Khai báo TRƯỚC useEffect gọi chúng — const không hoisted như function declaration,
   // trước đây "chạy được" chỉ vì hiệu ứng phụ chạy sau khi component render xong (closure
@@ -109,14 +101,6 @@ export default function BotConfigPanel() {
     } finally {
       setLoading(false);
     }
-  }, []);
-
-  const loadFeeTypes = useCallback(async () => {
-    try {
-      const res = await fetch(`${API_BASE}/api/fee-types`, { headers: authHeaders() });
-      if (!res.ok) return;
-      setFeeTypes(await res.json());
-    } catch { /* silent */ }
   }, []);
 
   // Tài khoản trong CLB + quyền dùng bot (tài khoản do quản trị hệ thống cấp; ở đây chỉ bật/tắt bot)
@@ -165,9 +149,8 @@ export default function BotConfigPanel() {
     // dụng ở nút "Tải lại".
     // eslint-disable-next-line react-hooks/set-state-in-effect
     loadConfig();
-    loadFeeTypes();
     loadAccounts();
-  }, [loadConfig, loadFeeTypes, loadAccounts]);
+  }, [loadConfig, loadAccounts]);
 
   const handleCheck = useCallback((checked) => {
     setCheckedKeys(Array.isArray(checked) ? checked : checked.checked);
@@ -193,72 +176,12 @@ export default function BotConfigPanel() {
     }
   };
 
-  const toggleRemindEnabled = async (feeType, checked) => {
-    setSavingFeeType(feeType.id);
-    try {
-      const res = await fetch(`${API_BASE}/api/fee-types/${feeType.id}`, {
-        method: "PUT",
-        headers: authHeaders(),
-        body: JSON.stringify({ remind_enabled: checked }),
-      });
-      if (!res.ok) throw new Error();
-      setFeeTypes((prev) => prev.map((ft) => ft.id === feeType.id ? { ...ft, remind_enabled: checked } : ft));
-      message.success(checked ? "Đã bật nhắc đóng phí" : "Đã tắt nhắc đóng phí");
-    } catch {
-      message.error("Lỗi cập nhật");
-    } finally {
-      setSavingFeeType(null);
-    }
-  };
-
-  const handlePreview = async () => {
-    if (!reminderMonth) return;
-    setPreviewLoading(true);
-    setPreviewData(null);
-    try {
-      const m = reminderMonth.month() + 1;
-      const y = reminderMonth.year();
-      const res = await fetch(`${API_BASE}/api/fee-reminders/preview?month=${m}&year=${y}`, { headers: authHeaders() });
-      if (!res.ok) throw new Error(res.status);
-      setPreviewData(await res.json());
-      setShowPreview(true);
-    } catch (e) {
-      message.error("Lỗi tải dữ liệu preview: " + e.message);
-    } finally {
-      setPreviewLoading(false);
-    }
-  };
-
-  const handleSendNow = async () => {
-    if (!reminderMonth) return;
-    setSending(true);
-    try {
-      const m = reminderMonth.month() + 1;
-      const y = reminderMonth.year();
-      const res = await fetch(`${API_BASE}/api/fee-reminders/send?month=${m}&year=${y}`, {
-        method: "POST",
-        headers: authHeaders(),
-      });
-      if (!res.ok) throw new Error(res.status);
-      const data = await res.json();
-      message.success(`Đã gửi ${data.sent} tin nhắn thành công`);
-      if (data.errors?.length) message.warning(`${data.errors.length} lỗi gửi — kiểm tra log server`);
-      setShowPreview(false);
-    } catch (e) {
-      message.error("Lỗi gửi: " + e.message);
-    } finally {
-      setSending(false);
-    }
-  };
-
-  const incomeFeeTypes = feeTypes.filter((ft) => ft.type === "income");
-
   return (
     <div style={{ maxWidth: 580 }}>
       {!clubBotEnabled && (
         <Alert type="warning" showIcon style={{ marginBottom: 16 }}
           message="CLB chưa được cấp quyền dùng Bot Telegram"
-          description="Quản trị hệ thống chưa bật Bot cho CLB này: không tài khoản nào đăng nhập được Bot và không ai nhận nhắc phí, dù bật ở bảng Tài khoản bên dưới. Liên hệ quản trị hệ thống để được cấp." />
+          description="Quản trị hệ thống chưa bật Bot cho CLB này: không tài khoản nào đăng nhập được Bot và không ai nhận thông báo Telegram, dù bật ở bảng Tài khoản bên dưới. Liên hệ quản trị hệ thống để được cấp." />
       )}
       <Card title="Tin nhắn chào mừng" size="small" style={{ marginBottom: 16 }}>
         <Text type="secondary" style={{ display: "block", marginBottom: 8, fontSize: 12 }}>
@@ -345,63 +268,6 @@ export default function BotConfigPanel() {
         />
       </Card>
 
-      <Card
-        title={<><BellOutlined style={{ marginRight: 6 }} />Nhắc đóng phí qua Telegram</>}
-        size="small"
-        style={{ marginBottom: 16 }}
-      >
-        <Text type="secondary" style={{ display: "block", marginBottom: 12, fontSize: 12 }}>
-          Bật nhắc cho các khoản thu — Bot gửi Telegram cho bạn vào 14h mỗi ngày (5 ngày cuối tháng M và 5 ngày đầu tháng M+1).
-        </Text>
-
-        {incomeFeeTypes.length === 0 ? (
-          <Text type="secondary">Chưa có khoản thu nào.</Text>
-        ) : (
-          <Table
-            size="small"
-            pagination={false}
-            dataSource={incomeFeeTypes}
-            rowKey="id"
-            columns={[
-              { title: "Khoản thu", dataIndex: "name" },
-              {
-                title: "Nhắc Telegram",
-                key: "remind",
-                width: 120,
-                align: "center",
-                render: (_, ft) => (
-                  <Switch
-                    checked={!!ft.remind_enabled}
-                    loading={savingFeeType === ft.id}
-                    onChange={(checked) => toggleRemindEnabled(ft, checked)}
-                    size="small"
-                  />
-                ),
-              },
-            ]}
-          />
-        )}
-
-        <Divider style={{ margin: "16px 0 12px" }} />
-
-        <Text strong style={{ display: "block", marginBottom: 8 }}>Gửi nhắc thủ công</Text>
-        <Space wrap>
-          <DatePicker
-            picker="month"
-            value={reminderMonth}
-            onChange={setReminderMonth}
-            format="MM/YYYY"
-            allowClear={false}
-          />
-          <Button icon={<EyeOutlined />} loading={previewLoading} onClick={handlePreview}>
-            Xem trước
-          </Button>
-          <Button type="primary" icon={<SendOutlined />} loading={sending} onClick={handleSendNow}>
-            Gửi ngay
-          </Button>
-        </Space>
-      </Card>
-
       <Space>
         <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={save}>
           Lưu cấu hình
@@ -411,58 +277,6 @@ export default function BotConfigPanel() {
         </Button>
       </Space>
 
-      <Modal
-        title={`Xem trước nhắc đóng phí — ${reminderMonth?.format("MM/YYYY")}`}
-        open={showPreview}
-        onCancel={() => setShowPreview(false)}
-        footer={[
-          <Button key="close" onClick={() => setShowPreview(false)}>Đóng</Button>,
-          <Button key="send" type="primary" icon={<SendOutlined />} loading={sending} onClick={handleSendNow}>
-            Gửi ngay
-          </Button>,
-        ]}
-        width={520}
-      >
-        {previewLoading ? (
-          <div style={{ textAlign: "center", padding: 32 }}><Spin /></div>
-        ) : previewData ? (
-          previewData.length === 0 ? (
-            <Text type="secondary">Không có khoản phí nào bật nhắc hoặc tất cả đã đóng.</Text>
-          ) : (
-            previewData.map((item) => (
-              <Card key={`${item.club_id}-${item.fee_type_id}`} size="small" style={{ marginBottom: 12 }}>
-                <Text strong>{item.fee_type_name}</Text>
-                <Text type="secondary" style={{ marginLeft: 8 }}>{item.unpaid_count} người chưa đóng</Text>
-                {item.admin_chat_ids?.length === 0 && (
-                  <Tag color="warning" style={{ marginLeft: 8 }}>Bạn chưa đăng nhập Bot</Tag>
-                )}
-                <div style={{ marginTop: 8 }}>
-                  {item.unpaid_members?.slice(0, 10).map((m) => (
-                    <div key={m.id} style={{ fontSize: 13, padding: "2px 0" }}>
-                      • {m.full_name}{m.phone ? ` (${m.phone})` : ""}
-                    </div>
-                  ))}
-                  {item.unpaid_members?.length > 10 && (
-                    <Text type="secondary" style={{ fontSize: 12 }}>
-                      ... và {item.unpaid_members.length - 10} người khác
-                    </Text>
-                  )}
-                </div>
-                {item.guest_paid_count > 0 && (
-                  <div style={{ marginTop: 8 }}>
-                    <Tag color="orange">Khách mời đã đóng: {item.guest_paid_count}</Tag>
-                    {item.guests_paid?.map((g) => (
-                      <div key={g.id} style={{ fontSize: 13, padding: "2px 0" }}>
-                        • {g.full_name}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </Card>
-            ))
-          )
-        ) : null}
-      </Modal>
     </div>
   );
 }

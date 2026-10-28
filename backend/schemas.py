@@ -207,7 +207,6 @@ class FeeTypeBase(BaseModel):
     description: Optional[str] = None
     default_amount: Optional[Decimal] = None
     is_recurring: bool = False
-    remind_enabled: bool = False
 
 
 class FeeTypeCreate(FeeTypeBase):
@@ -220,7 +219,6 @@ class FeeTypeUpdate(BaseModel):
     description: Optional[str] = None
     default_amount: Optional[Decimal] = None
     is_recurring: Optional[bool] = None
-    remind_enabled: Optional[bool] = None
 
 
 class FeeTypeOut(FeeTypeBase):
@@ -1103,6 +1101,7 @@ class AnnouncementBase(BaseModel):
     start_time: Optional[str] = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
     duration_min: Optional[int] = Field(default=None, ge=0, le=1440)
     lead_days: int = Field(default=3, ge=0, le=60)
+    repeat_daily: bool = False
     start_date: Optional[date] = None
     end_date: Optional[date] = None
     is_active: bool = True
@@ -1156,6 +1155,7 @@ class AnnouncementUpdate(BaseModel):
     start_time: Optional[str] = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
     duration_min: Optional[int] = Field(default=None, ge=0, le=1440)
     lead_days: Optional[int] = Field(default=None, ge=0, le=60)
+    repeat_daily: Optional[bool] = None
     start_date: Optional[date] = None
     end_date: Optional[date] = None
     is_active: Optional[bool] = None
