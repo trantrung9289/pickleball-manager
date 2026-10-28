@@ -106,3 +106,26 @@ def test_manual_push_uses_web_push_without_telegram(client, world, db, monkeypat
     # Gửi tay không chống trùng
     assert client.post(f"/api/announcements/{aid}/push", headers=h1).json()["web_push_sent"] == 1 and len(sent) == 2
     assert db.query(models.WebPushLog).count() == 0
+
+
+def test_public_page_html_has_club_manifest_and_icon_server_side(client, world, db):
+    """Safari đọc manifest lúc tải trang → HTML trang public phải chèn sẵn manifest theo CLB (không dựa vào JS đổi href)."""
+    import pytest
+    if not main.STATIC_DIR.exists() or not (main.STATIC_DIR / "index.html").exists():
+        pytest.skip("chưa build frontend")
+    slug = world.token1.slug
+    html = client.get(f"/public/report/{slug}").text
+    assert f'href="/api/public/report/{slug}/manifest.webmanifest"' in html
+    assert 'content="Club One"' in html and 'href="/apple-touch-icon.png"' in html   # chưa có logo → icon chung
+    # Có logo + màu → icon iPhone theo CLB, theme-color theo màu
+    import io
+    from PIL import Image
+    buf = io.BytesIO(); Image.new("RGB", (64, 64), (1, 2, 3)).save(buf, format="PNG")
+    h1 = World.headers(world.admin1, world.club1)
+    client.put("/api/club/appearance", json={"brand_color": "#EC671C"}, headers=h1)
+    client.post("/api/club/logo", files={"file": ("l.png", buf.getvalue(), "image/png")}, headers=h1)
+    html = client.get(f"/public/report/{slug}").text
+    assert f'/api/public/club-logo/{world.club1.id}/apple-touch-icon.png?v=' in html and 'content="#EC671C"' in html
+    # Slug sai hoặc đường dẫn khác → index mặc định
+    assert 'href="/manifest.webmanifest"' in client.get("/public/report/no-such-slug").text
+    assert 'href="/manifest.webmanifest"' in client.get("/").text

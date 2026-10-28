@@ -7105,11 +7105,38 @@ if STATIC_DIR.exists():
     _ROOT_MIME = {".webmanifest": "application/manifest+json", ".js": "application/javascript", ".svg": "image/svg+xml",
                   ".png": "image/png", ".ico": "image/x-icon", ".txt": "text/plain"}
 
+    def _public_index_html(slug: str, db: Session):
+        """Trang public: chèn sẵn manifest theo CLB + icon/tên iPhone vào HTML (Safari đọc manifest LÚC TẢI TRANG, đổi href bằng JS
+        sau đó không được đọc lại → "Thêm vào MH chính" từng mở về "/" thay vì trang public). Slug sai → None (trả index thường)."""
+        rec = db.query(models.PublicReportToken).filter(
+            models.PublicReportToken.is_active.is_(True),
+            (models.PublicReportToken.slug == slug) | (models.PublicReportToken.token == slug)).first()
+        if not rec:
+            return None
+        club = db.query(models.Club).filter(models.Club.id == rec.club_id).first()
+        html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        html = html.replace('href="/manifest.webmanifest"', f'href="/api/public/report/{slug}/manifest.webmanifest"', 1)
+        if club:
+            safe_name = club.name.replace('"', "&quot;")
+            html = html.replace('content="Quản lý CLB"', f'content="{safe_name}"', 1)
+            if club.logo_hash:
+                icon = f"/api/public/club-logo/{club.id}/apple-touch-icon.png?v={club.logo_hash}&c={(club.brand_color or '').lstrip('#')}"
+                html = html.replace('href="/apple-touch-icon.png"', f'href="{icon}"', 1)
+            if club.brand_color:
+                html = html.replace('<meta name="theme-color" content="#1F8A52" />', f'<meta name="theme-color" content="{club.brand_color}" />', 1)
+        return html
+
     @app.get("/{full_path:path}", include_in_schema=False)
-    async def serve_spa(full_path: str):
+    async def serve_spa(full_path: str, db: Session = Depends(get_db)):
         if full_path and "/" not in full_path and not full_path.startswith("."):
             candidate = STATIC_DIR / full_path
             if candidate.is_file():
                 headers = {"Cache-Control": "no-cache"} if full_path in ("sw.js", "manifest.webmanifest") else None
                 return FileResponse(candidate, media_type=_ROOT_MIME.get(candidate.suffix.lower()), headers=headers)
+        parts = full_path.split("/")
+        if len(parts) >= 3 and parts[0] == "public" and parts[1] == "report" and parts[2]:
+            from fastapi.responses import HTMLResponse
+            html = _public_index_html(parts[2], db)
+            if html is not None:
+                return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
         return FileResponse(STATIC_DIR / "index.html")
