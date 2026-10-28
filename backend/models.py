@@ -326,6 +326,7 @@ class PublicReportToken(Base):
     created_at = Column(DateTime, server_default=func.now())
     created_by = Column(String(50), nullable=True)
     pin_hash = Column(String(64), nullable=True)   # 2026-10-28: mã PIN 4/6 số bảo vệ link (sha256(token + pin)); NULL = không PIN
+    pin_length = Column(Integer, nullable=True)    # 4 | 6 — trả trong lỗi 401 để màn nhập hiện đúng số ô
 
     club = relationship("Club")
 

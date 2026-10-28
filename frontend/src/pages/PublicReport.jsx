@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Typography, Select, Tabs, Spin, Result, Card, Tag, Space, Row, Col, theme, Input, Button,
 } from "antd";
@@ -18,7 +18,7 @@ import PushSettings from "../components/PushSettings";
 import { InstallButton, InstallBanner, InstallGuide } from "../components/InstallApp";
 import useInstallPrompt from "../hooks/useInstallPrompt";
 import { shouldShowInstallBanner, bannerKey, nudgeKey, readLS, writeLS } from "../utils/install";
-import { savePin, clearPin, pinErrorCode, isValidPin } from "../utils/publicPin";
+import { savePin, clearPin, pinErrorCode, isValidPin, pinLengthFromError, forceNumericInputs } from "../utils/publicPin";
 import { useAppTheme } from "../contexts/ThemeContext";
 import MobileBottomNav from "../components/mobile/MobileBottomNav";
 
@@ -29,8 +29,10 @@ function PublicReportInner({ token }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [pinNeeded, setPinNeeded] = useState(null);   // null | "pin_required" | "pin_invalid"
+  const [pinLen, setPinLen] = useState(6);            // 4 | 6 — backend báo trong lỗi 401 → hiện đúng số ô
   const [pinInput, setPinInput] = useState("");
   const [reloadTick, setReloadTick] = useState(0);
+  const pinBoxRef = useRef(null);
   const [year, setYear] = useState(dayjs().year());
   const [activeSection, setActiveSection] = useState("monthly-detail");
   const { token: antToken } = theme.useToken();
@@ -96,7 +98,7 @@ function PublicReportInner({ token }) {
       .catch((err) => {
         const status = err.response?.status;
         const code = pinErrorCode(err);
-        if (code) { if (code === "pin_invalid") clearPin(token); setPinNeeded(code); }   // link có PIN: hiện màn nhập, không phải lỗi
+        if (code) { if (code === "pin_invalid") clearPin(token); setPinLen(pinLengthFromError(err)); setPinNeeded(code); }   // link có PIN: hiện màn nhập, không phải lỗi
         else if (status === 404) setError("Link không tồn tại hoặc đã bị vô hiệu hóa.");
         else if (status === 410) setError("Link này đã hết hạn.");
         else setError("Không thể tải báo cáo. Vui lòng thử lại sau.");
@@ -104,12 +106,15 @@ function PublicReportInner({ token }) {
       .finally(() => setLoading(false));
   }, [token, api, reloadTick]);
 
-  const submitPin = () => {
-    if (!isValidPin(pinInput)) return;
-    savePin(token, pinInput);
+  const submitPin = (value) => {
+    const v = typeof value === "string" ? value : pinInput;
+    if (!isValidPin(v) || v.length !== pinLen) return;
+    savePin(token, v);
     setLoading(true); setPinInput("");
     setReloadTick((n) => n + 1);
   };
+  // Bàn phím số trên di động cho các ô PIN (đặt thuộc tính sau khi render màn PIN)
+  useEffect(() => { if (pinNeeded) forceNumericInputs(pinBoxRef.current); }, [pinNeeded, pinLen]);
 
   const currentYear = dayjs().year();
   const YEARS = Array.from({ length: 5 }, (_, i) => currentYear - 2 + i);
@@ -129,13 +134,14 @@ function PublicReportInner({ token }) {
           <LockOutlined style={{ fontSize: 36, color: antToken.colorPrimary }} />
           <Title level={4} style={{ margin: "12px 0 4px" }}>Nhập mã PIN</Title>
           <Text type="secondary">Trang này được câu lạc bộ bảo vệ bằng mã PIN. Nhập một lần, thiết bị sẽ ghi nhớ.</Text>
-          <div style={{ margin: "20px 0 12px", display: "flex", justifyContent: "center" }}>
-            {/* onInput nhận từng ký tự (onChange chỉ bắn khi đủ 6 ô) → PIN 4 số vẫn kích hoạt nút Mở */}
-            <Input.OTP length={6} value={pinInput} onInput={(chars) => setPinInput(chars.join(""))} onChange={setPinInput} formatter={(v) => v.replace(/\D/g, "")} autoFocus />
+          <div ref={pinBoxRef} style={{ margin: "20px 0 12px", display: "flex", justifyContent: "center" }}>
+            {/* Số ô = độ dài PIN CLB đặt (4 hoặc 6); nhập đủ → onChange bắn → tự mở; onInput cập nhật từng ký tự cho nút Mở */}
+            <Input.OTP key={pinLen} length={pinLen} value={pinInput} onInput={(chars) => setPinInput(chars.join(""))}
+              onChange={(v) => { setPinInput(v); submitPin(v); }} formatter={(v) => v.replace(/\D/g, "")} autoFocus />
           </div>
-          <Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 12 }}>PIN có 4 hoặc 6 chữ số: nhập 4 số rồi bấm Mở, hoặc đủ 6 số.</Text>
+          <Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 12 }}>Mã PIN gồm {pinLen} chữ số, nhập đủ sẽ tự mở.</Text>
           {pinNeeded === "pin_invalid" && <Text type="danger" style={{ display: "block", marginBottom: 8 }}>Mã PIN không đúng, thử lại.</Text>}
-          <Button type="primary" block onClick={submitPin} disabled={!isValidPin(pinInput)}>Mở</Button>
+          <Button type="primary" block onClick={() => submitPin()} disabled={pinInput.length !== pinLen}>Mở</Button>
         </div>
       </div>
     );

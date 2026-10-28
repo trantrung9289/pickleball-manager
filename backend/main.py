@@ -160,6 +160,7 @@ def _run_migration():
         ("announcements", "repeat_daily", "BOOLEAN DEFAULT 0 NOT NULL", None),
         # 2026-10-28: mã PIN cho link công khai
         ("public_report_tokens", "pin_hash", "VARCHAR(64)", None),
+        ("public_report_tokens", "pin_length", "INTEGER", None),
         # Bảng tournaments — quy tắc ghép ĐỒNG ĐỘI cho vòng quay ghép đội (giải đôi)
         ("tournaments", "partner_rules", "JSON", None),
         # Bảng clubs — danh sách hạng cấu hình ở cấp CLB (NULL → DEFAULT_RANK_LEVELS)
@@ -2232,8 +2233,9 @@ def set_report_link_pin(
     if not rec:
         raise HTTPException(404, "Link không tồn tại")
     rec.pin_hash = _pin_hash(rec.token, data.pin) if data.pin else None
+    rec.pin_length = len(data.pin) if data.pin else None
     db.commit()
-    return {"id": rec.id, "has_pin": bool(rec.pin_hash)}
+    return {"id": rec.id, "has_pin": bool(rec.pin_hash), "pin_length": rec.pin_length}
 
 
 @app.delete("/api/report-links/{link_id}")
@@ -2272,10 +2274,11 @@ def _validate_token(slug_or_token: str, db: Session, increment_view: bool = Fals
         raise HTTPException(410, "Link đã hết hạn")
     if require_pin and rec.pin_hash:
         pin = _PUBLIC_PIN.get()
+        n = rec.pin_length or 6
         if not pin:
-            raise HTTPException(401, {"code": "pin_required", "message": "Link này cần mã PIN"})
+            raise HTTPException(401, {"code": "pin_required", "message": "Link này cần mã PIN", "pin_length": n})
         if not secrets.compare_digest(_pin_hash(rec.token, pin), rec.pin_hash):
-            raise HTTPException(401, {"code": "pin_invalid", "message": "Mã PIN không đúng"})
+            raise HTTPException(401, {"code": "pin_invalid", "message": "Mã PIN không đúng", "pin_length": n})
     if increment_view:
         rec.view_count += 1
         db.commit()

@@ -1,7 +1,7 @@
 // Chạy: npm test (node --test). Mã PIN link công khai: kiểm tra định dạng, đọc mã lỗi 401.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { isValidPin, pinErrorCode, pinKey } from "./publicPin.js";
+import { isValidPin, pinErrorCode, pinKey, pinLengthFromError } from "./publicPin.js";
 
 test("isValidPin: 4 hoặc 6 chữ số", () => {
   assert.equal(isValidPin("1234"), true);
@@ -17,3 +17,11 @@ test("pinErrorCode: chỉ 401 có detail.code", () => {
   assert.equal(pinErrorCode({ response: { status: 404, data: { detail: { code: "x" } } } }), null);
   assert.equal(pinKey("abc"), "public_pin:abc");
 });
+
+test("pinLengthFromError: 4 hoặc 6, mặc định 6", () => {
+  assert.equal(pinLengthFromError({ response: { data: { detail: { pin_length: 4 } } } }), 4);
+  assert.equal(pinLengthFromError({ response: { data: { detail: { pin_length: 6 } } } }), 6);
+  assert.equal(pinLengthFromError({ response: { data: { detail: { pin_length: 5 } } } }), 6);
+  assert.equal(pinLengthFromError({}), 6);
+});
+

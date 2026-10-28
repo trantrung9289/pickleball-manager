@@ -27,7 +27,7 @@ def test_pin_gates_public_endpoints_but_not_manifest(client, world, db):
     assert client.get("/api/report-links", headers=h1).json()[0]["has_pin"] is True
     # Không PIN → 401 pin_required; sai → 401 pin_invalid; đúng → 200 kèm has_pin
     r = client.get(f"/api/public/report/{slug}")
-    assert r.status_code == 401 and r.json()["detail"]["code"] == "pin_required"
+    assert r.status_code == 401 and r.json()["detail"]["code"] == "pin_required" and r.json()["detail"]["pin_length"] == 4
     r = client.get(f"/api/public/report/{slug}", headers={"X-Public-Pin": "0000"})
     assert r.status_code == 401 and r.json()["detail"]["code"] == "pin_invalid"
     r = client.get(f"/api/public/report/{slug}", headers={"X-Public-Pin": "1234"})
@@ -44,7 +44,9 @@ def test_pin_gates_public_endpoints_but_not_manifest(client, world, db):
     assert client.put(f"/api/report-links/{world.token1.id}/pin", json={"pin": None}, headers=h1).json()["has_pin"] is False
     assert client.get(f"/api/public/report/{slug}").status_code == 200
     # PIN 6 số, và admin CLB khác không đặt được
-    assert client.put(f"/api/report-links/{world.token1.id}/pin", json={"pin": "123456"}, headers=h1).status_code == 200
+    r = client.put(f"/api/report-links/{world.token1.id}/pin", json={"pin": "123456"}, headers=h1)
+    assert r.status_code == 200 and r.json()["pin_length"] == 6
+    assert client.get(f"/api/public/report/{slug}").json()["detail"]["pin_length"] == 6
     assert client.put(f"/api/report-links/{world.token1.id}/pin", json={"pin": "1234"}, headers=World.headers(world.admin2, world.club2)).status_code == 404
 
 

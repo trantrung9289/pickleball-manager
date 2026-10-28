@@ -3,12 +3,12 @@
  * Mỗi CLB chỉ MỘT link (backend chặn tạo thêm). Mã PIN 4 hoặc 6 chữ số bảo vệ link: người xem nhập một lần trên mỗi thiết bị,
  * Web Push vẫn hoạt động khi app đóng (đẩy từ server). Link cũ (nếu CLB có nhiều) vẫn liệt kê để xoá bớt.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Alert, Button, Form, Input, Modal, Select, Space, Tag, Typography, Tooltip, message, Badge } from "antd";
 import { PlusOutlined, CopyOutlined, DeleteOutlined, LinkOutlined, EyeOutlined, StopOutlined, CheckCircleOutlined, LockOutlined, UnlockOutlined } from "@ant-design/icons";
 import dayjs from "dayjs";
 import { reportLinksApi } from "../api";
-import { isValidPin } from "../utils/publicPin";
+import { isValidPin, forceNumericInputs } from "../utils/publicPin";
 
 const { Text } = Typography;
 const EXPIRY_OPTIONS = [
@@ -20,6 +20,8 @@ function PinModal({ link, open, onClose, onSaved }) {
   const [len, setLen] = useState(4);
   const [pin, setPin] = useState("");
   const [busy, setBusy] = useState(false);
+  const boxRef = useRef(null);
+  useEffect(() => { forceNumericInputs(boxRef.current); }, [len]);   // bàn phím số trên di động
   const save = async () => {
     if (!isValidPin(pin) || pin.length !== len) { message.error(`Nhập đủ ${len} chữ số`); return; }
     setBusy(true);
@@ -31,7 +33,7 @@ function PinModal({ link, open, onClose, onSaved }) {
     <Modal title="Đặt mã PIN cho link" open={open} onCancel={onClose} onOk={save} okText="Lưu PIN" cancelText="Huỷ" confirmLoading={busy} width={420}>
       <Space direction="vertical" size={12} style={{ width: "100%", marginTop: 8 }}>
         <Select value={len} onChange={(v) => { setLen(v); setPin(""); }} options={[{ value: 4, label: "4 chữ số" }, { value: 6, label: "6 chữ số" }]} style={{ width: 140 }} />
-        <Input.OTP length={len} value={pin} onChange={setPin} formatter={(v) => v.replace(/\D/g, "")} />
+        <div ref={boxRef}><Input.OTP key={len} length={len} value={pin} onInput={(c) => setPin(c.join(""))} onChange={setPin} formatter={(v) => v.replace(/\D/g, "")} /></div>
         <Text type="secondary" style={{ fontSize: 12 }}>Người xem nhập PIN một lần trên mỗi thiết bị. Thông báo đẩy vẫn tới dù app đang đóng. Đổi PIN thì mọi người phải nhập lại.</Text>
       </Space>
     </Modal>
