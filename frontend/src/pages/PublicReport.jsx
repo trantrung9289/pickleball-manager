@@ -40,6 +40,17 @@ function PublicReportInner({ token }) {
   const [bellSignal, setBellSignal] = useState(0);
   const showBanner = shouldShowInstallBanner({ platform: install.platform, dismissedAt: readLS(bannerKey(token)) });
 
+  // Mở app (từ màn hình chính hoặc quay lại tab) → xoá số đếm trên icon và các thông báo còn treo của app này
+  useEffect(() => {
+    const clear = () => {
+      if (navigator.clearAppBadge) navigator.clearAppBadge().catch(() => {});
+      navigator.serviceWorker?.ready?.then((reg) => reg.getNotifications().then((list) => list.forEach((n) => n.close()))).catch(() => {});
+    };
+    clear();
+    document.addEventListener("visibilitychange", clear);
+    return () => document.removeEventListener("visibilitychange", clear);
+  }, []);
+
   // Lần đầu mở từ màn hình chính (đã cài) → tự mở chuông với khối "Thông báo trên thiết bị", chỉ một lần theo slug
   useEffect(() => {
     if (!install.standalone || readLS(nudgeKey(token))) return;

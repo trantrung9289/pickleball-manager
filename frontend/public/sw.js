@@ -15,11 +15,17 @@ self.addEventListener("push", (event) => {
     renotify: !!data.tag,
     data: { url: data.url || "/" },
   };
-  event.waitUntil(self.registration.showNotification(title, options));
+  // Số đếm trên icon màn hình chính (Badging API; iOS ≥16.4 với web app đã cài; trình duyệt không hỗ trợ thì bỏ qua)
+  const badge = self.registration.getNotifications().then((list) => {
+    const n = list.length + 1;
+    return self.navigator.setAppBadge ? self.navigator.setAppBadge(n).catch(() => {}) : null;
+  }).catch(() => {});
+  event.waitUntil(Promise.all([self.registration.showNotification(title, options), badge]));
 });
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
+  if (self.navigator.clearAppBadge) self.navigator.clearAppBadge().catch(() => {});
   const url = (event.notification.data && event.notification.data.url) || "/";
   event.waitUntil(self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((list) => {
     const target = new URL(url, self.location.origin).href;
