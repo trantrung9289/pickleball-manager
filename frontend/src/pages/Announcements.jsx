@@ -126,7 +126,7 @@ export default function Announcements({ perms }) {
     { title: "Hiệu lực", render: (_, r) => (r.start_date || r.end_date) ? `${r.start_date ? dayjs(r.start_date).format("DD/MM/YY") : "…"} → ${r.end_date ? dayjs(r.end_date).format("DD/MM/YY") : "…"}` : "—" },
     { title: "Public", dataIndex: "show_public", render: (v, r) => <Switch size="small" checked={v} disabled={!canEdit} onChange={(c) => toggle(r, "show_public", c)} /> },
     { title: "Bật", dataIndex: "is_active", render: (v, r) => <Switch size="small" checked={v} disabled={!canEdit} onChange={(c) => toggle(r, "is_active", c)} /> },
-    { title: "Telegram", dataIndex: "push_telegram", render: (v, r) => <Tooltip title="Cron gửi tới admin CLB vào ngày đầu cửa sổ hiện trước và đúng ngày"><Switch size="small" checked={v} disabled={!canEdit} onChange={(c) => toggle(r, "push_telegram", c)} /></Tooltip> },
+    { title: "Đẩy", dataIndex: "push_telegram", render: (v, r) => <Tooltip title="Gửi Telegram cho admin + đẩy tới thiết bị đã bật: ngay khi lưu nếu đã đến ngày, và mỗi 15 phút (ngày đầu cửa sổ hiện trước, đúng ngày); không gửi trùng trong ngày"><Switch size="small" checked={v} disabled={!canEdit} onChange={(c) => toggle(r, "push_telegram", c)} /></Tooltip> },
     {
       title: "Thao tác", width: 130,
       render: (_, r) => canEdit ? (
@@ -236,7 +236,7 @@ export default function Announcements({ perms }) {
           <Space size="large" wrap>
             <Form.Item name="show_public" label="Hiện trên trang public" valuePropName="checked" style={{ marginBottom: 0 }}><Switch /></Form.Item>
             <Form.Item name="is_active" label="Bật" valuePropName="checked" style={{ marginBottom: 0 }}><Switch /></Form.Item>
-            <Form.Item name="push_telegram" label={<Tooltip title="Cron 14h gửi tới admin CLB đã liên kết Telegram: ngày đầu cửa sổ hiện trước và đúng ngày">Đẩy Telegram</Tooltip>} valuePropName="checked" style={{ marginBottom: 0 }}><Switch /></Form.Item>
+            <Form.Item name="push_telegram" label={<Tooltip title="Gửi Telegram cho admin + đẩy tới thiết bị đã bật: ngay khi lưu nếu đã đến ngày, và mỗi 15 phút">Đẩy thông báo</Tooltip>} valuePropName="checked" style={{ marginBottom: 0 }}><Switch /></Form.Item>
           </Space>
         </Form>
       </Modal>

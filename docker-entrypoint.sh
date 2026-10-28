@@ -104,10 +104,14 @@ umask 022
   if [ -n "${INTERNAL_SECRET:-}" ] && [ -n "${TELEGRAM_BOT_TOKEN:-}" ]; then
     echo "0 7 * * * root . /run/clb.env && cd /bot && python notify_bot.py > ${CRON_LOG} 2>&1"
   fi
+  # Thông báo (Telegram + Web Push) mỗi 15 phút — backend chống trùng theo ngày; không cần token Telegram (Web Push vẫn chạy)
+  if [ -n "${INTERNAL_SECRET:-}" ]; then
+    echo "*/15 * * * * root . /run/clb.env && cd /bot && python notify_bot.py --announcements-only > ${CRON_LOG} 2>&1"
+  fi
 } > /etc/cron.d/clb
 chmod 0644 /etc/cron.d/clb
 cron
-log "⏰ Cron đã khởi động (backup 18h UTC$( [ -n "${INTERNAL_SECRET:-}" ] && [ -n "${TELEGRAM_BOT_TOKEN:-}" ] && echo ', nhắc phí 7h UTC'))"
+log "⏰ Cron đã khởi động (backup 18h UTC$( [ -n "${INTERNAL_SECRET:-}" ] && [ -n "${TELEGRAM_BOT_TOKEN:-}" ] && echo ', nhắc phí 7h UTC')$( [ -n "${INTERNAL_SECRET:-}" ] && echo ', thông báo mỗi 15 phút'))"
 
 # ── 5. Chờ backend (tiến trình chính) ───────────────────────────────────────
 wait "$BACKEND_PID"

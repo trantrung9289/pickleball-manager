@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, Query, UploadFile, File, Request, Header
+from fastapi import FastAPI, Depends, HTTPException, Query, UploadFile, File, Request, Header, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
@@ -6601,6 +6601,25 @@ def _announcement_feed(db: Session, club_id: int, today: date, horizon_days: int
     return items
 
 
+def _push_announcement_if_due_now(announcement_id: int, club_id: int) -> None:
+    """Chạy nền sau khi lưu quy tắc: nếu bật đẩy và hôm nay là ngày đầu cửa sổ / đúng ngày → gửi Telegram + Web Push ngay
+    (chống trùng theo log như cron, nên cron 15 phút chạy sau không gửi lại). Lỗi nuốt, không ảnh hưởng thao tác lưu."""
+    db = SessionLocal()
+    try:
+        today = _now_vn().date()
+        due = [it for it in _due_announcement_items(db, club_id, today) if it["announcement_id"] == announcement_id]
+        if not due:
+            return
+        bot_token = _os.environ.get("TELEGRAM_BOT_TOKEN") or _os.environ.get("BOT_TOKEN", "")
+        if bot_token:
+            _push_announcement_items(db, club_id, due, today, bot_token, dedupe=True)
+        _send_web_push_items(db, club_id, due, today, dedupe=True)
+    except Exception as exc:   # noqa: BLE001
+        print(f"[announcements] gửi ngay khi lưu thất bại: {exc}")
+    finally:
+        db.close()
+
+
 @app.get("/api/announcements", response_model=List[schemas.AnnouncementOut])
 def list_announcements(db: Session = Depends(get_db), perms: ClubPermissions = Depends(get_club_permission)):
     perms.require_view()
@@ -6609,18 +6628,20 @@ def list_announcements(db: Session = Depends(get_db), perms: ClubPermissions = D
 
 
 @app.post("/api/announcements", response_model=schemas.AnnouncementOut, status_code=201)
-def create_announcement(data: schemas.AnnouncementCreate, db: Session = Depends(get_db),
+def create_announcement(data: schemas.AnnouncementCreate, background: BackgroundTasks, db: Session = Depends(get_db),
                         perms: ClubPermissions = Depends(get_club_permission)):
     perms.require_create()
     payload = data.model_dump(mode="json")
     _validate_announcement_payload(db, perms.club_id, payload)
     a = models.Announcement(**data.model_dump(), club_id=perms.club_id)
     db.add(a); db.commit(); db.refresh(a)
+    if a.push_telegram and a.is_active:
+        background.add_task(_push_announcement_if_due_now, a.id, perms.club_id)
     return _announcement_out(a)
 
 
 @app.put("/api/announcements/{aid}", response_model=schemas.AnnouncementOut)
-def update_announcement(aid: int, data: schemas.AnnouncementUpdate, db: Session = Depends(get_db),
+def update_announcement(aid: int, data: schemas.AnnouncementUpdate, background: BackgroundTasks, db: Session = Depends(get_db),
                         perms: ClubPermissions = Depends(get_club_permission)):
     perms.require_edit()
     a = db.query(models.Announcement).filter(models.Announcement.id == aid, models.Announcement.club_id == perms.club_id).first()
@@ -6634,6 +6655,8 @@ def update_announcement(aid: int, data: schemas.AnnouncementUpdate, db: Session 
     for k, v in changes.items():
         setattr(a, k, v)
     db.commit(); db.refresh(a)
+    if a.push_telegram and a.is_active:
+        background.add_task(_push_announcement_if_due_now, a.id, perms.club_id)
     return _announcement_out(a)
 
 

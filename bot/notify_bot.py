@@ -54,10 +54,13 @@ def main():
         print("[notify_bot] ❌ INTERNAL_SECRET chưa cấu hình — dừng")
         sys.exit(1)
     failed = False
+    announcements_only = "--announcements-only" in sys.argv   # cron 15 phút: chỉ bước thông báo (backend chống trùng theo ngày)
 
-    # 1) Nhắc phí (chỉ trong cửa sổ đầu/cuối tháng)
-    result = _determine_reminder_month(today)
-    if result is None:
+    # 1) Nhắc phí (chỉ trong cửa sổ đầu/cuối tháng; bỏ qua ở chế độ --announcements-only)
+    result = None if announcements_only else _determine_reminder_month(today)
+    if announcements_only:
+        pass
+    elif result is None:
         print(f"[notify_bot] {today}: không trong khoảng nhắc phí — bỏ qua bước nhắc phí")
     else:
         month, year = result

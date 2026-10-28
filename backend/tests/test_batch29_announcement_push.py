@@ -36,9 +36,9 @@ def _today(client, world):
 
 def test_cron_pushes_on_first_window_day_and_on_day_with_dedupe(client, world, db, monkeypatch):
     sent = _fake_telegram(monkeypatch)
-    _link_admin(db, world)
     h1 = World.headers(world.admin1, world.club1)
     today = _today(client, world)
+    # (liên kết Telegram SAU khi tạo quy tắc — từ phương án C, lưu quy tắc đến ngày sẽ gửi ngay nếu đã có kênh)
     # A: hôm nay là ngày đầu cửa sổ (d = today + 2, lead 2) → gửi; B: lead 0, d = hôm nay → gửi; C: d = today + 1, lead 3 → giữa cửa sổ → KHÔNG gửi
     # D: push_telegram tắt → không gửi; E: khoản thu hôm nay, kèm tên chưa đóng
     client.post("/api/announcements", json={"title": "A", "recurrence": "none", "start_date": (today + timedelta(days=2)).isoformat(), "lead_days": 2, "push_telegram": True, "start_time": "19:00"}, headers=h1)
@@ -46,6 +46,7 @@ def test_cron_pushes_on_first_window_day_and_on_day_with_dedupe(client, world, d
     client.post("/api/announcements", json={"title": "C", "recurrence": "none", "start_date": (today + timedelta(days=1)).isoformat(), "lead_days": 3, "push_telegram": True}, headers=h1)
     client.post("/api/announcements", json={"title": "D", "recurrence": "none", "start_date": today.isoformat(), "lead_days": 0, "push_telegram": False}, headers=h1)
     client.post("/api/announcements", json={"kind": "fee", "title": "E", "fee_type_id": world.fee1.id, "recurrence": "monthly", "day_of_month": today.day, "lead_days": 0, "push_telegram": True}, headers=h1)
+    _link_admin(db, world)
 
     assert client.post("/api/internal/send-announcements").status_code in (401, 403)
     r = client.post("/api/internal/send-announcements", headers={"X-Internal-Secret": "s3cr3t"})
@@ -68,10 +69,10 @@ def test_cron_pushes_on_first_window_day_and_on_day_with_dedupe(client, world, d
 
 def test_cron_respects_club_bot_flag_and_membership_flag(client, world, db, monkeypatch):
     sent = _fake_telegram(monkeypatch)
-    _link_admin(db, world)
     h1 = World.headers(world.admin1, world.club1)
     today = _today(client, world)
     client.post("/api/announcements", json={"title": "B", "recurrence": "none", "start_date": today.isoformat(), "lead_days": 0, "push_telegram": True}, headers=h1)
+    _link_admin(db, world)
     world.club1.bot_enabled = False
     db.commit()
     r = client.post("/api/internal/send-announcements", headers={"X-Internal-Secret": "s3cr3t"})
