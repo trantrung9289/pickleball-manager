@@ -1194,3 +1194,42 @@ class PublicLinkPinIn(BaseModel):
     """Mã PIN link công khai: 4 hoặc 6 chữ số; None = bỏ PIN."""
     pin: Optional[str] = Field(default=None, pattern=r"^(\d{4}|\d{6})$")
 
+
+# ── TRÒ CHUYỆN PUBLIC (2026-10-28) ──────────────────────────────────────────
+
+class ChatJoinIn(BaseModel):
+    display_name: str = Field(min_length=2, max_length=40)
+
+
+class ChatMessageIn(BaseModel):
+    body: str = Field(min_length=1, max_length=500)
+    reply_to_id: Optional[int] = None
+    mention_ids: Optional[List[int]] = Field(default=None, max_length=10)
+
+
+class ChatPollIn(BaseModel):
+    question: str = Field(min_length=3, max_length=200)
+    options: List[str] = Field(min_length=2, max_length=10)
+    multi: bool = False
+    anonymous: bool = False
+    allow_add: bool = False
+    closes_at: Optional[datetime] = None
+
+    @field_validator("options")
+    @classmethod
+    def _opts(cls, v):
+        cleaned = [str(x).strip()[:80] for x in v if str(x).strip()]
+        if len(cleaned) < 2:
+            raise ValueError("Cần ít nhất 2 lựa chọn")
+        if len(set(c.lower() for c in cleaned)) != len(cleaned):
+            raise ValueError("Lựa chọn trùng nhau")
+        return cleaned
+
+
+class ChatVoteIn(BaseModel):
+    option_ids: List[str] = Field(max_length=10)
+
+
+class ChatOptionIn(BaseModel):
+    text: str = Field(min_length=1, max_length=80)
+

@@ -138,6 +138,7 @@ class Club(Base):
     # Superuser cấp/tắt quyền dùng bot Telegram cho CẢ CLB (mặc định bật). Tắt → mọi tài khoản của CLB
     # không vào được bot ở CLB này, không liên kết Telegram, không nhận nhắc phí — bất kể cờ theo tài khoản.
     bot_enabled = Column(Boolean, default=True, nullable=False)
+    chat_locked = Column(Boolean, default=False, nullable=False)   # 2026-10-28: admin khoá kênh trò chuyện public
     created_at = Column(DateTime, server_default=func.now())
 
     @property
@@ -821,6 +822,7 @@ class PushSubscription(Base):
     auth = Column(String(60), nullable=False)
     user_agent = Column(String(300), nullable=True)
     failures = Column(Integer, nullable=False, default=0)
+    participant_id = Column(Integer, ForeignKey("chat_participants.id"), nullable=True)   # thiết bị đã vào trò chuyện → đẩy khi được nhắc tên
     created_at = Column(DateTime, server_default=func.now())
     last_seen_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
@@ -841,4 +843,66 @@ class WebPushLog(Base):
     __table_args__ = (
         UniqueConstraint("announcement_id", "occurrence_date", "subscription_id", "send_date", name="uq_web_push_per_day"),
     )
+
+
+# ── TRÒ CHUYỆN TRANG PUBLIC (2026-10-28, đợt 1) ─────────────────────────────
+# Danh tính theo THIẾT BỊ (phương án A): mỗi trình duyệt nhận device_id bí mật khi "vào trò chuyện" với biệt danh; không file/ảnh.
+
+class ChatParticipant(Base):
+    __tablename__ = "chat_participants"
+    id = Column(Integer, primary_key=True, index=True)
+    club_id = Column(Integer, ForeignKey("clubs.id"), nullable=False, index=True)
+    token_id = Column(Integer, ForeignKey("public_report_tokens.id"), nullable=True)
+    device_id = Column(String(64), unique=True, nullable=False, index=True)
+    display_name = Column(String(40), nullable=False)
+    muted = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, server_default=func.now())
+    last_seen_at = Column(DateTime, server_default=func.now())
+
+
+class ChatMessage(Base):
+    """kind: text | poll (poll_id) | system. Xoá mềm bằng deleted_at (admin xoá theo khoảng thời gian thì xoá cứng)."""
+    __tablename__ = "chat_messages"
+    id = Column(Integer, primary_key=True, index=True)
+    club_id = Column(Integer, ForeignKey("clubs.id"), nullable=False, index=True)
+    participant_id = Column(Integer, ForeignKey("chat_participants.id"), nullable=True)
+    kind = Column(String(10), nullable=False, default="text")
+    body = Column(Text, nullable=True)
+    reply_to_id = Column(Integer, ForeignKey("chat_messages.id"), nullable=True)
+    poll_id = Column(Integer, ForeignKey("chat_polls.id"), nullable=True)
+    mention_ids = Column(JSON, nullable=True)
+    pinned = Column(Boolean, nullable=False, default=False)
+    deleted_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, server_default=func.now(), index=True)
+
+    participant = relationship("ChatParticipant")
+    poll = relationship("ChatPoll", foreign_keys=[poll_id])
+
+
+class ChatPoll(Base):
+    """Bình chọn kiểu Zalo: options = [{"id": "a1", "text": "..."}], multi, anonymous, allow_add, closes_at."""
+    __tablename__ = "chat_polls"
+    id = Column(Integer, primary_key=True, index=True)
+    club_id = Column(Integer, ForeignKey("clubs.id"), nullable=False, index=True)
+    participant_id = Column(Integer, ForeignKey("chat_participants.id"), nullable=True)
+    question = Column(String(200), nullable=False)
+    options = Column(JSON, nullable=False)
+    multi = Column(Boolean, nullable=False, default=False)
+    anonymous = Column(Boolean, nullable=False, default=False)
+    allow_add = Column(Boolean, nullable=False, default=False)
+    closes_at = Column(DateTime, nullable=True)
+    closed = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, server_default=func.now())
+
+    creator = relationship("ChatParticipant")
+
+
+class ChatVote(Base):
+    __tablename__ = "chat_votes"
+    id = Column(Integer, primary_key=True, index=True)
+    poll_id = Column(Integer, ForeignKey("chat_polls.id"), nullable=False, index=True)
+    participant_id = Column(Integer, ForeignKey("chat_participants.id"), nullable=False)
+    option_id = Column(String(16), nullable=False)
+    created_at = Column(DateTime, server_default=func.now())
+    __table_args__ = (UniqueConstraint("poll_id", "participant_id", "option_id", name="uq_chat_vote"),)
 

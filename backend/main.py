@@ -161,6 +161,9 @@ def _run_migration():
         # 2026-10-28: mã PIN cho link công khai
         ("public_report_tokens", "pin_hash", "VARCHAR(64)", None),
         ("public_report_tokens", "pin_length", "INTEGER", None),
+        # 2026-10-28: trò chuyện public
+        ("clubs", "chat_locked", "BOOLEAN DEFAULT 0 NOT NULL", None),
+        ("push_subscriptions", "participant_id", "INTEGER REFERENCES chat_participants(id)", None),
         # Bảng tournaments — quy tắc ghép ĐỒNG ĐỘI cho vòng quay ghép đội (giải đôi)
         ("tournaments", "partner_rules", "JSON", None),
         # Bảng clubs — danh sách hạng cấu hình ở cấp CLB (NULL → DEFAULT_RANK_LEVELS)
@@ -6954,18 +6957,23 @@ def public_push_config(request: Request):
 
 @app.post("/api/public/report/{slug}/push/subscribe")
 @limiter.limit("20/minute")
-def public_push_subscribe(request: Request, slug: str, data: schemas.PushSubscribeIn, db: Session = Depends(get_db)):
-    """Người xem public bật thông báo trên thiết bị: upsert theo endpoint (đổi link → cập nhật CLB/token)."""
+def public_push_subscribe(request: Request, slug: str, data: schemas.PushSubscribeIn, db: Session = Depends(get_db),
+                          x_chat_device: Optional[str] = Header(None)):
+    """Người xem public bật thông báo trên thiết bị: upsert theo endpoint (đổi link → cập nhật CLB/token).
+    Có header X-Chat-Device (đã vào trò chuyện) → gắn participant để đẩy khi được nhắc tên."""
     if not _wp.enabled():
         raise HTTPException(503, "Máy chủ chưa cấu hình Web Push")
     rec = _validate_token(slug, db)
+    part = _chat_participant(db, rec, x_chat_device) if x_chat_device else None
     sub = db.query(models.PushSubscription).filter(models.PushSubscription.endpoint == data.endpoint).first()
     if sub:
         sub.club_id, sub.token_id, sub.p256dh, sub.auth, sub.failures = rec.club_id, rec.id, data.keys.p256dh, data.keys.auth, 0
         sub.user_agent = data.user_agent or sub.user_agent
+        if part:
+            sub.participant_id = part.id
     else:
         sub = models.PushSubscription(club_id=rec.club_id, token_id=rec.id, endpoint=data.endpoint, p256dh=data.keys.p256dh,
-                                      auth=data.keys.auth, user_agent=data.user_agent)
+                                      auth=data.keys.auth, user_agent=data.user_agent, participant_id=part.id if part else None)
         db.add(sub)
     db.commit(); db.refresh(sub)
     return {"ok": True, "id": sub.id}
@@ -6980,6 +6988,273 @@ def public_push_unsubscribe(request: Request, slug: str, data: schemas.PushUnsub
         db.query(models.WebPushLog).filter(models.WebPushLog.subscription_id == sub.id).delete()
         db.delete(sub); db.commit()
     return {"ok": True}
+
+
+# ── TRÒ CHUYỆN TRANG PUBLIC (2026-10-28, đợt 1): biệt danh theo thiết bị, tin nhắn văn bản, bình chọn kiểu Zalo ──
+CHAT_MIN_INTERVAL_S = 2
+CHAT_PAGE = 50
+
+
+def _chat_participant(db: Session, rec, device_id, required: bool = False):
+    """Participant theo header X-Chat-Device trong CLB của link; required → 401 nếu chưa vào trò chuyện."""
+    part = None
+    if device_id:
+        part = db.query(models.ChatParticipant).filter(models.ChatParticipant.device_id == device_id,
+                                                       models.ChatParticipant.club_id == rec.club_id).first()
+    if required and not part:
+        raise HTTPException(401, {"code": "chat_join_required", "message": "Hãy nhập tên để vào trò chuyện"})
+    return part
+
+
+def _chat_require_open(db: Session, club_id: int, part):
+    club = db.query(models.Club).filter(models.Club.id == club_id).first()
+    if club and club.chat_locked:
+        raise HTTPException(403, "Kênh trò chuyện đang được khoá")
+    if part and part.muted:
+        raise HTTPException(403, "Bạn đã bị tắt tiếng trong kênh này")
+
+
+def _poll_out(db: Session, poll: models.ChatPoll, me_id) -> dict:
+    votes = db.query(models.ChatVote).filter(models.ChatVote.poll_id == poll.id).all()
+    by_opt, voters = {}, set()
+    names = {}
+    if not poll.anonymous:
+        pids = {v.participant_id for v in votes}
+        if pids:
+            for pp in db.query(models.ChatParticipant).filter(models.ChatParticipant.id.in_(pids)).all():
+                names[pp.id] = pp.display_name
+    for v in votes:
+        by_opt.setdefault(v.option_id, []).append(v.participant_id); voters.add(v.participant_id)
+    now = _now_vn()
+    closed = poll.closed or (poll.closes_at is not None and poll.closes_at < now)
+    return {
+        "id": poll.id, "question": poll.question, "multi": poll.multi, "anonymous": poll.anonymous, "allow_add": poll.allow_add,
+        "closes_at": poll.closes_at.isoformat() if poll.closes_at else None, "closed": closed,
+        "creator_id": poll.participant_id, "creator_name": poll.creator.display_name if poll.creator else None,
+        "total_voters": len(voters),
+        "options": [{"id": o["id"], "text": o["text"], "count": len(by_opt.get(o["id"], [])),
+                     "voters": [names.get(pid, "?") for pid in by_opt.get(o["id"], [])][:30] if not poll.anonymous else []}
+                    for o in (poll.options or [])],
+        "my_votes": [v.option_id for v in votes if v.participant_id == me_id],
+    }
+
+
+def _chat_message_out(db: Session, m: models.ChatMessage, me_id, names: dict) -> dict:
+    out = {
+        "id": m.id, "kind": m.kind, "participant_id": m.participant_id, "name": names.get(m.participant_id, "?"),
+        "body": None if m.deleted_at else m.body, "deleted": m.deleted_at is not None, "pinned": m.pinned,
+        "reply_to_id": m.reply_to_id, "mention_ids": m.mention_ids or [], "mine": m.participant_id == me_id,
+        "created_at": m.created_at.isoformat() if m.created_at else None,
+    }
+    if m.reply_to_id:
+        r = db.query(models.ChatMessage).filter(models.ChatMessage.id == m.reply_to_id).first()
+        out["reply_to"] = {"id": r.id, "name": names.get(r.participant_id, "?"), "body": None if r.deleted_at else (r.body or "")[:120]} if r else None
+    if m.kind == "poll" and m.poll:
+        out["poll"] = _poll_out(db, m.poll, me_id)
+    return out
+
+
+def _chat_names(db: Session, club_id: int) -> dict:
+    return {p.id: p.display_name for p in db.query(models.ChatParticipant).filter(models.ChatParticipant.club_id == club_id).all()}
+
+
+def _web_push_to_subs(db: Session, subs, payload: dict) -> int:
+    """Đẩy sự kiện (bình chọn mới, nhắc tên) tới danh sách subscription; 404/410 → xoá. Trả số gửi được."""
+    if not _wp.enabled():
+        return 0
+    sent = 0
+    for sub in list(subs):
+        res = _wp.send_push({"endpoint": sub.endpoint, "keys": {"p256dh": sub.p256dh, "auth": sub.auth}}, payload)
+        if res == "ok":
+            sent += 1
+        elif res == "gone":
+            db.query(models.WebPushLog).filter(models.WebPushLog.subscription_id == sub.id).delete()
+            db.delete(sub)
+    db.commit()
+    return sent
+
+
+@app.post("/api/public/report/{slug}/chat/join")
+@limiter.limit("10/minute")
+def chat_join(request: Request, slug: str, data: schemas.ChatJoinIn, db: Session = Depends(get_db),
+              x_chat_device: Optional[str] = Header(None)):
+    """Vào trò chuyện với biệt danh. Có X-Chat-Device hợp lệ → đổi tên; không → cấp device_id mới (client lưu localStorage)."""
+    rec = _validate_token(slug, db)
+    name = " ".join(data.display_name.split())
+    part = _chat_participant(db, rec, x_chat_device)
+    if part:
+        part.display_name = name
+    else:
+        part = models.ChatParticipant(club_id=rec.club_id, token_id=rec.id, device_id=secrets.token_urlsafe(32), display_name=name)
+        db.add(part)
+    db.commit(); db.refresh(part)
+    return {"device_id": part.device_id, "participant": {"id": part.id, "display_name": part.display_name, "muted": part.muted}}
+
+
+@app.get("/api/public/report/{slug}/chat/me")
+@limiter.limit("60/minute")
+def chat_me(request: Request, slug: str, db: Session = Depends(get_db), x_chat_device: Optional[str] = Header(None)):
+    rec = _validate_token(slug, db)
+    part = _chat_participant(db, rec, x_chat_device)
+    club = db.query(models.Club).filter(models.Club.id == rec.club_id).first()
+    return {"participant": {"id": part.id, "display_name": part.display_name, "muted": part.muted} if part else None,
+            "locked": bool(club and club.chat_locked)}
+
+
+@app.get("/api/public/report/{slug}/chat/participants")
+@limiter.limit("60/minute")
+def chat_participants(request: Request, slug: str, db: Session = Depends(get_db)):
+    rec = _validate_token(slug, db)
+    rows = db.query(models.ChatParticipant).filter(models.ChatParticipant.club_id == rec.club_id).order_by(models.ChatParticipant.display_name).all()
+    return [{"id": p.id, "display_name": p.display_name} for p in rows]
+
+
+@app.get("/api/public/report/{slug}/chat/messages")
+@limiter.limit("120/minute")
+def chat_messages(request: Request, slug: str, after_id: Optional[int] = None, before_id: Optional[int] = None,
+                  db: Session = Depends(get_db), x_chat_device: Optional[str] = Header(None)):
+    """after_id → tin mới hơn (poll định kỳ); before_id → tin cũ hơn (cuộn lên); mặc định 50 tin mới nhất. Kèm danh sách ghim."""
+    rec = _validate_token(slug, db)
+    part = _chat_participant(db, rec, x_chat_device)
+    me_id = part.id if part else None
+    q = db.query(models.ChatMessage).filter(models.ChatMessage.club_id == rec.club_id)
+    if after_id:
+        rows = q.filter(models.ChatMessage.id > after_id).order_by(models.ChatMessage.id.asc()).limit(CHAT_PAGE * 4).all()
+    elif before_id:
+        rows = list(reversed(q.filter(models.ChatMessage.id < before_id).order_by(models.ChatMessage.id.desc()).limit(CHAT_PAGE).all()))
+    else:
+        rows = list(reversed(q.order_by(models.ChatMessage.id.desc()).limit(CHAT_PAGE).all()))
+    names = _chat_names(db, rec.club_id)
+    pinned = q.filter(models.ChatMessage.pinned.is_(True), models.ChatMessage.deleted_at.is_(None)).order_by(models.ChatMessage.id.desc()).limit(5).all()
+    club = db.query(models.Club).filter(models.Club.id == rec.club_id).first()
+    return {"messages": [_chat_message_out(db, m, me_id, names) for m in rows],
+            "pinned": [_chat_message_out(db, m, me_id, names) for m in pinned] if not after_id else None,
+            "locked": bool(club and club.chat_locked), "me_id": me_id}
+
+
+@app.post("/api/public/report/{slug}/chat/messages")
+@limiter.limit("30/minute")
+def chat_send(request: Request, slug: str, data: schemas.ChatMessageIn, db: Session = Depends(get_db),
+              x_chat_device: Optional[str] = Header(None)):
+    rec = _validate_token(slug, db)
+    part = _chat_participant(db, rec, x_chat_device, required=True)
+    _chat_require_open(db, rec.club_id, part)
+    last = db.query(models.ChatMessage).filter(models.ChatMessage.participant_id == part.id).order_by(models.ChatMessage.id.desc()).first()
+    if last and last.created_at and (datetime.utcnow() - last.created_at).total_seconds() < CHAT_MIN_INTERVAL_S:
+        raise HTTPException(429, "Gửi chậm lại một chút")
+    if data.reply_to_id and not db.query(models.ChatMessage).filter(models.ChatMessage.id == data.reply_to_id, models.ChatMessage.club_id == rec.club_id).first():
+        raise HTTPException(400, "Tin được trả lời không tồn tại")
+    mentions = []
+    if data.mention_ids:
+        valid = {p.id for p in db.query(models.ChatParticipant).filter(models.ChatParticipant.club_id == rec.club_id,
+                                                                       models.ChatParticipant.id.in_(data.mention_ids)).all()}
+        mentions = [i for i in data.mention_ids if i in valid and i != part.id]
+    m = models.ChatMessage(club_id=rec.club_id, participant_id=part.id, kind="text", body=data.body.strip(),
+                           reply_to_id=data.reply_to_id, mention_ids=mentions or None)
+    db.add(m); part.last_seen_at = datetime.utcnow(); db.commit(); db.refresh(m)
+    pushed = 0
+    if mentions:   # đẩy tới thiết bị của người được nhắc tên
+        subs = db.query(models.PushSubscription).filter(models.PushSubscription.club_id == rec.club_id,
+                                                        models.PushSubscription.participant_id.in_(mentions)).all()
+        pushed = _web_push_to_subs(db, subs, {"title": f"{part.display_name} nhắc đến bạn", "body": data.body.strip()[:140],
+                                              "tag": f"chat-mention-{m.id}", "url": f"/public/report/{slug}#chat"})
+    return {**_chat_message_out(db, m, part.id, _chat_names(db, rec.club_id)), "pushed": pushed}
+
+
+@app.post("/api/public/report/{slug}/chat/messages/{mid}/delete")
+@limiter.limit("30/minute")
+def chat_delete_own(request: Request, slug: str, mid: int, db: Session = Depends(get_db), x_chat_device: Optional[str] = Header(None)):
+    """Thu hồi tin của chính mình (xoá mềm, hiện 'Tin đã thu hồi')."""
+    rec = _validate_token(slug, db)
+    part = _chat_participant(db, rec, x_chat_device, required=True)
+    m = db.query(models.ChatMessage).filter(models.ChatMessage.id == mid, models.ChatMessage.club_id == rec.club_id).first()
+    if not m or m.participant_id != part.id:
+        raise HTTPException(404, "Không tìm thấy tin")
+    m.deleted_at = datetime.utcnow(); db.commit()
+    return {"ok": True}
+
+
+@app.post("/api/public/report/{slug}/chat/polls")
+@limiter.limit("10/minute")
+def chat_create_poll(request: Request, slug: str, data: schemas.ChatPollIn, db: Session = Depends(get_db),
+                     x_chat_device: Optional[str] = Header(None)):
+    """Mọi người trong kênh đều tạo được bình chọn (quyết định người dùng). Đẩy Web Push tới cả CLB trừ người tạo."""
+    rec = _validate_token(slug, db)
+    part = _chat_participant(db, rec, x_chat_device, required=True)
+    _chat_require_open(db, rec.club_id, part)
+    options = [{"id": secrets.token_hex(3), "text": t} for t in data.options]
+    poll = models.ChatPoll(club_id=rec.club_id, participant_id=part.id, question=data.question.strip(), options=options,
+                           multi=data.multi, anonymous=data.anonymous, allow_add=data.allow_add,
+                           closes_at=data.closes_at.replace(tzinfo=None) if data.closes_at else None)
+    db.add(poll); db.flush()
+    m = models.ChatMessage(club_id=rec.club_id, participant_id=part.id, kind="poll", poll_id=poll.id, body=poll.question)
+    db.add(m); db.commit(); db.refresh(m)
+    subs = db.query(models.PushSubscription).filter(models.PushSubscription.club_id == rec.club_id).all()
+    subs = [sb for sb in subs if sb.participant_id != part.id]
+    pushed = _web_push_to_subs(db, subs, {"title": f"Bình chọn mới: {poll.question[:80]}", "body": f"{part.display_name} mời bạn bình chọn",
+                                          "tag": f"chat-poll-{poll.id}", "url": f"/public/report/{slug}#chat"})
+    return {**_chat_message_out(db, m, part.id, _chat_names(db, rec.club_id)), "pushed": pushed}
+
+
+def _chat_poll_or_404(db: Session, rec, pid: int) -> models.ChatPoll:
+    poll = db.query(models.ChatPoll).filter(models.ChatPoll.id == pid, models.ChatPoll.club_id == rec.club_id).first()
+    if not poll:
+        raise HTTPException(404, "Không tìm thấy bình chọn")
+    return poll
+
+
+@app.post("/api/public/report/{slug}/chat/polls/{pid}/vote")
+@limiter.limit("60/minute")
+def chat_vote(request: Request, slug: str, pid: int, data: schemas.ChatVoteIn, db: Session = Depends(get_db),
+              x_chat_device: Optional[str] = Header(None)):
+    """Thay toàn bộ phiếu của mình: [] = rút phiếu; chọn một → tối đa 1 lựa chọn; đóng → 400."""
+    rec = _validate_token(slug, db)
+    part = _chat_participant(db, rec, x_chat_device, required=True)
+    _chat_require_open(db, rec.club_id, part)
+    poll = _chat_poll_or_404(db, rec, pid)
+    if poll.closed or (poll.closes_at and poll.closes_at < _now_vn()):
+        raise HTTPException(400, "Bình chọn đã đóng")
+    valid = {o["id"] for o in poll.options}
+    chosen = [o for o in dict.fromkeys(data.option_ids) if o in valid]
+    if not poll.multi and len(chosen) > 1:
+        raise HTTPException(400, "Bình chọn này chỉ chọn một")
+    db.query(models.ChatVote).filter(models.ChatVote.poll_id == poll.id, models.ChatVote.participant_id == part.id).delete()
+    for o in chosen:
+        db.add(models.ChatVote(poll_id=poll.id, participant_id=part.id, option_id=o))
+    db.commit()
+    return _poll_out(db, poll, part.id)
+
+
+@app.post("/api/public/report/{slug}/chat/polls/{pid}/options")
+@limiter.limit("20/minute")
+def chat_add_option(request: Request, slug: str, pid: int, data: schemas.ChatOptionIn, db: Session = Depends(get_db),
+                    x_chat_device: Optional[str] = Header(None)):
+    rec = _validate_token(slug, db)
+    part = _chat_participant(db, rec, x_chat_device, required=True)
+    _chat_require_open(db, rec.club_id, part)
+    poll = _chat_poll_or_404(db, rec, pid)
+    if not poll.allow_add and poll.participant_id != part.id:
+        raise HTTPException(403, "Bình chọn này không cho thêm lựa chọn")
+    if poll.closed or len(poll.options) >= 10:
+        raise HTTPException(400, "Không thêm được lựa chọn")
+    text = data.text.strip()
+    if any(o["text"].lower() == text.lower() for o in poll.options):
+        raise HTTPException(400, "Lựa chọn đã có")
+    poll.options = [*poll.options, {"id": secrets.token_hex(3), "text": text}]
+    db.commit()
+    return _poll_out(db, poll, part.id)
+
+
+@app.post("/api/public/report/{slug}/chat/polls/{pid}/close")
+@limiter.limit("20/minute")
+def chat_close_poll(request: Request, slug: str, pid: int, db: Session = Depends(get_db), x_chat_device: Optional[str] = Header(None)):
+    rec = _validate_token(slug, db)
+    part = _chat_participant(db, rec, x_chat_device, required=True)
+    poll = _chat_poll_or_404(db, rec, pid)
+    if poll.participant_id != part.id:
+        raise HTTPException(403, "Chỉ người tạo mới đóng được bình chọn")
+    poll.closed = True; db.commit()
+    return _poll_out(db, poll, part.id)
 
 
 @app.get("/api/public/report/{slug}/manifest.webmanifest", include_in_schema=False)

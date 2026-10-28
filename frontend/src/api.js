@@ -264,15 +264,28 @@ export const createPublicReportApi = (slug) => {
   const pub = axios.create({ baseURL: BASE_URL });
   // Link có mã PIN: gửi kèm header X-Public-Pin đã nhớ theo slug (utils/publicPin.js)
   pub.interceptors.request.use((cfg) => {
-    let pin = null;
-    try { pin = localStorage.getItem(`public_pin:${slug}`); } catch { /* bỏ qua */ }
+    let pin = null, dev = null;
+    try { pin = localStorage.getItem(`public_pin:${slug}`); dev = localStorage.getItem(`chat_device:${slug}`); } catch { /* bỏ qua */ }
     if (pin) cfg.headers["X-Public-Pin"] = pin;
+    if (dev) cfg.headers["X-Chat-Device"] = dev;   // danh tính trò chuyện theo thiết bị (utils/chat.js)
     return cfg;
   });
   return {
     meta: () => pub.get(`/api/public/report/${slug}`),
     announcements: () => pub.get(`${base}/announcements`),
     manifestUrl: `${base}/manifest.webmanifest`,   // manifest PWA theo CLB (tên, logo, start_url = trang này)
+    chat: {   // Trò chuyện public (2026-10-28, đợt 1)
+      join: (display_name) => pub.post(`${base}/chat/join`, { display_name }),
+      me: () => pub.get(`${base}/chat/me`),
+      participants: () => pub.get(`${base}/chat/participants`),
+      messages: (params) => pub.get(`${base}/chat/messages`, { params }),
+      send: (body) => pub.post(`${base}/chat/messages`, body),
+      deleteOwn: (id) => pub.post(`${base}/chat/messages/${id}/delete`),
+      createPoll: (body) => pub.post(`${base}/chat/polls`, body),
+      vote: (id, option_ids) => pub.post(`${base}/chat/polls/${id}/vote`, { option_ids }),
+      addOption: (id, text) => pub.post(`${base}/chat/polls/${id}/options`, { text }),
+      closePoll: (id) => pub.post(`${base}/chat/polls/${id}/close`),
+    },
     push: {   // Web Push cho người xem public (2026-10-28)
       config: () => pub.get("/api/public/push/config"),
       subscribe: (body) => pub.post(`${base}/push/subscribe`, body),
