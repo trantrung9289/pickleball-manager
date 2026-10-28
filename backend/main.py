@@ -158,6 +158,8 @@ def _run_migration():
         ("clubs", "logo_hash", "VARCHAR(16)", None),
         # 2026-10-28: thông báo nhắc lại mỗi ngày trong cửa sổ (thay nhắc phí Telegram cũ)
         ("announcements", "repeat_daily", "BOOLEAN DEFAULT 0 NOT NULL", None),
+        # 2026-10-28: mã PIN cho link công khai
+        ("public_report_tokens", "pin_hash", "VARCHAR(64)", None),
         # Bảng tournaments — quy tắc ghép ĐỒNG ĐỘI cho vòng quay ghép đội (giải đôi)
         ("tournaments", "partner_rules", "JSON", None),
         # Bảng clubs — danh sách hạng cấu hình ở cấp CLB (NULL → DEFAULT_RANK_LEVELS)
@@ -337,6 +339,24 @@ def _rate_limit_key(request):
     thể tin cậy trực tiếp mà không cần bật proxy-headers cho toàn bộ uvicorn.
     """
     return request.headers.get("fly-client-ip") or get_remote_address(request)
+
+
+# ── Link công khai có mã PIN (2026-10-28): client gửi header X-Public-Pin; _validate_token đọc qua contextvar ──
+import contextvars as _ctxv
+_PUBLIC_PIN = _ctxv.ContextVar("public_pin", default=None)
+
+
+@app.middleware("http")
+async def _capture_public_pin(request: Request, call_next):
+    tok = _PUBLIC_PIN.set((request.headers.get("x-public-pin") or "").strip() or None)
+    try:
+        return await call_next(request)
+    finally:
+        _PUBLIC_PIN.reset(tok)
+
+
+def _pin_hash(token: str, pin: str) -> str:
+    return hashlib.sha256(f"{token}:{pin}".encode()).hexdigest()
 
 
 limiter = Limiter(key_func=_rate_limit_key)
@@ -2117,6 +2137,9 @@ def create_report_link(
 ):
     # Link công khai phát tán toàn bộ thu chi + tên thành viên → cần quyền chỉnh sửa
     perms.require_edit()
+    # 2026-10-28: mỗi CLB chỉ MỘT link công khai (PWA/Web Push gắn theo link; nhiều link gây phân tán đăng ký)
+    if db.query(models.PublicReportToken).filter(models.PublicReportToken.club_id == perms.club_id).count() >= 1:
+        raise HTTPException(400, "Mỗi câu lạc bộ chỉ có một link công khai. Xoá link hiện có trước khi tạo link mới.")
     token_str = secrets.token_urlsafe(32)
     expires_at_val = None
     if data.get("expires_at"):
@@ -2146,6 +2169,7 @@ def create_report_link(
         "is_active": rec.is_active,
         "view_count": rec.view_count,
         "created_at": rec.created_at.isoformat() if rec.created_at else None,
+        "has_pin": bool(rec.pin_hash),
     }
 
 
@@ -2168,6 +2192,7 @@ def list_report_links(
             "is_active": r.is_active,
             "view_count": r.view_count,
             "created_at": r.created_at.isoformat() if r.created_at else None,
+            "has_pin": bool(r.pin_hash),
         }
         for r in recs
     ]
@@ -2191,6 +2216,26 @@ def toggle_report_link(
     return {"id": rec.id, "is_active": rec.is_active}
 
 
+@app.put("/api/report-links/{link_id}/pin")
+def set_report_link_pin(
+    link_id: int,
+    data: schemas.PublicLinkPinIn,
+    db: Session = Depends(get_db),
+    perms: ClubPermissions = Depends(get_club_permission),
+):
+    """Đặt (4 hoặc 6 chữ số) hoặc xoá (null) mã PIN của link công khai. Đổi PIN → người xem phải nhập lại; đăng ký Web Push giữ nguyên."""
+    perms.require_edit()
+    rec = db.query(models.PublicReportToken).filter(
+        models.PublicReportToken.id == link_id,
+        models.PublicReportToken.club_id == perms.club_id,
+    ).first()
+    if not rec:
+        raise HTTPException(404, "Link không tồn tại")
+    rec.pin_hash = _pin_hash(rec.token, data.pin) if data.pin else None
+    db.commit()
+    return {"id": rec.id, "has_pin": bool(rec.pin_hash)}
+
+
 @app.delete("/api/report-links/{link_id}")
 def delete_report_link(
     link_id: int,
@@ -2211,8 +2256,10 @@ def delete_report_link(
 
 # ── PUBLIC REPORT ENDPOINTS (không cần auth) ─────────────
 
-def _validate_token(slug_or_token: str, db: Session, increment_view: bool = False):
-    """Tìm token theo slug (mới) hoặc token đầy đủ (cũ — backward compat)."""
+def _validate_token(slug_or_token: str, db: Session, increment_view: bool = False, require_pin: bool = True):
+    """Tìm token theo slug (mới) hoặc token đầy đủ (cũ — backward compat).
+    Link có PIN: client phải gửi header X-Public-Pin đúng → 401 {"code": "pin_required"|"pin_invalid"} (require_pin=False cho manifest,
+    vì Safari tải manifest không kèm header). Web Push server→thiết bị không đi qua đây nên vẫn hoạt động khi app đóng."""
     rec = db.query(models.PublicReportToken).filter(
         models.PublicReportToken.is_active == True,
     ).filter(
@@ -2223,6 +2270,12 @@ def _validate_token(slug_or_token: str, db: Session, increment_view: bool = Fals
         raise HTTPException(404, "Link không tồn tại hoặc đã bị vô hiệu hóa")
     if rec.expires_at and rec.expires_at < _now_vn():
         raise HTTPException(410, "Link đã hết hạn")
+    if require_pin and rec.pin_hash:
+        pin = _PUBLIC_PIN.get()
+        if not pin:
+            raise HTTPException(401, {"code": "pin_required", "message": "Link này cần mã PIN"})
+        if not secrets.compare_digest(_pin_hash(rec.token, pin), rec.pin_hash):
+            raise HTTPException(401, {"code": "pin_invalid", "message": "Mã PIN không đúng"})
     if increment_view:
         rec.view_count += 1
         db.commit()
@@ -2236,6 +2289,7 @@ def public_report_meta(request: Request, slug: str, db: Session = Depends(get_db
     club = db.query(models.Club).filter(models.Club.id == rec.club_id).first()
     return {
         "label": rec.label,
+        "has_pin": bool(rec.pin_hash),
         "club_name": club.name if club else "",
         "club_sport": club.sport if club else "",
         "club_logo_src": club.logo_src if club else None,
@@ -6930,7 +6984,7 @@ def public_push_unsubscribe(request: Request, slug: str, data: schemas.PushUnsub
 def public_manifest(request: Request, slug: str, db: Session = Depends(get_db)):
     """Manifest PWA theo CLB: tên + icon = logo CLB (nếu có), start_url = trang public này → "Thêm vào màn hình chính" mở đúng CLB."""
     from fastapi.responses import Response as _Resp
-    rec = _validate_token(slug, db)
+    rec = _validate_token(slug, db, require_pin=False)
     club = db.query(models.Club).filter(models.Club.id == rec.club_id).first()
     name = (club.name if club else "CLB")
     color = (club.brand_color if club and club.brand_color else "#1F8A52")

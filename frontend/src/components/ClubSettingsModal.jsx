@@ -1,12 +1,14 @@
 /**
- * ClubSettingsModal — "Cài đặt CLB" cho club admin (2026-10-28, trước là BrandColorModal): 2 mục
+ * ClubSettingsModal — "Cài đặt CLB" cho club admin (2026-10-28, trước là BrandColorModal): 3 mục
+ *  - Link công khai (chuyển từ trang Báo cáo): 1 link/CLB, mã PIN 4/6 số.
  *  - Logo: tải ảnh (PNG/JPEG/WebP ≤ 5MB) → backend thu nhỏ ≤512px, lưu trong DB; xem trước; xoá.
  *  - Màu thương hiệu (lớp 1 đổi giao diện 2026-10-26): chọn màu, xem thử ngay (setBrandColor), Lưu → PUT /api/club/appearance.
  * Props: { club, onSaved(), onClose(), initialTab? }
  */
 import { useState } from "react";
 import { Alert, Button, ColorPicker, Modal, Space, Tabs, Tag, Typography, Upload, message, Popconfirm } from "antd";
-import { UploadOutlined, DeleteOutlined, PictureOutlined, BgColorsOutlined } from "@ant-design/icons";
+import { UploadOutlined, DeleteOutlined, PictureOutlined, BgColorsOutlined, LinkOutlined } from "@ant-design/icons";
+import PublicLinksTab from "./PublicLinksTab";
 import { authApi, logoSrc } from "../api";
 import { useAppTheme } from "../contexts/ThemeContext";
 import { BRAND_PRESETS, DEFAULT_BRAND, brandPalette, contrast, isHex } from "../utils/color";
@@ -118,6 +120,7 @@ export default function ClubSettingsModal({ club, onSaved, onClose, initialTab =
       <Tabs activeKey={tab} onChange={setTab} items={[
         { key: "logo", label: <span><PictureOutlined /> Logo</span>, children: <LogoTab club={club} onSaved={onSaved} /> },
         { key: "brand", label: <span><BgColorsOutlined /> Màu thương hiệu</span>, children: <BrandTab club={club} value={value} setValue={setValue} saved={saved} /> },
+        { key: "links", label: <span><LinkOutlined /> Link công khai</span>, children: <PublicLinksTab /> },
       ]} />
     </Modal>
   );

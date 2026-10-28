@@ -1189,3 +1189,8 @@ class PushSubscribeIn(BaseModel):
 class PushUnsubscribeIn(BaseModel):
     endpoint: str = Field(min_length=20, max_length=2000)
 
+
+class PublicLinkPinIn(BaseModel):
+    """Mã PIN link công khai: 4 hoặc 6 chữ số; None = bỏ PIN."""
+    pin: Optional[str] = Field(default=None, pattern=r"^(\d{4}|\d{6})$")
+

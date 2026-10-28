@@ -255,12 +255,20 @@ export const reportLinksApi = {
   create: (data) => api.post("/api/report-links", data),
   toggle: (id) => api.patch(`/api/report-links/${id}/toggle`),
   delete: (id) => api.delete(`/api/report-links/${id}`),
+  setPin: (id, pin) => api.put(`/api/report-links/${id}/pin`, { pin }),   // "1234" | "123456" | null
 };
 
 // Factory trả về api object cho một public slug/token (không cần auth)
 export const createPublicReportApi = (slug) => {
   const base = `${BASE_URL}/api/public/report/${slug}`;
   const pub = axios.create({ baseURL: BASE_URL });
+  // Link có mã PIN: gửi kèm header X-Public-Pin đã nhớ theo slug (utils/publicPin.js)
+  pub.interceptors.request.use((cfg) => {
+    let pin = null;
+    try { pin = localStorage.getItem(`public_pin:${slug}`); } catch { /* bỏ qua */ }
+    if (pin) cfg.headers["X-Public-Pin"] = pin;
+    return cfg;
+  });
   return {
     meta: () => pub.get(`/api/public/report/${slug}`),
     announcements: () => pub.get(`${base}/announcements`),

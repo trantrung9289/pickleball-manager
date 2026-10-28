@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  Typography, Select, Tabs, Spin, Result, Card, Tag, Space, Row, Col, theme,
+  Typography, Select, Tabs, Spin, Result, Card, Tag, Space, Row, Col, theme, Input, Button,
 } from "antd";
 import {
   LockOutlined, EyeOutlined, CalendarOutlined, TrophyOutlined,
@@ -18,6 +18,7 @@ import PushSettings from "../components/PushSettings";
 import { InstallButton, InstallBanner, InstallGuide } from "../components/InstallApp";
 import useInstallPrompt from "../hooks/useInstallPrompt";
 import { shouldShowInstallBanner, bannerKey, nudgeKey, readLS, writeLS } from "../utils/install";
+import { savePin, clearPin, pinErrorCode, isValidPin } from "../utils/publicPin";
 import { useAppTheme } from "../contexts/ThemeContext";
 import MobileBottomNav from "../components/mobile/MobileBottomNav";
 
@@ -27,6 +28,9 @@ function PublicReportInner({ token }) {
   const [meta, setMeta] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [pinNeeded, setPinNeeded] = useState(null);   // null | "pin_required" | "pin_invalid"
+  const [pinInput, setPinInput] = useState("");
+  const [reloadTick, setReloadTick] = useState(0);
   const [year, setYear] = useState(dayjs().year());
   const [activeSection, setActiveSection] = useState("monthly-detail");
   const { token: antToken } = theme.useToken();
@@ -86,17 +90,26 @@ function PublicReportInner({ token }) {
   useEffect(() => {
     api.meta()
       .then((r) => {
-        setMeta(r.data);
+        setMeta(r.data); setPinNeeded(null);
         document.title = `${r.data.club_name} | Báo cáo tài chính`;
       })
       .catch((err) => {
         const status = err.response?.status;
-        if (status === 404) setError("Link không tồn tại hoặc đã bị vô hiệu hóa.");
+        const code = pinErrorCode(err);
+        if (code) { if (code === "pin_invalid") clearPin(token); setPinNeeded(code); }   // link có PIN: hiện màn nhập, không phải lỗi
+        else if (status === 404) setError("Link không tồn tại hoặc đã bị vô hiệu hóa.");
         else if (status === 410) setError("Link này đã hết hạn.");
         else setError("Không thể tải báo cáo. Vui lòng thử lại sau.");
       })
       .finally(() => setLoading(false));
-  }, [token, api]);
+  }, [token, api, reloadTick]);
+
+  const submitPin = () => {
+    if (!isValidPin(pinInput)) return;
+    savePin(token, pinInput);
+    setLoading(true); setPinInput("");
+    setReloadTick((n) => n + 1);
+  };
 
   const currentYear = dayjs().year();
   const YEARS = Array.from({ length: 5 }, (_, i) => currentYear - 2 + i);
@@ -105,6 +118,25 @@ function PublicReportInner({ token }) {
     return (
       <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: antToken.colorBgLayout }}>
         <Spin size="large" tip="Đang tải báo cáo..." />
+      </div>
+    );
+  }
+
+  if (pinNeeded) {
+    return (
+      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: antToken.colorBgLayout, padding: 16 }}>
+        <div style={{ width: 360, maxWidth: "100%", background: antToken.colorBgContainer, borderRadius: 16, padding: 24, textAlign: "center", boxShadow: "0 4px 24px rgba(0,0,0,0.08)" }}>
+          <LockOutlined style={{ fontSize: 36, color: antToken.colorPrimary }} />
+          <Title level={4} style={{ margin: "12px 0 4px" }}>Nhập mã PIN</Title>
+          <Text type="secondary">Trang này được câu lạc bộ bảo vệ bằng mã PIN. Nhập một lần, thiết bị sẽ ghi nhớ.</Text>
+          <div style={{ margin: "20px 0 12px", display: "flex", justifyContent: "center" }}>
+            {/* onInput nhận từng ký tự (onChange chỉ bắn khi đủ 6 ô) → PIN 4 số vẫn kích hoạt nút Mở */}
+            <Input.OTP length={6} value={pinInput} onInput={(chars) => setPinInput(chars.join(""))} onChange={setPinInput} formatter={(v) => v.replace(/\D/g, "")} autoFocus />
+          </div>
+          <Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 12 }}>PIN có 4 hoặc 6 chữ số: nhập 4 số rồi bấm Mở, hoặc đủ 6 số.</Text>
+          {pinNeeded === "pin_invalid" && <Text type="danger" style={{ display: "block", marginBottom: 8 }}>Mã PIN không đúng, thử lại.</Text>}
+          <Button type="primary" block onClick={submitPin} disabled={!isValidPin(pinInput)}>Mở</Button>
+        </div>
       </div>
     );
   }

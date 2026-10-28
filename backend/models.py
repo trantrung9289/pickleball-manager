@@ -325,6 +325,7 @@ class PublicReportToken(Base):
     view_count = Column(Integer, default=0)
     created_at = Column(DateTime, server_default=func.now())
     created_by = Column(String(50), nullable=True)
+    pin_hash = Column(String(64), nullable=True)   # 2026-10-28: mã PIN 4/6 số bảo vệ link (sha256(token + pin)); NULL = không PIN
 
     club = relationship("Club")
 
