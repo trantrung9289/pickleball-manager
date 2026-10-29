@@ -90,3 +90,33 @@ export function summarizeTransaction(kind, data) {
   rows.push(["Ngày", isoToVn(data.transaction_date)], ["Phương thức", data.payment_method || ""]);
   return rows;
 }
+
+/* ── Đợt 2: Thành viên + Khoản thu chi ───────────────────────────────────────────────────────── */
+export const MEMBER_STATUS = [
+  { value: "active", label: "Hoạt động" },
+  { value: "inactive", label: "Không hoạt động" },
+  { value: "suspended", label: "Tạm ngưng" },
+];
+export const statusLabel = (v) => MEMBER_STATUS.find((s) => s.value === v)?.label || v || "";
+
+/** Payload POST /api/members như bot Telegram: full_name, status, join_date (mặc định hôm nay), phone/rank nếu có. */
+export function buildMemberPayload(data, today = new Date()) {
+  const out = { full_name: String(data.full_name || "").trim(), status: data.status || "active", join_date: data.join_date || toIsoDate(today) };
+  if (data.phone) out.phone = String(data.phone).trim();
+  if (data.rank) out.rank = data.rank;
+  return out;
+}
+export function summarizeMember(data) {
+  return [["Họ tên", data.full_name || ""], ["Hạng", data.rank || "—"], ["SĐT", data.phone || "—"], ["Ngày tham gia", isoToVn(data.join_date)], ["Trạng thái", statusLabel(data.status)]];
+}
+/** Payload POST /api/fee-types: name, type, default_amount nếu >0. */
+export function buildFeeTypePayload(data) {
+  const out = { name: String(data.name || "").trim(), type: data.type };
+  if (data.default_amount) out.default_amount = Number(data.default_amount);
+  return out;
+}
+/** Kiểm tra số điện thoại VN đơn giản: 9–11 chữ số (cho phép khoảng trắng/chấm). */
+export function normalizePhone(text) {
+  const d = String(text || "").replace(/[\s.-]/g, "");
+  return /^\d{9,11}$/.test(d) ? d : null;
+}

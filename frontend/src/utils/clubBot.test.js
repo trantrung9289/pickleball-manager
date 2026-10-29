@@ -58,3 +58,16 @@ test("normText + feeDefault: bỏ dấu; mặc định 0/null → null", () => {
   assert.equal(feeDefault({ default_amount: null }), null);
   assert.equal(feeDefault({ default_amount: "500000" }), 500000);
 });
+
+test("đợt 2: buildMemberPayload, summarizeMember, buildFeeTypePayload, normalizePhone", async () => {
+  const { buildMemberPayload, summarizeMember, buildFeeTypePayload, normalizePhone, statusLabel } = await import("./clubBot.js");
+  const today = new Date(2026, 9, 29);
+  assert.deepEqual(buildMemberPayload({ full_name: " An ", rank: "B", phone: "0909", status: "active" }, today), { full_name: "An", status: "active", join_date: "2026-10-29", phone: "0909", rank: "B" });
+  assert.deepEqual(buildMemberPayload({ full_name: "Bình", join_date: "2026-01-02" }, today), { full_name: "Bình", status: "active", join_date: "2026-01-02" });
+  assert.equal(summarizeMember({ full_name: "An", status: "suspended" })[4][1], "Tạm ngưng");
+  assert.deepEqual(buildFeeTypePayload({ name: " Nước ", type: "expense", default_amount: 0 }), { name: "Nước", type: "expense" });
+  assert.deepEqual(buildFeeTypePayload({ name: "Phí", type: "income", default_amount: 150000 }), { name: "Phí", type: "income", default_amount: 150000 });
+  assert.equal(normalizePhone("0909 123 456"), "0909123456");
+  assert.equal(normalizePhone("12"), null);
+  assert.equal(statusLabel("inactive"), "Không hoạt động");
+});

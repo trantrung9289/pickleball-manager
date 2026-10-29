@@ -75,6 +75,12 @@ export default function Members() {
   }, [search, statusFilter]);
 
   useEffect(() => { load(); }, [load]);
+  // BOT CLB thêm/sửa/xoá thành viên → tải lại bảng (sự kiện window)
+  useEffect(() => {
+    const h = (e) => { if (!e.detail?.entity || e.detail.entity === "members") load(); };
+    window.addEventListener("clb:data-changed", h);
+    return () => window.removeEventListener("clb:data-changed", h);
+  }, [load]);
 
   const openCreate = () => { setEditing(null); form.resetFields(); setModalOpen(true); };
   const openEdit = (r) => {

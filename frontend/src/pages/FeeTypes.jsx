@@ -50,6 +50,12 @@ export default function FeeTypes() {
   };
 
   useEffect(() => { load(); }, []);
+  // BOT CLB thêm/xoá khoản → tải lại bảng (sự kiện window)
+  useEffect(() => {
+    const h = (e) => { if (!e.detail?.entity || e.detail.entity === "fee_types") load(); };
+    window.addEventListener("clb:data-changed", h);
+    return () => window.removeEventListener("clb:data-changed", h);
+  }, []);
 
   const openCreate = () => { setEditing(null); form.resetFields(); setModalOpen(true); };
   const openEdit = (r) => { setEditing(r); form.setFieldsValue(r); setModalOpen(true); };
