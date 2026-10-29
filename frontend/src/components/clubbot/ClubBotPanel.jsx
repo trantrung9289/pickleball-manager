@@ -5,16 +5,20 @@
  * Đợt 1: Thu tiền, Chi tiền. Đợt 2: Thành viên (danh sách, thêm, đổi hạng, đổi trạng thái, xoá) + Khoản thu chi (danh sách, thêm, xoá).
  * Mọi luồng là dãy bước (FLOWS[name].steps); mỗi bước có prompt/chips/cách nhận trả lời theo STEP; bước cuối gọi finish(flow) ghi dữ liệu.
  * Sau khi ghi phát sự kiện window "clb:data-changed" {entity} để trang đang mở (Giao dịch / Thành viên / Khoản) tải lại.
+ * 2026-10-29 thời gian + lịch sử: mỗi tin có hh:mm:ss, thẻ kết quả có "Thời điểm hh:mm:ss dd/mm/yyyy", dải phân ngày; lịch sử LƯU MÁY CHỦ
+ * theo (CLB, tài khoản) qua clubBotApi (không lưu trên thiết bị — quyết định người dùng), ghi theo lô sau mỗi lượt; mở khung → nạp 200 tin gần nhất
+ * (nút của tin cũ không còn tác dụng) rồi chào + menu mới; "Xoá lịch sử" hỏi xác nhận rồi xoá trên máy chủ.
  */
 import { useCallback, useMemo, useRef, useState, useEffect } from "react";
-import { Button, Input, Typography } from "antd";
-import { SendOutlined, ArrowLeftOutlined, HomeOutlined } from "@ant-design/icons";
+import { Button, Input, Typography, Modal, Spin, message as antMessage } from "antd";
+import { SendOutlined, ArrowLeftOutlined, HomeOutlined, DeleteOutlined } from "@ant-design/icons";
 import RobotIcon from "./RobotIcon";
-import { feeTypesApi, membersApi, transactionsApi } from "../../api";
+import { feeTypesApi, membersApi, transactionsApi, clubBotApi } from "../../api";
 import { useRankLevels } from "../../hooks/useRankLevels";
 import {
   PAYMENT_METHODS, MEMBER_STATUS, statusLabel, parseAmount, parseDateText, searchMembers, buildTransactionPayload, summarizeTransaction,
   buildMemberPayload, summarizeMember, buildFeeTypePayload, normalizePhone, formatVnd, toIsoDate, isoToVn, normText, feeDefault,
+  fmtClock, fmtDay, fmtStamp, dayKey,
 } from "../../utils/clubBot";
 
 const { Text } = Typography;
@@ -59,7 +63,7 @@ const SKIP = "__skip__";
 function Bubble({ m }) {
   const mine = m.role === "me";
   return (
-    <div style={{ display: "flex", justifyContent: mine ? "flex-end" : "flex-start", padding: "3px 0" }}>
+    <div style={{ display: "flex", flexDirection: "column", alignItems: mine ? "flex-end" : "flex-start", padding: "3px 0" }}>
       <div style={{
         maxWidth: "88%", borderRadius: 14, padding: "8px 12px", whiteSpace: "pre-wrap", wordBreak: "break-word", fontSize: 14,
         background: mine ? "var(--brand)" : "var(--surface)", color: mine ? "#fff" : "var(--ink)", border: mine ? "none" : "1px solid var(--line)",
@@ -71,6 +75,15 @@ function Bubble({ m }) {
           </tbody></table>
         )}
       </div>
+      {m.ts && <span style={{ fontSize: 10, color: "var(--muted)", margin: mine ? "2px 6px 0 0" : "2px 0 0 6px" }}>{fmtClock(m.ts)}</span>}
+    </div>
+  );
+}
+
+function DayDivider({ iso }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "8px 0 4px", color: "var(--muted)", fontSize: 11 }}>
+      <span style={{ flex: 1, height: 1, background: "var(--line)" }} /><span>{fmtDay(iso)}</span><span style={{ flex: 1, height: 1, background: "var(--line)" }} />
     </div>
   );
 }
@@ -79,10 +92,16 @@ const allowed = (items, perms) => items.filter((it) => !it.need || perms?.[it.ne
 
 export default function ClubBotPanel({ club, user, perms }) {
   const { options: rankOptions } = useRankLevels();
-  const [messages, setMessages] = useState(() => {
+  const greeting = useCallback(() => {
     const items = allowed(MENU, perms);
-    return [{ id: nid(), role: "bot", text: `👋 Xin chào ${user?.full_name || user?.username || "bạn"}! Tôi là BOT của CLB ${club?.name || ""}.\nChọn việc cần làm:`, menu: items, noPerm: !items.length }];
-  });
+    return { id: nid(), role: "bot", ts: new Date().toISOString(), local: true, text: `👋 Xin chào ${user?.full_name || user?.username || "bạn"}! Tôi là BOT của CLB ${club?.name || ""}.\nChọn việc cần làm:`, menu: items, noPerm: !items.length };
+  }, [perms, user, club]);
+  const [messages, setMessages] = useState(() => [greeting()]);
+  const [histState, setHistState] = useState("loading");   // loading | ready | error
+  const [hasMore, setHasMore] = useState(false);
+  const oldestIdRef = useRef(null);
+  const queueRef = useRef([]);          // tin chờ ghi máy chủ
+  const flushTimerRef = useRef(null);
   const [flow, setFlow] = useState(null);            // { name, step, data } | null
   const [typed, setTyped] = useState("");
   const [busy, setBusy] = useState(false);
@@ -91,8 +110,50 @@ export default function ClubBotPanel({ club, user, perms }) {
   const listRef = useRef(null);
   const inputRef = useRef(null);
 
-  const say = useCallback((text, extra = {}) => setMessages((prev) => [...prev, { id: nid(), role: "bot", text, ...extra }]), []);
-  const echo = useCallback((text) => setMessages((prev) => [...prev, { id: nid(), role: "me", text }]), []);
+  // Ghi lịch sử máy chủ theo lô (gộp các tin trong ~400ms) — không lưu trên thiết bị
+  const flush = useCallback(() => {
+    flushTimerRef.current = null;
+    while (queueRef.current.length) {   // mỗi lô ≤ 50 (giới hạn schema); thực tế một lượt chỉ vài tin
+      const batch = queueRef.current.splice(0, 50);
+      clubBotApi.append(batch).catch(() => { /* lỗi mạng: bỏ qua lô này, hội thoại vẫn hiện */ });
+    }
+  }, []);
+  const enqueue = useCallback((m) => {
+    queueRef.current.push({ role: m.role, text: m.text, rows: m.rows ? m.rows.map(([k, v]) => [String(k), String(v)]) : undefined, kind: m.kind, ts: m.ts });
+    if (!flushTimerRef.current) flushTimerRef.current = setTimeout(flush, 400);
+  }, [flush]);
+  useEffect(() => () => { if (flushTimerRef.current) { clearTimeout(flushTimerRef.current); flush(); } }, [flush]);
+
+  const say = useCallback((text, extra = {}) => {
+    const m = { id: nid(), role: "bot", ts: new Date().toISOString(), text, ...extra };
+    if (extra.rows && (extra.after || extra.kind === "result")) m.rows = [...extra.rows, ["Thời điểm", fmtStamp(m.ts)]];
+    setMessages((prev) => [...prev, m]); enqueue(m);
+  }, [enqueue]);
+  const echo = useCallback((text) => { const m = { id: nid(), role: "me", ts: new Date().toISOString(), text }; setMessages((prev) => [...prev, m]); enqueue(m); }, [enqueue]);
+
+  // Nạp lịch sử máy chủ khi mở khung (nút của tin cũ không còn tác dụng), rồi giữ lời chào + menu mới ở cuối
+  const loadHistory = useCallback((beforeId) => clubBotApi.history(beforeId ? { before_id: beforeId, limit: 200 } : { limit: 200 }).then((r) => {
+    const old = (r.data?.messages || []).map((m) => ({ id: `h${m.id}`, sid: m.id, role: m.role, text: m.text, rows: m.rows, kind: m.kind, ts: m.created_at }));
+    if (old.length) oldestIdRef.current = old[0].sid;
+    setHasMore(!!r.data?.has_more);
+    setMessages((prev) => [...old, ...prev]);
+    setHistState("ready");
+  }).catch(() => setHistState("error")), []);
+  useEffect(() => { loadHistory(); }, [loadHistory]);
+
+  const clearHistory = useCallback(() => {
+    Modal.confirm({
+      title: "Xoá lịch sử BOT CLB?", content: "Xoá toàn bộ hội thoại của bạn với BOT trong CLB này trên máy chủ. Dữ liệu đã ghi (giao dịch, thành viên, khoản) không bị ảnh hưởng.",
+      okText: "Xoá lịch sử", okButtonProps: { danger: true }, cancelText: "Huỷ",
+      onOk: async () => {
+        queueRef.current = [];
+        await clubBotApi.clear();
+        setFlow(null); setHasMore(false); oldestIdRef.current = null;
+        setMessages([greeting()]);
+        antMessage.success("Đã xoá lịch sử BOT CLB");
+      },
+    });
+  }, [greeting]);
 
   const showMenu = useCallback((group) => {
     setFlow(null); setTyped("");
@@ -191,40 +252,40 @@ export default function ClubBotPanel({ club, user, perms }) {
       if (f.name === "add_thu" || f.name === "add_chi") {
         const tx = (await transactionsApi.create(buildTransactionPayload(FLOWS[f.name].kind, d))).data;
         setFlow(null);
-        say(`✅ Đã ghi ${FLOWS[f.name].kind === "thu" ? "Thu" : "Chi"}!`, { rows: [["Khoản", d.fee_type_name], ["Số tiền", formatVnd(tx.amount)], ["Ngày", isoToVn(tx.transaction_date)], ...(d.member_name ? [["Thành viên", d.member_name]] : [])], ...after });
+        say(`✅ Đã ghi ${FLOWS[f.name].kind === "thu" ? "Thu" : "Chi"}!`, { kind: "result", rows: [["Khoản", d.fee_type_name], ["Số tiền", formatVnd(tx.amount)], ["Ngày", isoToVn(tx.transaction_date)], ...(d.member_name ? [["Thành viên", d.member_name]] : [])], ...after });
         window.dispatchEvent(new CustomEvent("clb:data-changed", { detail: { entity: "transactions", id: tx.id } }));
       } else if (f.name === "add_member") {
         const m = (await membersApi.create(buildMemberPayload(d))).data;
         setFlow(null);
-        say("✅ Đã thêm thành viên!", { rows: [["Mã", m.member_code || "—"], ["Tên", m.full_name], ["Hạng", m.rank || "—"], ["SĐT", m.phone || "—"]], ...after });
+        say("✅ Đã thêm thành viên!", { kind: "result", rows: [["Mã", m.member_code || "—"], ["Tên", m.full_name], ["Hạng", m.rank || "—"], ["SĐT", m.phone || "—"]], ...after });
         window.dispatchEvent(new CustomEvent("clb:data-changed", { detail: { entity: "members", id: m.id } }));
       } else if (f.name === "upd_member_rank" || f.name === "upd_member_status") {
         const field = f.name === "upd_member_rank" ? "rank" : "status";
         const m = (await membersApi.update(d.member_id, { [field]: d[field] })).data;
         setFlow(null);
-        say(`✅ Đã cập nhật ${field === "rank" ? "hạng" : "trạng thái"} ${m.full_name} → ${field === "rank" ? (m.rank || "—") : statusLabel(m.status)}`, after);
+        say(`✅ Đã cập nhật ${field === "rank" ? "hạng" : "trạng thái"} ${m.full_name} → ${field === "rank" ? (m.rank || "—") : statusLabel(m.status)}`, { kind: "result", rows: [], ...after });
         window.dispatchEvent(new CustomEvent("clb:data-changed", { detail: { entity: "members", id: m.id } }));
       } else if (f.name === "del_member") {
         await membersApi.delete(d.member_id);
         setFlow(null);
-        say(`✅ Đã xoá thành viên ${d.member_name}.`, after);
+        say(`✅ Đã xoá thành viên ${d.member_name}.`, { kind: "result", rows: [], ...after });
         window.dispatchEvent(new CustomEvent("clb:data-changed", { detail: { entity: "members", id: d.member_id } }));
       } else if (f.name === "add_fee_type") {
         const ft = (await feeTypesApi.create(buildFeeTypePayload(d))).data;
         setFlow(null);
-        say(`✅ Đã thêm khoản ${ft.type === "income" ? "Thu" : "Chi"}: ${ft.name}${feeDefault(ft) ? ` (mặc định ${formatVnd(feeDefault(ft))})` : ""}`, after);
+        say(`✅ Đã thêm khoản ${ft.type === "income" ? "Thu" : "Chi"}: ${ft.name}${feeDefault(ft) ? ` (mặc định ${formatVnd(feeDefault(ft))})` : ""}`, { kind: "result", rows: [], ...after });
         window.dispatchEvent(new CustomEvent("clb:data-changed", { detail: { entity: "fee_types", id: ft.id } }));
       } else if (f.name === "del_fee_type") {
         await feeTypesApi.delete(d.fee_type_id);
         setFlow(null);
-        say(`✅ Đã xoá khoản ${d.fee_type_name}.`, after);
+        say(`✅ Đã xoá khoản ${d.fee_type_name}.`, { kind: "result", rows: [], ...after });
         window.dispatchEvent(new CustomEvent("clb:data-changed", { detail: { entity: "fee_types", id: d.fee_type_id } }));
       }
     } catch (err) {
       const detail = err?.response?.data?.detail;
       const msg = typeof detail === "string" ? detail : detail?.message || (Array.isArray(detail) ? detail.map((x) => x.msg).join("; ") : err?.message) || "lỗi không rõ";
       setFlow(null);
-      say(`❌ Không thực hiện được: ${msg}`, { retry: f, menuKey: FLOWS[f.name].back });
+      say(`❌ Không thực hiện được: ${msg}`, { kind: "error", retry: f, menuKey: FLOWS[f.name].back });
     } finally { setBusy(false); }
   }, [say]);
 
@@ -332,8 +393,17 @@ export default function ClubBotPanel({ club, user, perms }) {
   const tail = last?.role === "bot" && !flow && (last.menu || last.after || last.retry || last.noPerm);
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 2px 6px", fontSize: 12, color: "var(--muted)" }}>
+        <span>{histState === "loading" ? <><Spin size="small" /> Đang tải lịch sử…</> : histState === "error" ? "Không tải được lịch sử" : "Lịch sử lưu trên máy chủ"}</span>
+        <Button type="text" size="small" danger icon={<DeleteOutlined />} onClick={clearHistory} disabled={busy || histState === "loading"}>Xoá lịch sử</Button>
+      </div>
       <div ref={listRef} style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "6px 4px", borderRadius: 12, border: "1px solid var(--line)", background: "var(--bg)" }}>
-        {messages.map((m) => <Bubble key={m.id} m={m} />)}
+        {hasMore && <div style={{ textAlign: "center", padding: 4 }}><Button size="small" type="link" onClick={() => loadHistory(oldestIdRef.current)}>Tải thêm tin cũ</Button></div>}
+        {messages.map((m, i) => {
+          const prev = messages[i - 1];
+          const newDay = m.ts && (!prev || !prev.ts || dayKey(prev.ts) !== dayKey(m.ts));
+          return <div key={m.id}>{newDay && <DayDivider iso={m.ts} />}<Bubble m={m} /></div>;
+        })}
         {flow && chips.length > 0 && (FEE_STEPS.has(stepKey) ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 4, padding: "4px 2px 6px", maxWidth: "88%" }}>
             {chips.map((c) => (

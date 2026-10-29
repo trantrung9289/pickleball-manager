@@ -71,3 +71,12 @@ test("đợt 2: buildMemberPayload, summarizeMember, buildFeeTypePayload, normal
   assert.equal(normalizePhone("12"), null);
   assert.equal(statusLabel("inactive"), "Không hoạt động");
 });
+
+test("thời gian: toDate coi chuỗi không hậu tố là UTC; fmtClock/fmtDay/fmtStamp/dayKey", async () => {
+  const { toDate, fmtClock, fmtDay, fmtStamp, dayKey } = await import("./clubBot.js");
+  const d = new Date(2026, 9, 29, 8, 5, 9);
+  assert.equal(fmtClock(d), "08:05:09"); assert.equal(fmtDay(d), "29/10/2026"); assert.equal(fmtStamp(d), "08:05:09 29/10/2026"); assert.equal(dayKey(d), "2026-10-29");
+  assert.equal(toDate("2026-10-29T01:00:00").getTime(), Date.UTC(2026, 9, 29, 1, 0, 0));
+  assert.equal(toDate("2026-10-29T01:00:00Z").getTime(), Date.UTC(2026, 9, 29, 1, 0, 0));
+  assert.equal(fmtStamp(null), "");
+});

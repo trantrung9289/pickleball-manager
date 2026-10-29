@@ -252,6 +252,13 @@ export const announcementsApi = {
 };
 
 // Trò chuyện — quản trị (đợt 2, 2026-10-28)
+// BOT CLB — lịch sử hội thoại lưu máy chủ theo (CLB, tài khoản) (2026-10-29)
+export const clubBotApi = {
+  history: (params) => api.get("/api/club-bot/history", { params }),         // { before_id?, limit? } → { messages, has_more }
+  append: (messages) => api.post("/api/club-bot/history", { messages }),     // [{ role, text, rows?, kind? }]
+  clear: () => api.delete("/api/club-bot/history"),
+};
+
 export const chatAdminApi = {
   messages: (params) => api.get("/api/chat/messages", { params }),
   participants: () => api.get("/api/chat/participants"),

@@ -1252,3 +1252,15 @@ class PushPrefsIn(BaseModel):
     quiet_start: Optional[int] = Field(default=None, ge=0, le=23)
     quiet_end: Optional[int] = Field(default=None, ge=0, le=23)
 
+
+# ── BOT CLB: lịch sử hội thoại lưu máy chủ (2026-10-29) ──
+class ClubBotMessageIn(BaseModel):
+    role: str = Field(..., pattern="^(bot|me)$")
+    text: str = Field(..., min_length=1, max_length=2000)
+    rows: Optional[List[List[str]]] = None
+    kind: Optional[str] = Field(None, pattern="^(result|error)$")
+    ts: Optional[datetime] = None   # thời điểm thao tác theo đồng hồ thiết bị (UTC); lệch >10 phút so với máy chủ → dùng giờ máy chủ
+
+
+class ClubBotHistoryIn(BaseModel):
+    messages: List[ClubBotMessageIn] = Field(..., min_length=1, max_length=50)

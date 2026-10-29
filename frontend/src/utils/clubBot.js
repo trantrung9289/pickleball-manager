@@ -120,3 +120,19 @@ export function normalizePhone(text) {
   const d = String(text || "").replace(/[\s.-]/g, "");
   return /^\d{9,11}$/.test(d) ? d : null;
 }
+
+/* ── Thời gian thao tác (cách c, 2026-10-29): hh:mm:ss dưới mỗi tin, hh:mm:ss dd/mm/yyyy ở thẻ kết quả, dải phân ngày ── */
+const p2 = (n) => String(n).padStart(2, "0");
+/** ISO (UTC có Z hoặc giờ máy) → Date; thiếu hậu tố → coi là UTC (created_at máy chủ). */
+export function toDate(iso) {
+  if (iso instanceof Date) return iso;
+  if (!iso) return null;
+  const s = String(iso);
+  return new Date(/Z$|[+-]\d{2}:?\d{2}$/.test(s) ? s : `${s}Z`);
+}
+export function fmtClock(iso) { const d = toDate(iso); return d ? `${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}` : ""; }
+export function fmtDay(iso) { const d = toDate(iso); return d ? `${p2(d.getDate())}/${p2(d.getMonth() + 1)}/${d.getFullYear()}` : ""; }
+/** "hh:mm:ss dd/mm/yyyy" — định dạng người dùng chọn cho thời điểm thao tác. */
+export function fmtStamp(iso) { const d = toDate(iso); return d ? `${fmtClock(d)} ${fmtDay(d)}` : ""; }
+/** Khoá ngày theo giờ máy để chèn dải phân ngày khi đổi ngày. */
+export function dayKey(iso) { const d = toDate(iso); return d ? `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}` : ""; }

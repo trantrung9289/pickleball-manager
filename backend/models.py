@@ -913,3 +913,16 @@ class ChatVote(Base):
     created_at = Column(DateTime, server_default=func.now())
     __table_args__ = (UniqueConstraint("poll_id", "participant_id", "option_id", name="uq_chat_vote"),)
 
+
+class ClubBotMessage(Base):
+    """Lịch sử hội thoại BOT CLB (2026-10-29): lưu máy chủ theo (club, user) — quyết định người dùng: KHÔNG lưu trên thiết bị.
+    role: bot | me; rows: bảng tóm tắt (JSON [[k, v], …]); kind: result | error | None. created_at UTC (ghi bằng utcnow)."""
+    __tablename__ = "club_bot_messages"
+    id = Column(Integer, primary_key=True, index=True)
+    club_id = Column(Integer, ForeignKey("clubs.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    role = Column(String(5), nullable=False)
+    text = Column(Text, nullable=False)
+    rows = Column(JSON, nullable=True)
+    kind = Column(String(10), nullable=True)
+    created_at = Column(DateTime, nullable=False, server_default=func.now(), index=True)   # main ghi utcnow tường minh

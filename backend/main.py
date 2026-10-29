@@ -7224,6 +7224,68 @@ def chat_messages(request: Request, slug: str, after_id: Optional[int] = None, b
             "locked": bool(club and club.chat_locked), "me_id": me_id}
 
 
+# ── BOT CLB: lịch sử hội thoại lưu máy chủ theo (CLB, tài khoản) — 2026-10-29 ──────────────────────
+CLUB_BOT_HISTORY_CAP = 2000     # mỗi (club, user) giữ tối đa; vượt → xoá tin cũ nhất khi ghi thêm
+
+
+def _club_bot_out(m: models.ClubBotMessage) -> dict:
+    return {"id": m.id, "role": m.role, "text": m.text, "rows": m.rows, "kind": m.kind,
+            "created_at": (m.created_at.isoformat() + "Z") if m.created_at else None}
+
+
+@app.get("/api/club-bot/history")
+def club_bot_history(before_id: Optional[int] = None, limit: int = Query(200, ge=1, le=500),
+                     db: Session = Depends(get_db), perms: ClubPermissions = Depends(get_club_permission)):
+    """Lịch sử BOT CLB của CHÍNH tài khoản đang đăng nhập trong CLB hiện tại, cũ → mới; before_id để tải tin cũ hơn."""
+    perms.require_view()
+    q = db.query(models.ClubBotMessage).filter(models.ClubBotMessage.club_id == perms.club_id,
+                                               models.ClubBotMessage.user_id == perms.membership.user_id)
+    if before_id:
+        q = q.filter(models.ClubBotMessage.id < before_id)
+    rows = list(reversed(q.order_by(models.ClubBotMessage.id.desc()).limit(limit).all()))
+    return {"messages": [_club_bot_out(m) for m in rows], "has_more": len(rows) >= limit}
+
+
+@app.post("/api/club-bot/history")
+def club_bot_history_append(data: schemas.ClubBotHistoryIn, db: Session = Depends(get_db),
+                            perms: ClubPermissions = Depends(get_club_permission)):
+    """Ghi thêm một lô tin (bot/me) theo thứ tự; vượt trần → xoá tin cũ nhất. Trả lại tin đã lưu (id + created_at máy chủ)."""
+    perms.require_view()
+    uid = perms.membership.user_id
+    now = datetime.utcnow()
+    out = []
+    for i, m in enumerate(data.messages):
+        ts = now
+        if m.ts is not None:   # giờ thiết bị (đã đổi sang UTC) để "Thời điểm" trên thẻ và mốc dưới tin khớp nhau; lệch >10 phút → giờ máy chủ
+            cand = m.ts.replace(tzinfo=None) - (m.ts.utcoffset() or timedelta(0)) if m.ts.tzinfo else m.ts
+            if abs((cand - now).total_seconds()) <= 600:
+                ts = cand
+        rec = models.ClubBotMessage(club_id=perms.club_id, user_id=uid, role=m.role, text=m.text, rows=m.rows, kind=m.kind,
+                                    created_at=ts + timedelta(microseconds=i))   # giữ thứ tự khi cùng mili-giây
+        db.add(rec); out.append(rec)
+    db.flush()
+    total = db.query(func.count(models.ClubBotMessage.id)).filter(models.ClubBotMessage.club_id == perms.club_id,
+                                                                  models.ClubBotMessage.user_id == uid).scalar() or 0
+    if total > CLUB_BOT_HISTORY_CAP:
+        old_ids = [r.id for r in db.query(models.ClubBotMessage.id).filter(models.ClubBotMessage.club_id == perms.club_id,
+                   models.ClubBotMessage.user_id == uid).order_by(models.ClubBotMessage.id.asc()).limit(total - CLUB_BOT_HISTORY_CAP).all()]
+        db.query(models.ClubBotMessage).filter(models.ClubBotMessage.id.in_(old_ids)).delete(synchronize_session=False)
+    db.commit()
+    for rec in out:
+        db.refresh(rec)
+    return {"messages": [_club_bot_out(m) for m in out]}
+
+
+@app.delete("/api/club-bot/history")
+def club_bot_history_clear(db: Session = Depends(get_db), perms: ClubPermissions = Depends(get_club_permission)):
+    """Xoá toàn bộ lịch sử BOT CLB của chính mình trong CLB hiện tại (UI hỏi xác nhận trước)."""
+    perms.require_view()
+    n = db.query(models.ClubBotMessage).filter(models.ClubBotMessage.club_id == perms.club_id,
+                                               models.ClubBotMessage.user_id == perms.membership.user_id).delete(synchronize_session=False)
+    db.commit()
+    return {"deleted": n}
+
+
 @app.get("/api/public/report/{slug}/chat/unread")
 @limiter.limit("30/minute")
 def chat_unread(request: Request, slug: str, after_id: Optional[int] = None, db: Session = Depends(get_db),
