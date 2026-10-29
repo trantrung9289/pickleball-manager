@@ -14,6 +14,19 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="Hệ thống quản lý câu lạc bộ thể thao — đa CLB, đa bộ môn" />
     <title>CLB Manager</title>
+    <!-- Giao diện mặc định toàn hệ thống = Galaxy (2026-10-29). Đặt data-theme/data-mode TRƯỚC khi React chạy theo lựa chọn đã lưu
+         của thiết bị (localStorage appTheme) → không loé nền trắng khi tải; ThemeContext đặt lại cùng giá trị sau khi mount. -->
+    <script>
+      (function () {
+        var t = null;
+        try { t = localStorage.getItem("appTheme"); } catch (e) { /* bỏ qua */ }
+        var mode = t === "ai-minimalist" ? "light" : t === "ai-inspired" ? "dark" : "galaxy";
+        var root = document.documentElement;
+        root.dataset.theme = mode === "light" ? "light" : "dark";
+        root.dataset.mode = mode;
+        if (mode !== "galaxy") root.style.background = mode === "light" ? "#F5F6F8" : "#14181F";
+      })();
+    </script>
     <!-- Phông Be Vietnam Pro tải về trong /fonts (src/fonts.css) — không gọi Google Fonts khi chạy (2026-10-26) -->
     <link rel="preload" href="/fonts/be-vietnam-pro-400-vietnamese.woff2" as="font" type="font/woff2" crossorigin />
     <link rel="preload" href="/fonts/be-vietnam-pro-600-vietnamese.woff2" as="font" type="font/woff2" crossorigin />

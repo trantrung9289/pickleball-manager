@@ -7,6 +7,10 @@ import { brandPalette, cssVariables, semanticFor } from "../utils/color";
 // token ngữ nghĩa có bản nhạt. Phông Be Vietnam Pro tải về (fonts.css). THEMES + useAppTheme cùng file là chủ đích.
 const FONT = "'Be Vietnam Pro', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
 
+// Mặc định toàn hệ thống (quyết định người dùng 2026-10-29): GALAXY cho thiết bị chưa chọn chế độ (admin, trang public, CLB mới).
+// Giao diện lưu theo THIẾT BỊ (localStorage appTheme), không theo CLB. index.html có script đặt data-theme/data-mode trước khi React chạy → không loé nền trắng.
+export const DEFAULT_MODE = "galaxy";
+
 // eslint-disable-next-line react-refresh/only-export-components
 export const MODES = {
   "ai-minimalist": { name: "ai-minimalist", label: "Sáng", icon: "☀️", dark: false, palette: "light" },
@@ -18,7 +22,7 @@ export const MODES = {
 /** Dựng cấu hình theme từ chế độ + màu thương hiệu. Xuất ra để test / bản in dùng lại. */
 // eslint-disable-next-line react-refresh/only-export-components
 export function buildTheme(modeName, brandColor) {
-  const mode = MODES[modeName] || MODES["ai-minimalist"];
+  const mode = MODES[modeName] || MODES[DEFAULT_MODE];
   const dark = mode.dark;
   const galaxy = mode.palette === "galaxy";
   const s = semanticFor(mode.palette);
@@ -65,7 +69,7 @@ const ThemeContext = createContext(null);
 
 export function ThemeProvider({ children }) {
   const saved = localStorage.getItem("appTheme");
-  const [themeName, setThemeNameState] = useState(MODES[saved] ? saved : "ai-minimalist");
+  const [themeName, setThemeNameState] = useState(MODES[saved] ? saved : DEFAULT_MODE);
   const [brandColor, setBrandColor] = useState(null);   // App.jsx đặt theo CLB đang chọn; null = mặc định
 
   const setThemeName = (name) => {
@@ -83,6 +87,7 @@ export function ThemeProvider({ children }) {
     root.dataset.theme = themeConfig.dark ? "dark" : "light";   // CSS tối dùng chung cho Tối + Galaxy
     root.dataset.mode = themeConfig.palette;                     // "galaxy" → nền tinh vân + kính mạnh (index.css)
     document.body.style.background = themeConfig.palette === "galaxy" ? "" : themeConfig.cssVars["--bg"];
+    root.style.background = themeConfig.palette === "galaxy" ? "" : themeConfig.cssVars["--bg"];   // index.html đặt sẵn trước khi mount; Galaxy để CSS lo
   }, [themeConfig]);
 
   return (
