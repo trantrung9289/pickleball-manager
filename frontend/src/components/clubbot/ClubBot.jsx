@@ -5,7 +5,8 @@
  */
 import { useState } from "react";
 import { Button, Drawer, Typography } from "antd";
-import { RobotOutlined, CloseOutlined } from "@ant-design/icons";
+import { CloseOutlined } from "@ant-design/icons";
+import RobotIcon from "./RobotIcon";
 import { useViewMode } from "../../contexts/ViewModeContext";
 import { useAuth } from "../../context/AuthContext";
 import ClubBotPanel from "./ClubBotPanel";
@@ -20,13 +21,13 @@ export default function ClubBot() {
 
   const fabBottom = isMobileView ? "calc(58px + env(safe-area-inset-bottom, 0px) + 14px)" : 24;
   const panel = open ? <ClubBotPanel key={selectedClub.id} club={selectedClub} user={user} perms={perms} /> : null;
-  const title = <Text strong style={{ fontSize: 15 }}><RobotOutlined style={{ marginRight: 8 }} />BOT CLB · {selectedClub.name}</Text>;
+  const title = <Text strong style={{ fontSize: 15 }}><RobotIcon size="1.25em" style={{ marginRight: 8, color: "var(--brand)" }} />BOT CLB · {selectedClub.name}</Text>;
   return (
     <>
       {!(open && isMobileView) && (
         <div style={{ position: "fixed", right: isMobileView ? 16 : 24, bottom: fabBottom, zIndex: 950 }} className="chat-fab-wrap">
           <button type="button" className="chat-fab" onClick={() => setOpen((o) => !o)} aria-label={open ? "Đóng BOT CLB" : "Mở BOT CLB"} aria-expanded={open} title="BOT CLB">
-            {open ? <CloseOutlined /> : <RobotOutlined />}
+            {open ? <CloseOutlined /> : <RobotIcon size="30px" />}
           </button>
         </div>
       )}

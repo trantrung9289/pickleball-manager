@@ -8,7 +8,8 @@
  */
 import { useCallback, useMemo, useRef, useState, useEffect } from "react";
 import { Button, Input, Typography } from "antd";
-import { RobotOutlined, SendOutlined, ArrowLeftOutlined, HomeOutlined } from "@ant-design/icons";
+import { SendOutlined, ArrowLeftOutlined, HomeOutlined } from "@ant-design/icons";
+import RobotIcon from "./RobotIcon";
 import { feeTypesApi, membersApi, transactionsApi } from "../../api";
 import { useRankLevels } from "../../hooks/useRankLevels";
 import {
@@ -52,6 +53,7 @@ const FLOWS = {
   del_fee_type: { title: "🗑 Xoá khoản", steps: ["fee_pick", "confirm_delete"], back: "category" },
 };
 const TEXT_STEPS = new Set(["amount", "description", "date", "full_name", "phone", "join_date", "name", "default_amount"]);
+const FEE_STEPS = new Set(["fee_type", "fee_pick"]);   // khoản thu chi: hiện hàng dọc, mỗi khoản 1 dòng, ngay trong khung hội thoại
 const SKIP = "__skip__";
 
 function Bubble({ m }) {
@@ -91,7 +93,6 @@ export default function ClubBotPanel({ club, user, perms }) {
 
   const say = useCallback((text, extra = {}) => setMessages((prev) => [...prev, { id: nid(), role: "bot", text, ...extra }]), []);
   const echo = useCallback((text) => setMessages((prev) => [...prev, { id: nid(), role: "me", text }]), []);
-  useEffect(() => { const el = listRef.current; if (el) el.scrollTop = el.scrollHeight; }, [messages, flow]);
 
   const showMenu = useCallback((group) => {
     setFlow(null); setTyped("");
@@ -290,8 +291,9 @@ export default function ClubBotPanel({ club, user, perms }) {
     const today = { value: "__today__", label: `Hôm nay ${isoToVn(toIsoDate(new Date()))}`, primary: true };
     switch (stepKey) {
       case "fee_type": case "fee_pick":
-        return feeTypes.filter((ft) => !q || normText(ft.name).includes(q)).slice(0, 12)
-          .map((ft) => ({ value: ft.id, label: `${stepKey === "fee_pick" ? (ft.type === "income" ? "Thu · " : "Chi · ") : ""}${ft.name}${feeDefault(ft) ? ` · ${formatVnd(feeDefault(ft))}` : ""}` }));
+        return feeTypes.filter((ft) => !q || normText(ft.name).includes(q)).slice(0, 30)
+          .map((ft) => ({ value: ft.id, text: `${stepKey === "fee_pick" ? (ft.type === "income" ? "💰 " : "📤 ") : ""}${ft.name}`,
+            extra: feeDefault(ft) ? `mặc định ${formatVnd(feeDefault(ft))}` : "", label: ft.name }));
       case "amount": return flow.data.default_amount ? [{ value: "__default__", label: `Dùng mặc định ${formatVnd(flow.data.default_amount)}`, primary: true }] : [];
       case "member": return [{ value: SKIP, label: "Bỏ qua" }, ...searchMembers(members, typed, 8).map((m) => ({ value: m.id, label: `${m.full_name}${m.member_code ? ` · ${m.member_code}` : ""}` }))];
       case "member_pick": return searchMembers(members, typed, 10).map((m) => ({ value: m.id, label: `${m.full_name}${m.member_code ? ` · ${m.member_code}` : ""}${m.status !== "active" ? ` (${statusLabel(m.status)})` : ""}` }));
@@ -308,6 +310,9 @@ export default function ClubBotPanel({ club, user, perms }) {
       default: return [];
     }
   }, [flow, stepKey, typed, feeTypes, members, rankOptions]);
+
+  // cuộn xuống đáy khi có tin mới / đổi bước / danh sách lựa chọn đổi (đặt SAU chips để tránh TDZ)
+  useEffect(() => { const el = listRef.current; if (el) el.scrollTop = el.scrollHeight; }, [messages, flow, chips]);
 
   const textAllowed = TEXT_STEPS.has(stepKey);
   const onEnter = () => {
@@ -329,6 +334,24 @@ export default function ClubBotPanel({ club, user, perms }) {
     <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
       <div ref={listRef} style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "6px 4px", borderRadius: 12, border: "1px solid var(--line)", background: "var(--bg)" }}>
         {messages.map((m) => <Bubble key={m.id} m={m} />)}
+        {flow && chips.length > 0 && (FEE_STEPS.has(stepKey) ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 4, padding: "4px 2px 6px", maxWidth: "88%" }}>
+            {chips.map((c) => (
+              <Button key={String(c.value)} size="small" disabled={busy} onClick={() => answer(c.value, c.label)}
+                style={{ justifyContent: "space-between", textAlign: "left", height: "auto", padding: "5px 10px", whiteSpace: "normal" }}>
+                <span>{c.text}</span>{c.extra && <span style={{ color: "var(--muted)", marginLeft: 12, fontSize: 12 }}>{c.extra}</span>}
+              </Button>
+            ))}
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, padding: "4px 2px 6px" }}>
+            {chips.map((c) => (
+              <Button key={String(c.value)} size="small" type={c.primary ? "primary" : "default"} danger={c.danger} disabled={busy} onClick={() => answer(c.value, c.label)}>{c.label}</Button>
+            ))}
+          </div>
+        ))}
+        {flow && ["member", "member_pick"].includes(stepKey) && chips.filter((c) => c.value !== SKIP).length === 0 && <Text type="secondary" style={{ fontSize: 12, padding: "0 4px" }}>Không thấy thành viên nào.</Text>}
+        {flow && FEE_STEPS.has(stepKey) && chips.length === 0 && <Text type="secondary" style={{ fontSize: 12, padding: "0 4px" }}>Không có khoản nào khớp.</Text>}
         {tail && (
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6, padding: "4px 2px 6px" }}>
             {last.noPerm && <Text type="secondary" style={{ fontSize: 12 }}>Tài khoản của bạn chưa có quyền xem hoặc tạo dữ liệu.</Text>}
@@ -340,16 +363,8 @@ export default function ClubBotPanel({ club, user, perms }) {
           </div>
         )}
       </div>
-      {flow && (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, padding: "8px 0 2px", maxHeight: 132, overflowY: "auto" }}>
-          {chips.map((c) => (
-            <Button key={String(c.value)} size="small" type={c.primary ? "primary" : "default"} danger={c.danger} disabled={busy} onClick={() => answer(c.value, c.label)}>{c.label}</Button>
-          ))}
-          {["member", "member_pick"].includes(stepKey) && chips.filter((c) => c.value !== SKIP).length === 0 && <Text type="secondary" style={{ fontSize: 12 }}>Không thấy thành viên nào.</Text>}
-        </div>
-      )}
       <div style={{ display: "flex", gap: 6, marginTop: 8, alignItems: "center" }}>
-        {flow ? <Button icon={<ArrowLeftOutlined />} onClick={back} disabled={busy} title="Quay lại" /> : <Button icon={<RobotOutlined />} disabled />}
+        {flow ? <Button icon={<ArrowLeftOutlined />} onClick={back} disabled={busy} title="Quay lại" /> : <Button icon={<RobotIcon size="18px" />} disabled />}
         <Input ref={inputRef} value={typed} onChange={(e) => setTyped(e.target.value)} onPressEnter={onEnter} disabled={inputOff} placeholder={placeholder}
           inputMode={["amount", "default_amount", "phone"].includes(stepKey) ? "decimal" : undefined} />
         <Button type="primary" icon={<SendOutlined />} onClick={onEnter} disabled={inputOff || (!textAllowed && !chips.length)} loading={busy} />
