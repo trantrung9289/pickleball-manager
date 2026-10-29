@@ -25,6 +25,7 @@ export default function ResponsiveTable({
   mobileHideColumns = [],
   mobileSummary,
   mobileCardStyle,          // (record) => style thêm cho Card mobile (vd viền trái theo bảng đấu)
+  className,
   ...rest
 }) {
   const { isMobileView } = useViewMode();
@@ -42,6 +43,7 @@ export default function ResponsiveTable({
         rowSelection={rowSelection}
         summary={summary}
         scroll={{ x: "max-content" }}
+        className={["ui-table-scroll", className].filter(Boolean).join(" ")}   /* thân bảng cuộn riêng + tiêu đề dính (index.css); phân trang giữa */
         {...rest}
       />
     );

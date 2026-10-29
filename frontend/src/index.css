@@ -309,3 +309,10 @@ a:focus-visible,
 
 /* ── BOT CLB (2026-10-29): dùng lại .chat-fab/.chat-panel, panel rộng hơn một chút ───────────── */
 .chat-panel--bot { width: 420px; height: min(680px, calc(100vh - 110px)); }
+
+/* ── Bảng dữ liệu (2026-10-29): phân trang ở GIỮA vì nút nổi BOT CLB / trò chuyện che góc phải dưới; thân bảng có THANH CUỘN RIÊNG ── */
+.ant-table-wrapper .ant-table-pagination.ant-pagination { justify-content: center !important; }
+.ui-table-scroll .ant-table-content { overflow: auto !important; max-height: max(320px, calc(100vh - 340px)); }
+.ui-table-scroll .ant-table-thead > tr > th { position: sticky; top: 0; z-index: 3; }
+.ui-table-scroll .ant-table-summary { position: sticky; bottom: 0; z-index: 3; background: var(--surface); }
+@media print { .ui-table-scroll .ant-table-content { max-height: none; overflow: visible !important; } .ui-table-scroll .ant-table-thead > tr > th { position: static; } }
