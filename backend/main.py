@@ -164,6 +164,12 @@ def _run_migration():
         # 2026-10-28: trò chuyện public
         ("clubs", "chat_locked", "BOOLEAN DEFAULT 0 NOT NULL", None),
         ("push_subscriptions", "participant_id", "INTEGER REFERENCES chat_participants(id)", None),
+        # 2026-10-29: thông báo trò chuyện theo thiết bị
+        ("push_subscriptions", "chat_mode", "VARCHAR(10) DEFAULT 'all' NOT NULL", None),
+        ("push_subscriptions", "quiet_enabled", "BOOLEAN DEFAULT 1 NOT NULL", None),
+        ("push_subscriptions", "quiet_start", "INTEGER DEFAULT 22 NOT NULL", None),
+        ("push_subscriptions", "quiet_end", "INTEGER DEFAULT 7 NOT NULL", None),
+        ("push_subscriptions", "chat_pushed_at", "DATETIME", None),
         # Bảng tournaments — quy tắc ghép ĐỒNG ĐỘI cho vòng quay ghép đội (giải đôi)
         ("tournaments", "partner_rules", "JSON", None),
         # Bảng clubs — danh sách hạng cấu hình ở cấp CLB (NULL → DEFAULT_RANK_LEVELS)
@@ -7088,6 +7094,60 @@ def _chat_names(db: Session, club_id: int) -> dict:
     return {p.id: p.display_name for p in db.query(models.ChatParticipant).filter(models.ChatParticipant.club_id == club_id).all()}
 
 
+CHAT_PUSH_THROTTLE_S = 30      # chống dồn tin thường theo thiết bị (quyết định người dùng)
+CHAT_ACTIVE_WINDOW_S = 20      # thiết bị vừa tải tin trong 20s = đang mở app → không đẩy
+_CHAT_ACTIVE = {}              # participant_id → time.time() lần tải tin gần nhất (trong bộ nhớ, 1 tiến trình)
+
+
+def _in_quiet_hours(sub, now_vn: datetime) -> bool:
+    """Giờ yên tĩnh theo thiết bị (giờ VN), hỗ trợ qua đêm (22→7). start == end → không có giờ yên tĩnh."""
+    if not sub.quiet_enabled or sub.quiet_start == sub.quiet_end:
+        return False
+    h = now_vn.hour
+    if sub.quiet_start < sub.quiet_end:
+        return sub.quiet_start <= h < sub.quiet_end
+    return h >= sub.quiet_start or h < sub.quiet_end
+
+
+def _push_chat_message_bg(club_id: int, message_id: int, sender_pid, slug: str, skip_pids=None) -> None:
+    """Tác vụ nền sau khi lưu tin thường: đẩy tới thiết bị chat_mode=all, trừ người gửi, trừ người đang mở app (20s),
+    trừ giờ yên tĩnh của thiết bị, chống dồn 30s/thiết bị. Tag chung theo link → máy chỉ hiện 1 dòng, nội dung thay bằng tin mới nhất."""
+    db = SessionLocal()
+    try:
+        m = db.query(models.ChatMessage).filter(models.ChatMessage.id == message_id).first()
+        if not m or m.deleted_at:
+            return
+        club = db.query(models.Club).filter(models.Club.id == club_id).first()
+        name = m.participant.display_name if m.participant else ADMIN_CHAT_NAME
+        now = datetime.utcnow(); now_vn = _now_vn(); t = time.time()
+        subs = db.query(models.PushSubscription).filter(models.PushSubscription.club_id == club_id,
+                                                        models.PushSubscription.chat_mode == "all").all()
+        targets = []
+        skip = set(skip_pids or [])
+        for sb in subs:
+            if sender_pid and sb.participant_id == sender_pid:
+                continue
+            if sb.participant_id in skip:   # người được nhắc tên đã nhận thông báo riêng
+                continue
+            if sb.participant_id and t - _CHAT_ACTIVE.get(sb.participant_id, 0) < CHAT_ACTIVE_WINDOW_S:
+                continue
+            if _in_quiet_hours(sb, now_vn):
+                continue
+            if sb.chat_pushed_at and (now - sb.chat_pushed_at).total_seconds() < CHAT_PUSH_THROTTLE_S:
+                continue
+            targets.append(sb)
+        if targets:
+            for sb in targets:
+                sb.chat_pushed_at = now
+            db.commit()
+            _web_push_to_subs(db, targets, {"title": f"💬 {club.name if club else 'Trò chuyện'}", "body": f"{name}: {(m.body or '')[:120]}",
+                                            "tag": f"chat-new-{slug}", "url": f"/public/report/{slug}#chat"})
+    except Exception as exc:   # noqa: BLE001
+        print(f"[chat-push] lỗi: {exc}")
+    finally:
+        db.close()
+
+
 def _web_push_to_subs(db: Session, subs, payload: dict) -> int:
     """Đẩy sự kiện (bình chọn mới, nhắc tên) tới danh sách subscription; 404/410 → xoá. Trả số gửi được."""
     if not _wp.enabled():
@@ -7147,6 +7207,8 @@ def chat_messages(request: Request, slug: str, after_id: Optional[int] = None, b
     rec = _validate_token(slug, db)
     part = _chat_participant(db, rec, x_chat_device)
     me_id = part.id if part else None
+    if me_id:
+        _CHAT_ACTIVE[me_id] = time.time()   # đang mở app → không đẩy tin thường
     q = db.query(models.ChatMessage).filter(models.ChatMessage.club_id == rec.club_id)
     if after_id:
         rows = q.filter(models.ChatMessage.id > after_id).order_by(models.ChatMessage.id.asc()).limit(CHAT_PAGE * 4).all()
@@ -7164,7 +7226,7 @@ def chat_messages(request: Request, slug: str, after_id: Optional[int] = None, b
 
 @app.post("/api/public/report/{slug}/chat/messages")
 @limiter.limit("30/minute")
-def chat_send(request: Request, slug: str, data: schemas.ChatMessageIn, db: Session = Depends(get_db),
+def chat_send(request: Request, slug: str, data: schemas.ChatMessageIn, background: BackgroundTasks, db: Session = Depends(get_db),
               x_chat_device: Optional[str] = Header(None)):
     rec = _validate_token(slug, db)
     part = _chat_participant(db, rec, x_chat_device, required=True)
@@ -7183,11 +7245,14 @@ def chat_send(request: Request, slug: str, data: schemas.ChatMessageIn, db: Sess
                            reply_to_id=data.reply_to_id, mention_ids=mentions or None)
     db.add(m); part.last_seen_at = datetime.utcnow(); db.commit(); db.refresh(m)
     pushed = 0
-    if mentions:   # đẩy tới thiết bị của người được nhắc tên
+    if mentions:   # đẩy ngay tới thiết bị của người được nhắc tên (không chống dồn, không giờ yên tĩnh; chat_mode off thì thôi)
         subs = db.query(models.PushSubscription).filter(models.PushSubscription.club_id == rec.club_id,
-                                                        models.PushSubscription.participant_id.in_(mentions)).all()
+                                                        models.PushSubscription.participant_id.in_(mentions),
+                                                        models.PushSubscription.chat_mode != "off").all()
         pushed = _web_push_to_subs(db, subs, {"title": f"{part.display_name} nhắc đến bạn", "body": data.body.strip()[:140],
                                               "tag": f"chat-mention-{m.id}", "url": f"/public/report/{slug}#chat"})
+    # tin thường → đẩy ở nền tới thiết bị chọn "Tất cả tin nhắn" (người được nhắc tên đã nhận riêng ở trên)
+    background.add_task(_push_chat_message_bg, rec.club_id, m.id, part.id, slug, mentions)
     return {**_chat_message_out(db, m, part.id, _chat_names(db, rec.club_id)), "pushed": pushed}
 
 
@@ -7219,7 +7284,8 @@ def chat_create_poll(request: Request, slug: str, data: schemas.ChatPollIn, db: 
     db.add(poll); db.flush()
     m = models.ChatMessage(club_id=rec.club_id, participant_id=part.id, kind="poll", poll_id=poll.id, body=poll.question)
     db.add(m); db.commit(); db.refresh(m)
-    subs = db.query(models.PushSubscription).filter(models.PushSubscription.club_id == rec.club_id).all()
+    subs = db.query(models.PushSubscription).filter(models.PushSubscription.club_id == rec.club_id,
+                                                    models.PushSubscription.chat_mode != "off").all()
     subs = [sb for sb in subs if sb.participant_id != part.id]
     pushed = _web_push_to_subs(db, subs, {"title": f"Bình chọn mới: {poll.question[:80]}", "body": f"{part.display_name} mời bạn bình chọn",
                                           "tag": f"chat-poll-{poll.id}", "url": f"/public/report/{slug}#chat"})
@@ -7392,7 +7458,8 @@ def admin_chat_create_poll(data: schemas.ChatPollIn, db: Session = Depends(get_d
     m = models.ChatMessage(club_id=perms.club_id, participant_id=None, kind="poll", poll_id=poll.id, body=poll.question, pinned=True)
     db.add(m); db.commit(); db.refresh(m)
     tok = db.query(models.PublicReportToken).filter(models.PublicReportToken.club_id == perms.club_id, models.PublicReportToken.is_active.is_(True)).first()
-    subs = db.query(models.PushSubscription).filter(models.PushSubscription.club_id == perms.club_id).all()
+    subs = db.query(models.PushSubscription).filter(models.PushSubscription.club_id == perms.club_id,
+                                                    models.PushSubscription.chat_mode != "off").all()
     pushed = _web_push_to_subs(db, subs, {"title": f"Bình chọn mới: {poll.question[:80]}", "body": f"{ADMIN_CHAT_NAME} mời bạn bình chọn",
                                           "tag": f"chat-poll-{poll.id}", "url": f"/public/report/{tok.slug or tok.token}#chat" if tok else "/"})
     return {**_chat_message_out(db, m, None, _chat_names(db, perms.club_id)), "pushed": pushed}
@@ -7406,6 +7473,32 @@ def admin_chat_close_poll(pid: int, db: Session = Depends(get_db), perms: ClubPe
         raise HTTPException(404, "Không tìm thấy bình chọn")
     poll.closed = True; db.commit()
     return _poll_out(db, poll, None)
+
+
+@app.get("/api/public/report/{slug}/push/prefs")
+@limiter.limit("60/minute")
+def public_push_prefs_get(request: Request, slug: str, endpoint: str, db: Session = Depends(get_db)):
+    """Tuỳ chọn thông báo trò chuyện của thiết bị (theo endpoint subscription)."""
+    rec = _validate_token(slug, db)
+    sub = db.query(models.PushSubscription).filter(models.PushSubscription.endpoint == endpoint, models.PushSubscription.club_id == rec.club_id).first()
+    if not sub:
+        raise HTTPException(404, "Thiết bị chưa bật thông báo cho link này")
+    return {"chat_mode": sub.chat_mode, "quiet_enabled": sub.quiet_enabled, "quiet_start": sub.quiet_start, "quiet_end": sub.quiet_end}
+
+
+@app.put("/api/public/report/{slug}/push/prefs")
+@limiter.limit("30/minute")
+def public_push_prefs_set(request: Request, slug: str, data: schemas.PushPrefsIn, db: Session = Depends(get_db)):
+    rec = _validate_token(slug, db)
+    sub = db.query(models.PushSubscription).filter(models.PushSubscription.endpoint == data.endpoint, models.PushSubscription.club_id == rec.club_id).first()
+    if not sub:
+        raise HTTPException(404, "Thiết bị chưa bật thông báo cho link này")
+    for k in ("chat_mode", "quiet_enabled", "quiet_start", "quiet_end"):
+        v = getattr(data, k)
+        if v is not None:
+            setattr(sub, k, v)
+    db.commit()
+    return {"chat_mode": sub.chat_mode, "quiet_enabled": sub.quiet_enabled, "quiet_start": sub.quiet_start, "quiet_end": sub.quiet_end}
 
 
 @app.get("/api/public/report/{slug}/manifest.webmanifest", include_in_schema=False)

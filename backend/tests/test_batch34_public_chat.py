@@ -107,7 +107,10 @@ def test_poll_create_vote_add_option_close_and_push(client, world, db, monkeypat
     assert client.get(f"/api/public/report/{slug}/chat/messages").json()["messages"][-1]["poll"]["closed"] is True
     # nhắc tên → đẩy tới thiết bị của người được nhắc (a), không tới người khác
     r = client.post(f"/api/public/report/{slug}/chat/messages", json={"body": "@An đi không?", "mention_ids": [id_a]}, headers=_h(dev_b))
-    assert r.json()["pushed"] == 1 and sent[-1][0].endswith("/sub/axxxxxxxxxxxxxx") and "nhắc đến bạn" in sent[-1][1]["title"]
+    assert r.json()["pushed"] == 1
+    mention = [p for e, p in sent if e.endswith("/sub/axxxxxxxxxxxxxx") and "nhắc đến bạn" in p["title"]]
+    assert len(mention) == 1   # a nhận nhắc tên riêng; tin thường chỉ đẩy nền tới c (a đã nhận, b là người gửi)
+    assert [e[-15:-14] for e, p in sent if p["tag"].startswith("chat-new-")] == ["c"]
 
 
 def test_lock_mute_and_pin_gate(client, world, db):

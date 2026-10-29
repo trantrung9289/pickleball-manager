@@ -823,6 +823,13 @@ class PushSubscription(Base):
     user_agent = Column(String(300), nullable=True)
     failures = Column(Integer, nullable=False, default=0)
     participant_id = Column(Integer, ForeignKey("chat_participants.id"), nullable=True)   # thiết bị đã vào trò chuyện → đẩy khi được nhắc tên
+    # 2026-10-29: thông báo TRÒ CHUYỆN tách riêng khỏi nhắc nhở — chat_mode: all | mentions | off; giờ yên tĩnh theo thiết bị (giờ VN);
+    # chat_pushed_at: chống dồn 30s cho tin thường (nhắc tên/bình chọn không bị chống dồn, không bị giờ yên tĩnh)
+    chat_mode = Column(String(10), nullable=False, default="all")
+    quiet_enabled = Column(Boolean, nullable=False, default=True)
+    quiet_start = Column(Integer, nullable=False, default=22)
+    quiet_end = Column(Integer, nullable=False, default=7)
+    chat_pushed_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
     last_seen_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 

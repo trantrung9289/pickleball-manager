@@ -43,7 +43,11 @@ def db():
 
 @pytest.fixture(autouse=True)
 def _clean_db():
-    """Mỗi test bắt đầu với DB trống (giữ schema)."""
+    """Mỗi test bắt đầu với DB trống (giữ schema) và bộ đếm rate-limit trống (các test chat gọi join nhiều lần)."""
+    try:
+        main.limiter.reset()
+    except Exception:
+        pass
     yield
     with engine.begin() as conn:
         for table in reversed(Base.metadata.sorted_tables):

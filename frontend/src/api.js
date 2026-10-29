@@ -304,6 +304,8 @@ export const createPublicReportApi = (slug) => {
       config: () => pub.get("/api/public/push/config"),
       subscribe: (body) => pub.post(`${base}/push/subscribe`, body),
       unsubscribe: (body) => pub.post(`${base}/push/unsubscribe`, body),
+      prefs: (endpoint) => pub.get(`${base}/push/prefs`, { params: { endpoint } }),   // tuỳ chọn thông báo trò chuyện theo thiết bị
+      setPrefs: (body) => pub.put(`${base}/push/prefs`, body),                        // { endpoint, chat_mode?, quiet_enabled?, quiet_start?, quiet_end? }
     },
     reports: {
       summary: (year) => pub.get(`${base}/summary`, { params: { year } }),

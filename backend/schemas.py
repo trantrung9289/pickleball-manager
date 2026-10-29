@@ -1243,3 +1243,12 @@ class ChatPurgeIn(BaseModel):
     before: date
     after: Optional[date] = None
 
+
+class PushPrefsIn(BaseModel):
+    """Tuỳ chọn thông báo trò chuyện theo thiết bị (endpoint = subscription của thiết bị đó)."""
+    endpoint: str = Field(min_length=20, max_length=2000)
+    chat_mode: Optional[str] = Field(default=None, pattern=r"^(all|mentions|off)$")
+    quiet_enabled: Optional[bool] = None
+    quiet_start: Optional[int] = Field(default=None, ge=0, le=23)
+    quiet_end: Optional[int] = Field(default=None, ge=0, le=23)
+

@@ -2,13 +2,67 @@
  * PushSettings — khối "Thông báo trên thiết bị" trong Drawer chuông trang public (2026-10-28).
  * Trạng thái: máy chủ chưa cấu hình / trình duyệt không hỗ trợ / iOS chưa thêm vào màn hình chính (hướng dẫn 3 bước) /
  * bị chặn quyền / sẵn sàng (nút Bật) / đã bật (nút Tắt). Đăng ký qua props.push (createPublicReportApi().push).
+ * 2026-10-29: khi đã bật, hiện thêm khối RIÊNG "Thông báo trò chuyện" (tách khỏi nhắc nhở): chế độ Tất cả / Chỉ nhắc tên & bình chọn / Tắt,
+ * giờ yên tĩnh theo thiết bị (mặc định 22h–7h). Lưu theo endpoint subscription của thiết bị.
  */
 import { useEffect, useState } from "react";
-import { Alert, Button, Space, Typography, message } from "antd";
-import { BellOutlined, CheckCircleOutlined, ShareAltOutlined } from "@ant-design/icons";
+import { Alert, Button, Select, Space, Switch, Typography, message } from "antd";
+import { BellOutlined, CheckCircleOutlined, ShareAltOutlined, MessageOutlined } from "@ant-design/icons";
 import { pushSupportState, readPushEnv, currentSubscription, subscribeBrowser, unsubscribeBrowser } from "../utils/webPush";
 
 const { Text } = Typography;
+
+const HOURS = Array.from({ length: 24 }, (_, h) => ({ value: h, label: `${String(h).padStart(2, "0")}:00` }));
+
+/** Khối "Thông báo trò chuyện" — tách riêng khỏi nhắc nhở; đọc/lưu tuỳ chọn theo endpoint subscription của thiết bị. */
+function ChatPushPrefs({ push }) {
+  const [prefs, setPrefs] = useState(null);
+  const [endpoint, setEndpoint] = useState(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    currentSubscription().then((s) => {
+      if (!s) return;
+      setEndpoint(s.endpoint);
+      return push.prefs(s.endpoint).then((r) => setPrefs(r.data));
+    }).catch(() => {});
+  }, [push]);
+  if (!prefs) return null;
+  const save = async (patch) => {
+    setBusy(true);
+    try { const r = await push.setPrefs({ endpoint, ...patch }); setPrefs(r.data); }
+    catch (err) { message.error(err?.response?.data?.detail || "Không lưu được"); }
+    finally { setBusy(false); }
+  };
+  return (
+    <div style={{ padding: "10px 12px", marginBottom: 8, borderRadius: 10, background: "var(--info-soft)", border: "1px solid var(--info)" }}>
+      <Text strong style={{ display: "block", marginBottom: 6 }}><MessageOutlined /> Thông báo trò chuyện</Text>
+      <Space direction="vertical" size={8} style={{ width: "100%" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <Text>Nhận tin nhắn</Text>
+          <Select size="small" value={prefs.chat_mode} disabled={busy} style={{ width: 210 }} onChange={(v) => save({ chat_mode: v })}
+            options={[{ value: "all", label: "Tất cả tin nhắn" }, { value: "mentions", label: "Chỉ nhắc tên và bình chọn" }, { value: "off", label: "Tắt" }]} />
+        </div>
+        {prefs.chat_mode === "all" && (
+          <>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+              <Text>Giờ yên tĩnh (không đẩy tin thường)</Text>
+              <Switch size="small" checked={prefs.quiet_enabled} disabled={busy} onChange={(v) => save({ quiet_enabled: v })} />
+            </div>
+            {prefs.quiet_enabled && (
+              <Space size={6} wrap>
+                <Text type="secondary">Từ</Text>
+                <Select size="small" value={prefs.quiet_start} options={HOURS} style={{ width: 90 }} disabled={busy} onChange={(v) => save({ quiet_start: v })} />
+                <Text type="secondary">đến</Text>
+                <Select size="small" value={prefs.quiet_end} options={HOURS} style={{ width: 90 }} disabled={busy} onChange={(v) => save({ quiet_end: v })} />
+              </Space>
+            )}
+            <Text type="secondary" style={{ fontSize: 12 }}>Nhắc tên và bình chọn vẫn báo trong giờ yên tĩnh. Nhắc phí, lịch sinh hoạt không bị ảnh hưởng.</Text>
+          </>
+        )}
+      </Space>
+    </div>
+  );
+}
 
 export default function PushSettings({ push }) {
   const [cfg, setCfg] = useState(null);            // { enabled, public_key }
@@ -72,9 +126,12 @@ export default function PushSettings({ push }) {
   );
 
   return (
-    <div style={{ padding: "10px 12px", marginBottom: 8, borderRadius: 10, background: "var(--brand-soft)", border: "1px solid var(--brand-line)" }}>
-      <Text strong style={{ display: "block", marginBottom: 4 }}>Thông báo trên thiết bị</Text>
-      {body}
-    </div>
+    <>
+      <div style={{ padding: "10px 12px", marginBottom: 8, borderRadius: 10, background: "var(--brand-soft)", border: "1px solid var(--brand-line)" }}>
+        <Text strong style={{ display: "block", marginBottom: 4 }}>Thông báo nhắc nhở trên thiết bị</Text>
+        {body}
+      </div>
+      {subscribed && cfg?.enabled && <ChatPushPrefs push={push} />}
+    </>
   );
 }
