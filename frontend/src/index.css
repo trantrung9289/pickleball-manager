@@ -306,3 +306,6 @@ a:focus-visible,
 [data-mode="galaxy"] .chat-preview::after { background: rgba(13, 17, 32, 0.96); border-color: rgba(255, 255, 255, 0.16); }
 @media (prefers-reduced-motion: reduce) { .chat-fab--pulse, .chat-preview, .chat-panel { animation: none; } .chat-fab, .chat-fab:hover { transition: none; transform: none; } }
 @media print { .chat-fab-wrap, .chat-preview, .chat-panel, .ui-bottom-nav { display: none !important; } }
+
+/* ── BOT CLB (2026-10-29): dùng lại .chat-fab/.chat-panel, panel rộng hơn một chút ───────────── */
+.chat-panel--bot { width: 420px; height: min(680px, calc(100vh - 110px)); }

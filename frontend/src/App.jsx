@@ -9,6 +9,7 @@ import {
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { announcementsApi, logoSrc } from "./api";
 import ClubSettingsModal from "./components/ClubSettingsModal";
+import ClubBot from "./components/clubbot/ClubBot";
 import { ViewModeProvider, useViewMode } from "./contexts/ViewModeContext";
 import { useAppTheme, THEMES } from "./contexts/ThemeContext";
 import ViewModeSwitcher from "./components/ViewModeSwitcher";
@@ -268,6 +269,9 @@ function AppShell() {
           </Suspense>
         </Content>
       </Layout>
+
+      {/* BOT CLB (2026-10-29): nút nổi + khung hội thoại nhập liệu, chỉ ở chế độ quản lý CLB */}
+      <ClubBot />
 
       {brandOpen && (
         <ClubSettingsModal club={selectedClub} onClose={() => setBrandOpen(false)}

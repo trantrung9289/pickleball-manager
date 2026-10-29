@@ -58,6 +58,12 @@ export default function Transactions() {
   // Cờ loading bên trong load() cần bật lại mỗi khi đổi bộ lọc (filters đổi → load đổi).
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { load(); }, [load]);
+  // BOT CLB ghi giao dịch → tải lại bảng đang mở (sự kiện window, không cần bấm làm mới)
+  useEffect(() => {
+    const h = (e) => { if (!e.detail?.entity || e.detail.entity === "transactions") load(); };
+    window.addEventListener("clb:data-changed", h);
+    return () => window.removeEventListener("clb:data-changed", h);
+  }, [load]);
   useEffect(() => {
     feeTypesApi.list().then((r) => setFeeTypes(r.data));
     membersApi.list().then((r) => setMembers(r.data));
