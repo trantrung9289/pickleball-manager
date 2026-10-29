@@ -1,3 +1,7 @@
+/**
+ * MobileBottomNav — thanh điều hướng dưới cùng trên mobile (admin + trang public).
+ * 2026-10-29: màu theo biến CSS (--surface/--line/--brand/--muted) → theo màu thương hiệu CLB và chế độ tối/Galaxy (index.css .ui-bottom-nav).
+ */
 import { AppstoreOutlined } from "@ant-design/icons";
 
 export default function MobileBottomNav({ items, current, onSelect, onMore, moreActive }) {
@@ -7,63 +11,20 @@ export default function MobileBottomNav({ items, current, onSelect, onMore, more
   ];
 
   return (
-    <nav
-      style={{
-        position: "fixed",
-        bottom: 0,
-        left: 0,
-        right: 0,
-        zIndex: 1000,
-        background: "#fff",
-        borderTop: "1px solid #d9d9d9",
-        boxShadow: "0 -2px 12px rgba(0,0,0,0.10)",
-        display: "flex",
-        paddingBottom: "env(safe-area-inset-bottom, 0px)",
-      }}
-    >
+    <nav className="ui-bottom-nav" style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 1000, display: "flex", paddingBottom: "env(safe-area-inset-bottom, 0px)" }}>
       {tabs.map((tab) => {
         const active = tab.type === "more" ? moreActive : current === tab.key && !moreActive;
         return (
           <button
             key={tab.key}
+            type="button"
+            className={`ui-bottom-nav__item${active ? " is-active" : ""}`}
             onClick={() => (tab.type === "more" ? onMore() : onSelect(tab.key))}
-            style={{
-              flex: 1,
-              border: "none",
-              background: "transparent",
-              cursor: "pointer",
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 3,
-              padding: "6px 0 8px",
-              minHeight: 58,
-              color: active ? "#1677ff" : "#434343",
-              transition: "color 0.15s",
-              position: "relative",
-            }}
+            aria-current={active ? "page" : undefined}
           >
-            {active && (
-              <span
-                style={{
-                  position: "absolute",
-                  top: 0,
-                  left: "50%",
-                  transform: "translateX(-50%)",
-                  width: 32,
-                  height: 3,
-                  borderRadius: "0 0 3px 3px",
-                  background: "#1677ff",
-                }}
-              />
-            )}
-            <span style={{ fontSize: 24, lineHeight: 1, display: "flex" }}>
-              {tab.icon}
-            </span>
-            <span style={{ fontSize: 11, fontWeight: active ? 700 : 500, lineHeight: 1.2 }}>
-              {tab.label}
-            </span>
+            {active && <span className="ui-bottom-nav__bar" />}
+            <span style={{ fontSize: 24, lineHeight: 1, display: "flex" }}>{tab.icon}</span>
+            <span style={{ fontSize: 11, fontWeight: active ? 700 : 500, lineHeight: 1.2 }}>{tab.label}</span>
           </button>
         );
       })}

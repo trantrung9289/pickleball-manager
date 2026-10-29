@@ -3,13 +3,15 @@
  * máy chủ cấp device_id lưu localStorage (utils/chat.js), gửi kèm header X-Chat-Device (api.js). Văn bản ≤500 ký tự, trả lời,
  * nhắc tên bằng @ (antd Mentions), bình chọn kiểu Zalo (PollCard). Lấy tin mới mỗi 4s theo after_id; cuộn lên tải tin cũ.
  * Không file/ảnh/video. Admin khoá kênh → chỉ đọc. Đợt 2: quản trị (ghim/xoá/tắt tiếng) ở trang admin.
+ * 2026-10-29: nhúng trong nút trò chuyện nổi (ChatBubble) — prop embedded → cao theo khung chứa; ghi mốc "đã đọc" (utils/chat saveLastRead)
+ * khi đang ở đáy danh sách để nút nổi đếm tin chưa đọc.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Button, Card, Checkbox, DatePicker, Empty, Form, Input, Mentions, Modal, Space, Tag, Typography, message } from "antd";
 import { SendOutlined, BarChartOutlined, LockOutlined, CloseOutlined, DeleteOutlined } from "@ant-design/icons";
 import PollCard from "./PollCard";
 import { StatusChip } from "../ui";
-import { saveDevice, extractMentionIds, mergeMessages, shortTime } from "../../utils/chat";
+import { saveDevice, extractMentionIds, mergeMessages, shortTime, saveLastRead } from "../../utils/chat";
 
 const { Text } = Typography;
 const POLL_MS = 4000;
@@ -110,7 +112,7 @@ export function PollModal({ open, onClose, api, onCreated }) {
   );
 }
 
-export default function PublicChat({ api, slug }) {
+export default function PublicChat({ api, slug, embedded = false }) {
   const [me, setMe] = useState(undefined);        // undefined = đang kiểm tra, null = chưa vào
   const [locked, setLocked] = useState(false);
   const [messages, setMessages] = useState([]);
@@ -140,7 +142,9 @@ export default function PublicChat({ api, slug }) {
     if (data.pinned) setPinned(data.pinned);
     if (typeof data.locked === "boolean") setLocked(data.locked);
     if (initial) setHasOlder((data.messages || []).length >= 50);
-  }, []);
+    // đang ở đáy (hoặc tải lần đầu) → mọi tin vừa nhận coi như đã đọc
+    if (initial || stickBottomRef.current) { const mx = Math.max(0, ...(data.messages || []).map((m) => m.id)); if (mx) saveLastRead(slug, mx); }
+  }, [slug]);
 
   useEffect(() => { loadMe(); loadParticipants(); }, [loadMe, loadParticipants]);
   useEffect(() => {
@@ -160,6 +164,7 @@ export default function PublicChat({ api, slug }) {
     const el = listRef.current;
     if (!el) return;
     stickBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+    if (stickBottomRef.current && lastIdRef.current) saveLastRead(slug, lastIdRef.current);   // cuộn xuống đáy → đã đọc hết
     if (el.scrollTop < 30 && hasOlder && !loadingOlder && messages.length) {
       setLoadingOlder(true);
       const before = messages[0].id; const h = el.scrollHeight;
@@ -179,7 +184,7 @@ export default function PublicChat({ api, slug }) {
     setSending(true);
     try {
       const r = await api.send({ body, reply_to_id: replyTo?.id || null, mention_ids: extractMentionIds(body, participants) });
-      setMessages((prev) => mergeMessages(prev, [r.data])); lastIdRef.current = Math.max(lastIdRef.current, r.data.id);
+      setMessages((prev) => mergeMessages(prev, [r.data])); lastIdRef.current = Math.max(lastIdRef.current, r.data.id); saveLastRead(slug, r.data.id);
       setText(""); setReplyTo(null); stickBottomRef.current = true; setTimeout(scrollBottom, 30);
     } catch (err) {
       const code = err?.response?.data?.detail?.code;
@@ -195,7 +200,7 @@ export default function PublicChat({ api, slug }) {
 
   if (me === undefined) return null;
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "calc(100vh - 230px)", minHeight: 420 }}>
+    <div style={embedded ? { display: "flex", flexDirection: "column", flex: 1, minHeight: 0, height: "100%" } : { display: "flex", flexDirection: "column", height: "calc(100vh - 230px)", minHeight: 420 }}>
       {locked && <Alert type="warning" showIcon icon={<LockOutlined />} message="Kênh đang được khoá: chỉ đọc" style={{ marginBottom: 8 }} />}
       {pinned.length > 0 && (
         <div style={{ marginBottom: 8, padding: "6px 10px", borderRadius: 10, background: "var(--warn-soft)", border: "1px solid var(--warn)", fontSize: 13 }}>
@@ -226,7 +231,7 @@ export default function PublicChat({ api, slug }) {
           </div>
         </div>
       )}
-      <PollModal open={pollOpen} onClose={() => setPollOpen(false)} api={api} onCreated={(m) => { setMessages((prev) => mergeMessages(prev, [m])); lastIdRef.current = Math.max(lastIdRef.current, m.id); setTimeout(scrollBottom, 30); }} />
+      <PollModal open={pollOpen} onClose={() => setPollOpen(false)} api={api} onCreated={(m) => { setMessages((prev) => mergeMessages(prev, [m])); lastIdRef.current = Math.max(lastIdRef.current, m.id); saveLastRead(slug, m.id); setTimeout(scrollBottom, 30); }} />
     </div>
   );
 }

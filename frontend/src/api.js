@@ -299,6 +299,7 @@ export const createPublicReportApi = (slug) => {
       vote: (id, option_ids) => pub.post(`${base}/chat/polls/${id}/vote`, { option_ids }),
       addOption: (id, text) => pub.post(`${base}/chat/polls/${id}/options`, { text }),
       closePoll: (id) => pub.post(`${base}/chat/polls/${id}/close`),
+      unread: (params) => pub.get(`${base}/chat/unread`, { params }),   // nút nổi (2026-10-29): { after_id? } → { count, last_id, latest }
     },
     push: {   // Web Push cho người xem public (2026-10-28)
       config: () => pub.get("/api/public/push/config"),

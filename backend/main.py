@@ -7224,6 +7224,36 @@ def chat_messages(request: Request, slug: str, after_id: Optional[int] = None, b
             "locked": bool(club and club.chat_locked), "me_id": me_id}
 
 
+@app.get("/api/public/report/{slug}/chat/unread")
+@limiter.limit("30/minute")
+def chat_unread(request: Request, slug: str, after_id: Optional[int] = None, db: Session = Depends(get_db),
+                x_chat_device: Optional[str] = Header(None)):
+    """Nút trò chuyện nổi (2026-10-29): đếm tin chưa đọc sau after_id (không tính tin của mình / đã thu hồi, trần 99) + tin mới nhất
+    để hiện bong bóng xem trước. Không có after_id (thiết bị lần đầu) → count 0, chỉ trả last_id để client ghi mốc đã đọc.
+    Gọi định kỳ khi trang đang mở → đánh dấu "đang mở app" (không đẩy tin thường ra hệ điều hành, thay bằng badge trong app)."""
+    rec = _validate_token(slug, db)
+    part = _chat_participant(db, rec, x_chat_device)
+    me_id = part.id if part else None
+    if me_id:
+        _CHAT_ACTIVE[me_id] = time.time()
+    q = db.query(models.ChatMessage).filter(models.ChatMessage.club_id == rec.club_id)
+    last = q.order_by(models.ChatMessage.id.desc()).first()
+    last_id = last.id if last else 0
+    if after_id is None:
+        return {"count": 0, "last_id": last_id, "latest": None}
+    unread_q = q.filter(models.ChatMessage.id > after_id, models.ChatMessage.deleted_at.is_(None))
+    if me_id:
+        unread_q = unread_q.filter(or_(models.ChatMessage.participant_id != me_id, models.ChatMessage.participant_id.is_(None)))
+    count = unread_q.count()
+    latest = None
+    if count:
+        m = unread_q.order_by(models.ChatMessage.id.desc()).first()
+        name = ADMIN_CHAT_NAME if m.participant_id is None else _chat_names(db, rec.club_id).get(m.participant_id, "?")
+        body = (m.body or "")[:120]
+        latest = {"id": m.id, "name": name, "kind": m.kind, "body": f"Bình chọn: {body}" if m.kind == "poll" else body}
+    return {"count": min(count, 99), "last_id": last_id, "latest": latest}
+
+
 @app.post("/api/public/report/{slug}/chat/messages")
 @limiter.limit("30/minute")
 def chat_send(request: Request, slug: str, data: schemas.ChatMessageIn, background: BackgroundTasks, db: Session = Depends(get_db),

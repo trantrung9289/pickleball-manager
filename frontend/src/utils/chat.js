@@ -50,3 +50,26 @@ export function mergeMessages(existing, incoming) {
   for (const m of incoming || []) map.set(m.id, m);
   return [...map.values()].sort((a, b) => a.id - b.id);
 }
+
+/* ── Nút trò chuyện nổi (2026-10-29): mốc "đã đọc" theo thiết bị + dòng xem trước ───────────────── */
+export const readKey = (slug) => `chat_read:${slug}`;
+/** id tin cuối đã thấy trên thiết bị này; null = chưa có mốc (lần đầu → chỉ ghi mốc, không đếm). */
+export function readLastRead(slug) {
+  try { const v = localStorage.getItem(readKey(slug)); return v == null || v === "" ? null : Number(v); } catch { return null; }
+}
+/** Chỉ tiến, không lùi: giữ mốc lớn nhất đã thấy. */
+export function saveLastRead(slug, id) {
+  const n = Number(id);
+  if (!Number.isFinite(n)) return;
+  try {
+    const cur = readLastRead(slug);
+    if (cur == null || n > cur) localStorage.setItem(readKey(slug), String(n));
+  } catch { /* bỏ qua */ }
+}
+/** Dòng xem trước "Tên: nội dung" cạnh nút nổi, cắt gọn theo max ký tự (bình chọn đã có tiền tố từ server). */
+export function previewLine(latest, max = 90) {
+  if (!latest) return "";
+  const body = String(latest.body || "").replace(/\s+/g, " ").trim();
+  const cut = body.length > max ? `${body.slice(0, max - 1).trimEnd()}…` : body;
+  return `${latest.name || "?"}: ${cut}`;
+}

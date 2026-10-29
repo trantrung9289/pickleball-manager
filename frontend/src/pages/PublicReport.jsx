@@ -4,13 +4,13 @@ import {
 } from "antd";
 import {
   LockOutlined, EyeOutlined, CalendarOutlined, TrophyOutlined,
-  BarChartOutlined, TeamOutlined, DollarOutlined, MessageOutlined,
+  BarChartOutlined, TeamOutlined, DollarOutlined,
 } from "@ant-design/icons";
 import dayjs from "dayjs";
 import { createPublicReportApi, logoSrc } from "../api";
 import { YearlySummary, MonthlyStats, MemberContributions, FeeStatusTracker } from "../components/ReportContent";
 import PublicTournamentTracker from "../components/PublicTournamentTracker";
-import PublicChat from "../components/chat/PublicChat";
+import ChatBubble from "../components/chat/ChatBubble";
 import { ViewModeProvider, useViewMode } from "../contexts/ViewModeContext";
 import ViewModeSwitcher from "../components/ViewModeSwitcher";
 import ThemeSwitcher from "../components/ThemeSwitcher";
@@ -35,7 +35,7 @@ function PublicReportInner({ token }) {
   const [reloadTick, setReloadTick] = useState(0);
   const pinBoxRef = useRef(null);
   const [year, setYear] = useState(dayjs().year());
-  const [activeSection, setActiveSection] = useState(() => (typeof window !== "undefined" && window.location.hash === "#chat") ? "chat" : "monthly-detail");
+  const [activeSection, setActiveSection] = useState("monthly-detail");   // trò chuyện: nút nổi ChatBubble (tự mở khi #chat)
   const { token: antToken } = theme.useToken();
   const { themeConfig } = useAppTheme();
   const { isMobileView } = useViewMode();
@@ -88,7 +88,6 @@ function PublicReportInner({ token }) {
     { key: "contributions", label: "Đóng góp thành viên", navLabel: "Đóng góp", icon: <TeamOutlined />, children: <MemberContributions year={year} api={api} /> },
     { key: "fee-status", label: "Theo dõi phí", navLabel: "Phí", icon: <DollarOutlined />, children: <FeeStatusTracker year={year} api={api} showPhone={false} /> },
     { key: "tournaments", label: "Theo dõi giải đấu", navLabel: "Giải đấu", icon: <TrophyOutlined />, children: <PublicTournamentTracker api={api} /> },
-    { key: "chat", label: "Trò chuyện", navLabel: "Chat", icon: <MessageOutlined />, children: <PublicChat api={api.chat} slug={token} /> },
   ];
 
   useEffect(() => {
@@ -260,6 +259,9 @@ function PublicReportInner({ token }) {
           onSelect={setActiveSection}
         />
       )}
+
+      {/* Trò chuyện: nút nổi + panel (2026-10-29) — lối vào duy nhất, số tin chưa đọc, bong bóng xem trước */}
+      <ChatBubble api={api.chat} slug={token} />
     </div>
   );
 }
