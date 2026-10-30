@@ -32,7 +32,7 @@ function ZoomBox({ zoom, children }) {
   }, []);
   const scaled = zoom !== 1;
   return (
-    <div style={{ overflow: "auto", paddingBottom: 8 }}>
+    <div className="ui-zoombox" style={{ overflow: "auto", paddingBottom: 8 }}>
       <div style={scaled && size ? { width: size.w * zoom, height: size.h * zoom } : undefined}>
         <div ref={innerRef} style={{ width: "max-content", ...(scaled ? { transform: `scale(${zoom})`, transformOrigin: "0 0" } : {}) }}>
           {children}

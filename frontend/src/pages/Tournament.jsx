@@ -823,7 +823,8 @@ function BracketTreeDesktop({ matches, onScoreClick, renderDetail }) {
   if (!roundsNodes.length) return null;
   const thirdPlaceInfo = findThirdPlaceMatch(matches);
   const { centers, totalHeight } = computeBracketGeometry(roundsNodes, { boxHeight: TREE_BOX_H, minGap: 30 });
-  const treeWidth = roundsNodes.length * (TREE_BOX_W + TREE_COL_GAP) + 190; // +190 cho ô "Vô địch"
+  // Cột bên phải: ô "Vô địch" (160) và, nếu có, ô "Tranh giải 3" (200) xếp dưới nó — tính đủ để không bị cắt mép
+  const treeWidth = roundsNodes.length * (TREE_BOX_W + TREE_COL_GAP) + (thirdPlaceInfo ? 210 : 190);
 
   const lines = [];
   roundsNodes.forEach((round, r) => {
@@ -849,10 +850,12 @@ function BracketTreeDesktop({ matches, onScoreClick, renderDetail }) {
     ? teamLabel(finalMatch.winner_id === finalMatch.p1_id ? finalMatch.p1 : finalMatch.p2)
     : null;
   const champBoxTop = finalY - 36 + TREE_HEADER_H;
+  // Ô tranh giải 3 nằm dưới ô vô địch (+78): chừa chỗ (nhãn + 2 dòng tên có thể bọc) kẻo bị cắt đáy khi giải chỉ có 2 trận ở vòng đầu
+  const treeHeight = Math.max(totalHeight + TREE_HEADER_H + 16, thirdPlaceInfo ? champBoxTop + 78 + 24 + 110 : 0);
 
   return (
-    <div style={{ overflowX: "auto", paddingBottom: 8 }}>
-      <div style={{ position: "relative", width: treeWidth, height: totalHeight + TREE_HEADER_H + 16 }}>
+    <div>   {/* cuộn ngang/dọc do khung BracketFrame lo — không tự cuộn ở đây (tự cuộn thì bị co khít cây, kẹt thanh cuộn) */}
+      <div style={{ position: "relative", width: treeWidth, height: treeHeight }}>
         {roundsNodes.map((round, i) => {
           const done = round.filter(n => n.match.status === "completed").length;
           return (
