@@ -2,7 +2,7 @@
 // Lần xuất hiện (item) do backend tính (announcements.py); ở đây chỉ: khoá "đã xem" theo trình duyệt, nhãn hiển thị.
 
 export const WEEKDAY_LABELS = ["Thứ 2", "Thứ 3", "Thứ 4", "Thứ 5", "Thứ 6", "Thứ 7", "Chủ nhật"]; // 0 = Thứ 2 (khớp Python weekday)
-export const KIND_LABELS = { schedule: "Lịch sinh hoạt", fee: "Khoản thu" };
+export const KIND_LABELS = { schedule: "Lịch sinh hoạt", fee: "Khoản thu", report: "Báo cáo" };
 export const RECURRENCE_LABELS = { none: "Một lần", weekly: "Hàng tuần", monthly: "Hàng tháng" };
 const SEEN_MAX = 200;
 
@@ -130,4 +130,35 @@ export function historyResult(row) {
   if (row.sent_count) parts.push(`✔ ${row.sent_count}`);
   if (row.error_count) parts.push(`✖ ${row.error_count}`);
   return parts.join(" · ") || "—";
+}
+
+// ── Báo cáo định kỳ (2026-10-30) ──
+export const REPORT_TYPE_LABELS = { summary: "Tổng hợp thu chi", transactions: "Giao dịch" };
+export const REPORT_CHANNEL_LABELS = { telegram: "Telegram quản trị viên", zalo: "Nhóm Zalo", web: "Thiết bị" };
+/** Khoảng thời gian tương đối theo ngày gửi; luôn kết thúc HẾT HÔM QUA (chỉ lấy ngày trọn vẹn). */
+export const REPORT_RANGE_OPTIONS = [
+  { value: "yesterday", label: "Hôm qua" },
+  { value: "last7", label: "7 ngày gần nhất" },
+  { value: "last_week", label: "Tuần trước (Thứ 2 đến Chủ nhật)" },
+  { value: "this_month", label: "Tháng này (từ ngày 1 đến hết hôm qua)" },
+  { value: "last_month", label: "Tháng trước" },
+  { value: "last_quarter", label: "Quý trước" },
+  { value: "this_year", label: "Năm nay (từ 1/1 đến hết hôm qua)" },
+  { value: "last_n", label: "N ngày gần nhất" },
+  { value: "fixed", label: "Khoảng cố định (gửi một lần)" },
+];
+const RANGE_SHORT = { yesterday: "Hôm qua", last7: "7 ngày gần nhất", last_week: "Tuần trước", this_month: "Tháng này", last_month: "Tháng trước", last_quarter: "Quý trước", this_year: "Năm nay" };
+const ddmmyyyy = (iso) => { const [y, m, d] = String(iso || "").slice(0, 10).split("-"); return y && m && d ? `${d}/${m}/${y}` : ""; };
+
+/** "Tháng trước" / "30 ngày gần nhất" / "01/10/2026 – 31/10/2026". */
+export function reportRangeText(r) {
+  if (r.report_range === "last_n") return `${r.report_range_days || 7} ngày gần nhất`;
+  if (r.report_range === "fixed") return `${ddmmyyyy(r.report_from)} – ${ddmmyyyy(r.report_to)}`;
+  return RANGE_SHORT[r.report_range] || "";
+}
+
+/** Dòng mô tả quy tắc báo cáo trong bảng: "Giao dịch · Tháng trước · Telegram quản trị viên, Nhóm Zalo · ẩn tên". */
+export function reportSummaryText(r) {
+  const chans = (r.report_channels?.length ? r.report_channels : ["telegram"]).map((c) => REPORT_CHANNEL_LABELS[c] || c).join(", ");
+  return [REPORT_TYPE_LABELS[r.report_type] || "", reportRangeText(r), chans, r.report_type === "transactions" && r.report_hide_names ? "ẩn tên" : ""].filter(Boolean).join(" · ");
 }

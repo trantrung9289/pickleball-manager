@@ -40,6 +40,7 @@ export default function PushHistoryCard({ refreshKey = 0 }) {
         <Space size={6} wrap>
           <b>{v}</b>
           {r.pre && <StatusChip tone="warn">Nhắc trước giờ</StatusChip>}
+          {r.kind === "report" && <StatusChip tone="info">Báo cáo</StatusChip>}
         </Space>
       ),
     },

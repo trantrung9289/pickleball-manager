@@ -1,7 +1,7 @@
 // Chạy: npm test (node --test). Hàm thuần của thông báo/chuông: khoá đã xem, đếm chưa xem, nhãn ngày, gộp tên chưa đóng.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { itemKey, weekdayLabelOfDate, formatWhen, statusChip, unreadCount, mergeSeen, unpaidPreview, groupByDate, shareText, formatHistoryTime, historyResult, PUSH_CHANNEL_LABELS, PUSH_SOURCE_LABELS } from "./announcements.js";
+import { itemKey, weekdayLabelOfDate, formatWhen, statusChip, unreadCount, mergeSeen, unpaidPreview, groupByDate, shareText, formatHistoryTime, historyResult, PUSH_CHANNEL_LABELS, PUSH_SOURCE_LABELS, KIND_LABELS, REPORT_RANGE_OPTIONS, reportRangeText, reportSummaryText } from "./announcements.js";
 
 test("weekdayLabelOfDate + formatWhen: 2026-10-27 là Thứ 3, có giờ thì nối giờ", () => {
   assert.equal(weekdayLabelOfDate("2026-10-27"), "Thứ 3");
@@ -63,4 +63,16 @@ test("lịch sử đẩy: nhãn kênh/nguồn, kết quả ✔/✖, định dạ
   assert.equal(formatHistoryTime(d.toISOString()), "07:05:09 05/10/2026");
   assert.equal(formatHistoryTime(""), "");
   assert.equal(formatHistoryTime("không phải ngày"), "");
+});
+
+test("báo cáo định kỳ: nhãn loại, khoảng thời gian, mô tả quy tắc", () => {
+  assert.equal(KIND_LABELS.report, "Báo cáo");
+  assert.deepEqual(REPORT_RANGE_OPTIONS.map((o) => o.value), ["yesterday", "last7", "last_week", "this_month", "last_month", "last_quarter", "this_year", "last_n", "fixed"]);
+  assert.equal(reportRangeText({ report_range: "last_month" }), "Tháng trước");
+  assert.equal(reportRangeText({ report_range: "last_n", report_range_days: 30 }), "30 ngày gần nhất");
+  assert.equal(reportRangeText({ report_range: "fixed", report_from: "2026-10-01", report_to: "2026-10-31" }), "01/10/2026 – 31/10/2026");
+  assert.equal(reportSummaryText({ report_type: "summary", report_range: "last_week" }), "Tổng hợp thu chi · Tuần trước · Telegram quản trị viên");
+  assert.equal(reportSummaryText({ report_type: "transactions", report_range: "yesterday", report_channels: ["telegram", "zalo"], report_hide_names: true }),
+    "Giao dịch · Hôm qua · Telegram quản trị viên, Nhóm Zalo · ẩn tên");
+  assert.equal(reportSummaryText({ report_type: "summary", report_range: "yesterday", report_channels: ["web"], report_hide_names: true }), "Tổng hợp thu chi · Hôm qua · Thiết bị");   // ẩn tên chỉ áp cho báo cáo giao dịch
 });

@@ -170,6 +170,14 @@ def _run_migration():
         ("clubs", "zalo_show_unpaid_names", "BOOLEAN DEFAULT 1 NOT NULL", None),
         # 2026-10-30: duyệt nhóm Zalo (nhóm cũ = approved)
         ("zalo_groups", "status", "VARCHAR(10) DEFAULT 'approved' NOT NULL", None),
+        # 2026-10-30: báo cáo định kỳ qua thông báo (kind = report)
+        ("announcements", "report_type", "VARCHAR(20)", None),
+        ("announcements", "report_range", "VARCHAR(20)", None),
+        ("announcements", "report_range_days", "INTEGER", None),
+        ("announcements", "report_from", "DATE", None),
+        ("announcements", "report_to", "DATE", None),
+        ("announcements", "report_channels", "JSON", None),
+        ("announcements", "report_hide_names", "BOOLEAN DEFAULT 0 NOT NULL", None),
         ("zalo_groups", "added_by_id", "VARCHAR(60)", None),
         # 2026-10-28: mã PIN cho link công khai
         ("public_report_tokens", "pin_hash", "VARCHAR(64)", None),
@@ -6646,6 +6654,7 @@ def _unpaid_members(db: Session, club_id: int, fee_type_id: int, month: int, yea
 import announcements as _ann
 import webpush_service as _wp
 import zalo_bot as _zalo
+import report_notify as _rn
 import hmac as _hmac
 
 
@@ -6669,12 +6678,16 @@ def _validate_announcement_payload(db: Session, club_id: int, merged: dict):
 
 
 def _announcement_feed(db: Session, club_id: int, today: date, horizon_days: int = 14,
-                       public_only: bool = False, include_later: bool = False) -> list:
-    """Lần xuất hiện đang hiển thị (và sắp tới nếu include_later) của CLB, đã gắn nội dung khoản thu."""
+                       public_only: bool = False, include_later: bool = False, include_reports: bool = False) -> list:
+    """Lần xuất hiện đang hiển thị (và sắp tới nếu include_later) của CLB, đã gắn nội dung khoản thu.
+    Báo cáo định kỳ (kind=report) KHÔNG hiện ở chuông / trang public / xem trước: chỉ đẩy qua kênh đã chọn; include_reports=True
+    chỉ dùng để tính lần gửi (cron)."""
     q = db.query(models.Announcement).filter(models.Announcement.club_id == club_id, models.Announcement.is_active.is_(True))
     if public_only:
         q = q.filter(models.Announcement.show_public.is_(True))
     rules = q.all()
+    if not include_reports:
+        rules = [r for r in rules if r.kind != "report"]
     items = _ann.build_feed_items(rules, today, horizon_days, include_later=include_later)
     by_id = {r.id: r for r in rules}
     for it in items:
@@ -6752,6 +6765,11 @@ def update_announcement(aid: int, data: schemas.AnnouncementUpdate, background: 
               if c.name in schemas.AnnouncementBase.model_fields}
     merged.update(changes)
     _validate_announcement_payload(db, perms.club_id, {k: (v.isoformat() if isinstance(v, date) else v) for k, v in merged.items()})
+    if str(getattr(merged.get("kind"), "value", merged.get("kind"))) == "report":
+        # cùng chuẩn hoá như schemas._check_announcement_rule (PUT chỉ kiểm tra rồi áp changes thô)
+        changes.update({"lead_days": 0, "repeat_daily": False, "show_public": False, "fee_type_id": None, "start_time": None,
+                        "duration_min": None, "remind_before_min": None,
+                        "report_channels": sorted(set(merged.get("report_channels") or ["telegram"]))})
     for k, v in changes.items():
         setattr(a, k, v)
     db.commit(); db.refresh(a)
@@ -6847,7 +6865,9 @@ def _pre_remind_log(db: Session, item: dict, channel: str, target_id: int) -> No
 
 def _announcement_push_text(item: dict, club_name: str) -> str:
     """Nội dung Telegram (Markdown) cho một lần xuất hiện: lịch sinh hoạt hoặc khoản thu (kèm tên chưa đóng).
-    item["pre_minutes"] (nhắc trước giờ bắt đầu) → tiêu đề "Sắp đến giờ" + dòng còn bao lâu."""
+    item["pre_minutes"] (nhắc trước giờ bắt đầu) → tiêu đề "Sắp đến giờ" + dòng còn bao lâu. kind=report → bản báo cáo (it["_report"] đã tính)."""
+    if item.get("kind") == "report":
+        return _rn.render_text(item["_report"], item, club_name)
     d = date.fromisoformat(item["date"])
     when = f"{_ann.WEEKDAY_LABELS[d.weekday()]}, {d.strftime('%d/%m/%Y')}"
     if item.get("start_time"):
@@ -6926,6 +6946,28 @@ def _push_history_purge(db: Session) -> int:
     return n
 
 
+# ── BÁO CÁO ĐỊNH KỲ (2026-10-30) ──
+def _report_fields(r) -> dict:
+    """Trường của quy tắc báo cáo gắn vào item để các hàm gửi tự sinh nội dung theo từng kênh."""
+    return {"report_type": r.report_type, "report_range": r.report_range, "report_range_days": r.report_range_days,
+            "report_from": r.report_from.isoformat() if r.report_from else None, "report_to": r.report_to.isoformat() if r.report_to else None,
+            "channels": list(r.report_channels or ["telegram"]), "hide_names": bool(r.report_hide_names)}
+
+
+def _item_wants(it: dict, channel: str) -> bool:
+    """Báo cáo chỉ đi các kênh đã chọn (mặc định Telegram quản trị viên); các loại thông báo khác đi mọi kênh như cũ."""
+    return it.get("kind") != "report" or channel in (it.get("channels") or ["telegram"])
+
+
+def _ensure_report(db: Session, club_id: int, it: dict) -> None:
+    """Tính số liệu báo cáo MỘT lần cho item (cache ở it["_report"], dùng chung ba kênh); chỉ gọi khi sắp gửi thật."""
+    if it.get("kind") != "report" or "_report" in it:
+        return
+    today = date.fromisoformat(it["date"])   # ngày gửi: khoảng tương đối tính theo ngày này
+    start, end = _rn.resolve_range(it.get("report_range"), today, it.get("report_range_days"), it.get("report_from"), it.get("report_to"))
+    it["_report"] = _rn.build_report(db, club_id, it.get("report_type"), start, end, hide_names=bool(it.get("hide_names")))
+
+
 def _push_announcement_items(db: Session, club_id: int, items: list, today: date, bot_token: str, dedupe: bool = True, source: str = "cron") -> dict:
     """Gửi các item tới admin CLB. dedupe=True (cron): bỏ qua (announcement, ngày xuất hiện, chat_id) đã gửi hôm nay."""
     out = {"sent": 0, "skipped": 0, "errors": []}
@@ -6934,12 +6976,15 @@ def _push_announcement_items(db: Session, club_id: int, items: list, today: date
     chat_ids = _club_admin_chat_ids(db, club_id)
     if not chat_ids:
         return out
+    items = [it for it in items if _item_wants(it, "telegram")]
+    if not items:
+        return out
     club = db.query(models.Club).filter(models.Club.id == club_id).first()
     club_name = club.name if club else str(club_id)
     hacc: dict = {}
     for it in items:
         occ = date.fromisoformat(it["date"])
-        text = _announcement_push_text(it, club_name)
+        text = None   # soạn lazily: không tốn truy vấn khi mọi người nhận đã được gửi hôm nay
         pre = it.get("pre_minutes") is not None   # lần nhắc trước giờ bắt đầu: log riêng, một lần cho mỗi lần xuất hiện
         for chat_id in chat_ids:
             if dedupe and (_pre_remind_logged(db, it, "tg", chat_id) if pre else db.query(models.AnnouncementPushLog).filter(
@@ -6951,6 +6996,9 @@ def _push_announcement_items(db: Session, club_id: int, items: list, today: date
                 out["skipped"] += 1
                 continue
             try:
+                if text is None:
+                    _ensure_report(db, club_id, it)
+                    text = _announcement_push_text(it, club_name)
                 _telegram_send(bot_token, chat_id, text)
                 if dedupe:   # gửi tay (dedupe=False) không ghi log — như nhắc phí thủ công, gửi bao nhiêu lần tuỳ admin
                     if pre:
@@ -6983,13 +7031,17 @@ def _due_announcement_items(db: Session, club_id: int, now: datetime) -> list:
       trả bản sao item kèm "pre_minutes"; chống trùng ở announcement_pre_remind_log (một lần cho mỗi lần xuất hiện)."""
     today = now.date()
     hhmm = now.strftime("%H:%M")
-    items = _announcement_feed(db, club_id, today, 60)
+    items = _announcement_feed(db, club_id, today, 60, include_reports=True)
     rules = {a.id: a for a in db.query(models.Announcement).filter(
         models.Announcement.club_id == club_id, models.Announcement.push_telegram.is_(True)).all()}
     due = []
     for it in items:
         r = rules.get(it["announcement_id"])
         if not r:
+            continue
+        if r.kind == "report":   # báo cáo: chỉ đúng ngày gửi (lead_days = 0), sau giờ đẩy; không nhắc trước giờ bắt đầu
+            if it["date"] == today.isoformat() and r.push_time and hhmm >= r.push_time:
+                due.append({**it, **_report_fields(r)})
             continue
         d = date.fromisoformat(it["date"])
         first_day = d - timedelta(days=max(0, int(r.lead_days or 0)))
@@ -7006,6 +7058,9 @@ def _due_announcement_items(db: Session, club_id: int, now: datetime) -> list:
 
 def _web_push_payload(it: dict, club_name: str, slug) -> dict:
     """Nội dung thông báo hệ điều hành: tiêu đề ngắn, thân ≤ 200 ký tự, bấm vào mở trang public."""
+    if it.get("kind") == "report":
+        title, body = _rn.render_web(it["_report"], it, club_name)
+        return {"title": title, "body": body, "tag": f"ann-{it['announcement_id']}-{it['date']}", "url": f"/public/report/{slug}" if slug else "/"}
     d = date.fromisoformat(it["date"])
     when = f"{_ann.WEEKDAY_LABELS[d.weekday()]} {d.strftime('%d/%m')}" + (f" · {it['start_time']}" if it.get("start_time") else "")
     pre = it.get("pre_minutes")
@@ -7031,6 +7086,7 @@ def _send_web_push_items(db: Session, club_id: int, items: list, today: date, de
     out = {"sent": 0, "skipped": 0, "removed": 0, "errors": 0}
     if not _wp.enabled():
         return out
+    items = [it for it in items if _item_wants(it, "web")]
     subs = db.query(models.PushSubscription).filter(models.PushSubscription.club_id == club_id).all()
     if not subs or not items:
         return out
@@ -7051,6 +7107,7 @@ def _send_web_push_items(db: Session, club_id: int, items: list, today: date, de
                 models.WebPushLog.subscription_id == sub.id, models.WebPushLog.send_date == today).first() is not None):
                 out["skipped"] += 1
                 continue
+            _ensure_report(db, club_id, it)
             res = _wp.send_push(sub_info, _web_push_payload(it, club_name, slug))
             if res == "ok":
                 out["sent"] += 1
@@ -7093,7 +7150,9 @@ def _zalo_enabled_groups(db: Session, club_id: int) -> list:
 
 def _zalo_text(it: dict, club) -> str:
     """Nội dung tin nhóm Zalo: dùng chung _announcement_push_text (markdown) nhưng KHÔNG kèm SĐT (nhóm đông người);
-    tắt zalo_show_unpaid_names → bỏ danh sách tên (giữ dòng 'Còn N người chưa đóng' trong body)."""
+    tắt zalo_show_unpaid_names → bỏ danh sách tên (giữ dòng 'Còn N người chưa đóng' trong body). Báo cáo: cùng bản Telegram."""
+    if it.get("kind") == "report":
+        return _announcement_push_text(it, club.name)
     item = dict(it)
     if item.get("kind") == "fee":
         members = item.get("unpaid_members") or []
@@ -7108,6 +7167,7 @@ def _send_zalo_items(db: Session, club_id: int, items: list, today: date, dedupe
     out = {"sent": 0, "skipped": 0, "errors": 0, "disabled": 0}
     club = db.query(models.Club).filter(models.Club.id == club_id).first()
     token = _zalo_token(club)
+    items = [it for it in items if _item_wants(it, "zalo")]
     groups = _zalo_enabled_groups(db, club_id) if token else []
     if not groups or not items:
         return out
@@ -7123,6 +7183,7 @@ def _send_zalo_items(db: Session, club_id: int, items: list, today: date, dedupe
                 out["skipped"] += 1
                 continue
             try:
+                _ensure_report(db, club_id, it)
                 for chunk in _zalo.chunk_text(_zalo_text(it, club)):
                     _zalo.send_text(token, g.chat_id, chunk)
                 g.failures, g.last_error, g.last_sent_at = 0, None, datetime.utcnow()
@@ -7477,15 +7538,21 @@ def push_announcement_now(aid: int, db: Session = Depends(get_db), perms: ClubPe
     if not a:
         raise HTTPException(404, "Không tìm thấy thông báo")
     today = _now_vn().date()
-    items = [it for it in _announcement_feed(db, perms.club_id, today, 60, include_later=True) if it["announcement_id"] == aid]
+    is_report = a.kind == "report"
+    if is_report:   # báo cáo: luôn gửi được, khoảng thời gian tính theo HÔM NAY (không phụ thuộc lần xuất hiện kế tiếp)
+        items = [{"announcement_id": a.id, "kind": "report", "title": a.title, "body": a.body, "date": today.isoformat(), "status": "today",
+                  "start_time": None, "duration_min": None, **_report_fields(a)}]
+    else:
+        items = [it for it in _announcement_feed(db, perms.club_id, today, 60, include_later=True) if it["announcement_id"] == aid]
     if not items:
         raise HTTPException(400, "Quy tắc không có lần xuất hiện nào trong 60 ngày tới")
-    tg_ok = _club_bot_enabled(db, perms.club_id) and bool(_club_admin_chat_ids(db, perms.club_id))
-    wp_subs = db.query(models.PushSubscription).filter(models.PushSubscription.club_id == perms.club_id).count() if _wp.enabled() else 0
+    chans = set(a.report_channels or ["telegram"]) if is_report else {"telegram", "zalo", "web"}
+    tg_ok = "telegram" in chans and _club_bot_enabled(db, perms.club_id) and bool(_club_admin_chat_ids(db, perms.club_id))
+    wp_subs = db.query(models.PushSubscription).filter(models.PushSubscription.club_id == perms.club_id).count() if _wp.enabled() and "web" in chans else 0
     club = _club_or_404(db, perms.club_id)
-    zl_ok = bool(_zalo_token(club)) and bool(_zalo_enabled_groups(db, perms.club_id))
+    zl_ok = "zalo" in chans and bool(_zalo_token(club)) and bool(_zalo_enabled_groups(db, perms.club_id))
     if not tg_ok and not wp_subs and not zl_ok:
-        raise HTTPException(400, "Chưa có kênh nhận: không có quản trị viên liên kết Telegram, chưa ai bật thông báo trên thiết bị và chưa có nhóm Zalo")
+        raise HTTPException(400, "Chưa có kênh nhận: không có quản trị viên liên kết Telegram, chưa ai bật thông báo trên thiết bị và chưa có nhóm Zalo" + (" (hoặc kênh đó chưa được chọn cho báo cáo này)" if is_report else ""))
     res = {"sent": 0, "errors": []}
     if tg_ok:
         res = _push_announcement_items(db, perms.club_id, items[:1], today, _bot_token_or_500(), dedupe=False, source="manual")

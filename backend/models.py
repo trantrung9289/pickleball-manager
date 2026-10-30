@@ -798,6 +798,17 @@ class Announcement(Base):
     push_time = Column(String(5), nullable=True)
     # 2026-10-30: nhắc thêm một lần trước giờ bắt đầu (phút), chỉ lịch có start_time, gửi đúng ngày diễn ra; NULL = không nhắc
     remind_before_min = Column(Integer, nullable=True)
+    # 2026-10-30: kind="report" — BÁO CÁO ĐỊNH KỲ qua kênh đã chọn (không hiện chuông/public). Nội dung tự sinh từ thu chi lúc gửi.
+    # report_type: summary | transactions; report_range: yesterday|last7|last_week|this_month|last_month|last_quarter|this_year|last_n|fixed
+    # (kết thúc hết hôm qua; last_n dùng report_range_days; fixed dùng report_from/report_to và chỉ gửi một lần);
+    # report_channels: JSON ["telegram","zalo","web"], mặc định ["telegram"]; report_hide_names: bỏ tên người + ghi chú trong danh sách giao dịch
+    report_type = Column(String(20), nullable=True)
+    report_range = Column(String(20), nullable=True)
+    report_range_days = Column(Integer, nullable=True)
+    report_from = Column(Date, nullable=True)
+    report_to = Column(Date, nullable=True)
+    report_channels = Column(JSON, nullable=True)
+    report_hide_names = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 

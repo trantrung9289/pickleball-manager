@@ -1082,6 +1082,7 @@ class TeamLogOut(BaseModel):
 class AnnouncementKind(str, Enum):
     schedule = "schedule"
     fee = "fee"
+    report = "report"     # 2026-10-30: báo cáo định kỳ (tổng hợp thu chi / giao dịch)
 
 
 class AnnouncementRecurrence(str, Enum):
@@ -1109,6 +1110,14 @@ class AnnouncementBase(BaseModel):
     push_telegram: bool = False
     push_time: Optional[str] = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")      # giờ đẩy VN, bắt buộc khi push_telegram
     remind_before_min: Optional[int] = Field(default=None, ge=0, le=1440)                     # nhắc trước giờ bắt đầu (phút)
+    # 2026-10-30: báo cáo định kỳ (kind = report)
+    report_type: Optional[str] = Field(default=None, pattern=r"^(summary|transactions)$")
+    report_range: Optional[str] = Field(default=None, pattern=r"^(yesterday|last7|last_week|this_month|last_month|last_quarter|this_year|last_n|fixed)$")
+    report_range_days: Optional[int] = Field(default=None, ge=1, le=366)
+    report_from: Optional[date] = None
+    report_to: Optional[date] = None
+    report_channels: Optional[List[str]] = None
+    report_hide_names: bool = False
 
     @field_validator("weekdays")
     @classmethod
@@ -1133,6 +1142,27 @@ def _check_announcement_rule(m):
         raise ValueError("Thông báo khoản thu cần fee_type_id")
     if m.start_date and m.end_date and m.end_date < m.start_date:
         raise ValueError("end_date phải sau start_date")
+    if m.kind == AnnouncementKind.report:
+        if not m.report_type:
+            raise ValueError("Báo cáo cần chọn loại báo cáo")
+        if not m.report_range:
+            raise ValueError("Báo cáo cần chọn khoảng thời gian")
+        if m.report_range == "last_n" and not m.report_range_days:
+            raise ValueError("Chọn số ngày gần nhất")
+        if m.report_range == "fixed":
+            if not (m.report_from and m.report_to):
+                raise ValueError("Khoảng cố định cần từ ngày và đến ngày")
+            if m.report_to < m.report_from:
+                raise ValueError("Đến ngày phải sau từ ngày")
+            if m.recurrence != AnnouncementRecurrence.none:
+                raise ValueError("Khoảng cố định chỉ dùng cho báo cáo gửi một lần")
+        chans = [c for c in (m.report_channels or ["telegram"])]
+        if not chans or any(c not in ("telegram", "zalo", "web") for c in chans):
+            raise ValueError("Kênh nhận báo cáo chỉ gồm telegram, zalo, web")
+        m.report_channels = sorted(set(chans))
+        # báo cáo không có cửa sổ hiện trước, không hiện trang public, không có giờ bắt đầu / nhắc trước / khoản thu
+        m.lead_days, m.repeat_daily, m.show_public, m.fee_type_id = 0, False, False, None
+        m.start_time, m.duration_min, m.remind_before_min = None, None, None
     # 2026-10-30: bật đẩy thì phải đặt giờ đẩy (không có giờ mặc định — tất cả cấu hình thủ công)
     if m.push_telegram and not m.push_time:
         raise ValueError("Bật đẩy thông báo cần đặt Giờ đẩy")
@@ -1174,6 +1204,13 @@ class AnnouncementUpdate(BaseModel):
     push_telegram: Optional[bool] = None
     push_time: Optional[str] = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
     remind_before_min: Optional[int] = Field(default=None, ge=0, le=1440)
+    report_type: Optional[str] = Field(default=None, pattern=r"^(summary|transactions)$")
+    report_range: Optional[str] = Field(default=None, pattern=r"^(yesterday|last7|last_week|this_month|last_month|last_quarter|this_year|last_n|fixed)$")
+    report_range_days: Optional[int] = Field(default=None, ge=1, le=366)
+    report_from: Optional[date] = None
+    report_to: Optional[date] = None
+    report_channels: Optional[List[str]] = None
+    report_hide_names: Optional[bool] = None
 
 
 class AnnouncementOut(AnnouncementBase):
