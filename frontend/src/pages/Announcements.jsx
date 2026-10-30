@@ -23,7 +23,7 @@ import { announcementsApi, feeTypesApi } from "../api";
 import useHotkey from "../hooks/useHotkey";
 import usePublicLink from "../hooks/usePublicLink";
 import PushHistoryCard from "../components/PushHistoryCard";
-import { WEEKDAY_LABELS, KIND_LABELS, groupByDate, remindLabel, REPORT_TYPE_LABELS, REPORT_RANGE_OPTIONS, REPORT_CHANNEL_LABELS, reportSummaryText } from "../utils/announcements";
+import { WEEKDAY_LABELS, KIND_LABELS, groupByDate, remindLabel, REPORT_TYPE_LABELS, REPORT_RANGE_OPTIONS, REPORT_CHANNEL_LABELS, reportSummaryText, REPORT_NAME_TYPES, REPORT_FEE_TYPES } from "../utils/announcements";
 
 const { Title, Text } = Typography;
 const { TextArea } = Input;
@@ -70,7 +70,8 @@ const fromForm = (v) => {
     report_from: isReport && v.report_range === "fixed" && v.report_period?.[0] ? v.report_period[0].format("YYYY-MM-DD") : null,
     report_to: isReport && v.report_range === "fixed" && v.report_period?.[1] ? v.report_period[1].format("YYYY-MM-DD") : null,
     report_channels: isReport ? (v.report_channels?.length ? v.report_channels : ["telegram"]) : null,
-    report_hide_names: isReport && v.report_type === "transactions" ? !!v.report_hide_names : false,
+    report_hide_names: isReport && REPORT_NAME_TYPES.includes(v.report_type) ? !!v.report_hide_names : false,
+    report_fee_type_id: isReport && REPORT_FEE_TYPES.includes(v.report_type) ? v.report_fee_type_id ?? null : null,
   };
 };
 
@@ -273,6 +274,17 @@ export default function Announcements({ perms, clubName = "" }) {
               <Form.Item name="report_type" label="Loại báo cáo" rules={[{ required: true, message: "Chọn loại báo cáo" }]}>
                 <Radio.Group optionType="button" options={Object.entries(REPORT_TYPE_LABELS).map(([value, label]) => ({ value, label }))} />
               </Form.Item>
+              {REPORT_FEE_TYPES.includes(reportType) && (
+                <Form.Item name="report_fee_type_id" label="Khoản thu"
+                  rules={reportType === "fee_status" ? [{ required: true, message: "Chọn khoản thu cần theo dõi" }] : []}
+                  extra={reportType === "fee_status"
+                    ? "Thành viên đang hoạt động có giao dịch khoản này trong kỳ là đã đóng, còn lại là chưa đóng. Khách mời đã đóng chỉ được đếm."
+                    : "Bỏ trống để tính mọi khoản thu. Chỉ tính các khoản thu (không tính khoản chi)."}>
+                  <Select allowClear={reportType === "contributions"} showSearch optionFilterProp="label"
+                    placeholder={reportType === "fee_status" ? "Chọn khoản thu" : "Tất cả khoản thu"}
+                    options={feeTypes.map((f) => ({ value: f.id, label: f.name }))} />
+                </Form.Item>
+              )}
               <Form.Item name="report_range" label="Khoảng thời gian lấy dữ liệu" rules={[{ required: true, message: "Chọn khoảng thời gian" }]}
                 extra="Tính theo ngày gửi và kết thúc ở hết hôm qua (chỉ lấy các ngày trọn vẹn). Tồn đầu kỳ và tồn cuối kỳ tính theo khoảng đã chọn.">
                 <Select options={REPORT_RANGE_OPTIONS} placeholder="Chọn khoảng thời gian"
@@ -352,9 +364,11 @@ export default function Announcements({ perms, clubName = "" }) {
               {(reportChannels || []).some((c) => c === "zalo" || c === "web") && (
                 <Alert type="warning" showIcon style={{ marginBottom: 12 }} message="Nhóm Zalo và thiết bị sẽ thấy số liệu thu chi" />
               )}
-              {reportType === "transactions" && (
-                <Form.Item name="report_hide_names" label="Ẩn tên thành viên và ghi chú" valuePropName="checked" style={{ marginBottom: 0 }}
-                  extra="Danh sách giao dịch chỉ còn ngày, thu hoặc chi, khoản và số tiền.">
+              {REPORT_NAME_TYPES.includes(reportType) && (
+                <Form.Item name="report_hide_names" label={reportType === "transactions" ? "Ẩn tên thành viên và ghi chú" : "Ẩn tên thành viên"} valuePropName="checked" style={{ marginBottom: 0 }}
+                  extra={reportType === "transactions" ? "Danh sách giao dịch chỉ còn ngày, thu hoặc chi, khoản và số tiền."
+                    : reportType === "contributions" ? "Chỉ còn số người đóng góp và tổng tiền, không liệt kê tên."
+                      : "Chỉ còn số người đã đóng và chưa đóng, không liệt kê tên người chưa đóng."}>
                   <Switch />
                 </Form.Item>
               )}

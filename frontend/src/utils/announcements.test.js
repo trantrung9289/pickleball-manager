@@ -1,7 +1,7 @@
 // Chạy: npm test (node --test). Hàm thuần của thông báo/chuông: khoá đã xem, đếm chưa xem, nhãn ngày, gộp tên chưa đóng.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { itemKey, weekdayLabelOfDate, formatWhen, statusChip, unreadCount, mergeSeen, unpaidPreview, groupByDate, shareText, formatHistoryTime, historyResult, PUSH_CHANNEL_LABELS, PUSH_SOURCE_LABELS, KIND_LABELS, REPORT_RANGE_OPTIONS, reportRangeText, reportSummaryText } from "./announcements.js";
+import { itemKey, weekdayLabelOfDate, formatWhen, statusChip, unreadCount, mergeSeen, unpaidPreview, groupByDate, shareText, formatHistoryTime, historyResult, PUSH_CHANNEL_LABELS, PUSH_SOURCE_LABELS, KIND_LABELS, REPORT_RANGE_OPTIONS, reportRangeText, reportSummaryText, REPORT_TYPE_LABELS, REPORT_NAME_TYPES, REPORT_FEE_TYPES } from "./announcements.js";
 
 test("weekdayLabelOfDate + formatWhen: 2026-10-27 là Thứ 3, có giờ thì nối giờ", () => {
   assert.equal(weekdayLabelOfDate("2026-10-27"), "Thứ 3");
@@ -75,4 +75,16 @@ test("báo cáo định kỳ: nhãn loại, khoảng thời gian, mô tả quy t
   assert.equal(reportSummaryText({ report_type: "transactions", report_range: "yesterday", report_channels: ["telegram", "zalo"], report_hide_names: true }),
     "Giao dịch · Hôm qua · Telegram quản trị viên, Nhóm Zalo · ẩn tên");
   assert.equal(reportSummaryText({ report_type: "summary", report_range: "yesterday", report_channels: ["web"], report_hide_names: true }), "Tổng hợp thu chi · Hôm qua · Thiết bị");   // ẩn tên chỉ áp cho báo cáo giao dịch
+});
+
+test("báo cáo đợt 2: nhãn loại, loại dùng khoản thu / ẩn tên, mô tả có tên khoản", () => {
+  assert.deepEqual(Object.keys(REPORT_TYPE_LABELS), ["summary", "transactions", "contributions", "fee_status"]);
+  assert.equal(REPORT_TYPE_LABELS.fee_status, "Theo dõi phí");
+  assert.deepEqual(REPORT_FEE_TYPES, ["contributions", "fee_status"]);
+  assert.deepEqual(REPORT_NAME_TYPES, ["transactions", "contributions", "fee_status"]);
+  assert.equal(reportSummaryText({ report_type: "fee_status", report_fee_type_id: 3, report_fee_type_name: "Quỹ CLB", report_range: "last_month", report_hide_names: true }),
+    "Theo dõi phí · Quỹ CLB · Tháng trước · Telegram quản trị viên · ẩn tên");
+  assert.equal(reportSummaryText({ report_type: "contributions", report_range: "last7", report_channels: ["zalo"] }), "Đóng góp thành viên · 7 ngày gần nhất · Nhóm Zalo");   // không lọc khoản
+  assert.equal(reportSummaryText({ report_type: "contributions", report_fee_type_id: 9, report_fee_type_name: null, report_range: "yesterday" }), "Đóng góp thành viên · khoản đã xoá · Hôm qua · Telegram quản trị viên");
+  assert.equal(reportSummaryText({ report_type: "summary", report_fee_type_id: 3, report_fee_type_name: "X", report_range: "yesterday", report_hide_names: true }), "Tổng hợp thu chi · Hôm qua · Telegram quản trị viên");   // loại khác bỏ qua khoản và ẩn tên
 });

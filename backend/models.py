@@ -809,6 +809,8 @@ class Announcement(Base):
     report_to = Column(Date, nullable=True)
     report_channels = Column(JSON, nullable=True)
     report_hide_names = Column(Boolean, nullable=False, default=False)
+    # đợt 2: report_type contributions (lọc khoản, tuỳ chọn) | fee_status (bắt buộc). Số nguyên thường, KHÔNG khoá ngoại: xoá khoản bị chặn ở delete_fee_type
+    report_fee_type_id = Column(Integer, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 

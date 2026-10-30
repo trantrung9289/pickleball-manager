@@ -133,7 +133,11 @@ export function historyResult(row) {
 }
 
 // ── Báo cáo định kỳ (2026-10-30) ──
-export const REPORT_TYPE_LABELS = { summary: "Tổng hợp thu chi", transactions: "Giao dịch" };
+export const REPORT_TYPE_LABELS = { summary: "Tổng hợp thu chi", transactions: "Giao dịch", contributions: "Đóng góp thành viên", fee_status: "Theo dõi phí" };
+/** Loại báo cáo liệt kê tên người → có công tắc "Ẩn tên". */
+export const REPORT_NAME_TYPES = ["transactions", "contributions", "fee_status"];
+/** Loại báo cáo dùng khoản thu: fee_status bắt buộc, contributions tuỳ chọn (lọc một khoản). */
+export const REPORT_FEE_TYPES = ["contributions", "fee_status"];
 export const REPORT_CHANNEL_LABELS = { telegram: "Telegram quản trị viên", zalo: "Nhóm Zalo", web: "Thiết bị" };
 /** Khoảng thời gian tương đối theo ngày gửi; luôn kết thúc HẾT HÔM QUA (chỉ lấy ngày trọn vẹn). */
 export const REPORT_RANGE_OPTIONS = [
@@ -157,8 +161,9 @@ export function reportRangeText(r) {
   return RANGE_SHORT[r.report_range] || "";
 }
 
-/** Dòng mô tả quy tắc báo cáo trong bảng: "Giao dịch · Tháng trước · Telegram quản trị viên, Nhóm Zalo · ẩn tên". */
+/** Dòng mô tả quy tắc báo cáo trong bảng: "Theo dõi phí · Quỹ CLB · Tháng trước · Telegram quản trị viên, Nhóm Zalo · ẩn tên". */
 export function reportSummaryText(r) {
   const chans = (r.report_channels?.length ? r.report_channels : ["telegram"]).map((c) => REPORT_CHANNEL_LABELS[c] || c).join(", ");
-  return [REPORT_TYPE_LABELS[r.report_type] || "", reportRangeText(r), chans, r.report_type === "transactions" && r.report_hide_names ? "ẩn tên" : ""].filter(Boolean).join(" · ");
+  const fee = REPORT_FEE_TYPES.includes(r.report_type) && r.report_fee_type_id ? (r.report_fee_type_name || "khoản đã xoá") : "";
+  return [REPORT_TYPE_LABELS[r.report_type] || "", fee, reportRangeText(r), chans, REPORT_NAME_TYPES.includes(r.report_type) && r.report_hide_names ? "ẩn tên" : ""].filter(Boolean).join(" · ");
 }

@@ -1111,13 +1111,14 @@ class AnnouncementBase(BaseModel):
     push_time: Optional[str] = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")      # giờ đẩy VN, bắt buộc khi push_telegram
     remind_before_min: Optional[int] = Field(default=None, ge=0, le=1440)                     # nhắc trước giờ bắt đầu (phút)
     # 2026-10-30: báo cáo định kỳ (kind = report)
-    report_type: Optional[str] = Field(default=None, pattern=r"^(summary|transactions)$")
+    report_type: Optional[str] = Field(default=None, pattern=r"^(summary|transactions|contributions|fee_status)$")
     report_range: Optional[str] = Field(default=None, pattern=r"^(yesterday|last7|last_week|this_month|last_month|last_quarter|this_year|last_n|fixed)$")
     report_range_days: Optional[int] = Field(default=None, ge=1, le=366)
     report_from: Optional[date] = None
     report_to: Optional[date] = None
     report_channels: Optional[List[str]] = None
     report_hide_names: bool = False
+    report_fee_type_id: Optional[int] = None
 
     @field_validator("weekdays")
     @classmethod
@@ -1147,6 +1148,10 @@ def _check_announcement_rule(m):
             raise ValueError("Báo cáo cần chọn loại báo cáo")
         if not m.report_range:
             raise ValueError("Báo cáo cần chọn khoảng thời gian")
+        if m.report_type == "fee_status" and not m.report_fee_type_id:
+            raise ValueError("Báo cáo Theo dõi phí cần chọn khoản thu")
+        if m.report_type not in ("contributions", "fee_status"):
+            m.report_fee_type_id = None   # chỉ hai loại này dùng khoản thu
         if m.report_range == "last_n" and not m.report_range_days:
             raise ValueError("Chọn số ngày gần nhất")
         if m.report_range == "fixed":
@@ -1204,19 +1209,21 @@ class AnnouncementUpdate(BaseModel):
     push_telegram: Optional[bool] = None
     push_time: Optional[str] = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
     remind_before_min: Optional[int] = Field(default=None, ge=0, le=1440)
-    report_type: Optional[str] = Field(default=None, pattern=r"^(summary|transactions)$")
+    report_type: Optional[str] = Field(default=None, pattern=r"^(summary|transactions|contributions|fee_status)$")
     report_range: Optional[str] = Field(default=None, pattern=r"^(yesterday|last7|last_week|this_month|last_month|last_quarter|this_year|last_n|fixed)$")
     report_range_days: Optional[int] = Field(default=None, ge=1, le=366)
     report_from: Optional[date] = None
     report_to: Optional[date] = None
     report_channels: Optional[List[str]] = None
     report_hide_names: Optional[bool] = None
+    report_fee_type_id: Optional[int] = None
 
 
 class AnnouncementOut(AnnouncementBase):
     id: int
     club_id: int
     fee_type_name: Optional[str] = None
+    report_fee_type_name: Optional[str] = None
     recurrence_label: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None

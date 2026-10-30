@@ -178,6 +178,7 @@ def _run_migration():
         ("announcements", "report_to", "DATE", None),
         ("announcements", "report_channels", "JSON", None),
         ("announcements", "report_hide_names", "BOOLEAN DEFAULT 0 NOT NULL", None),
+        ("announcements", "report_fee_type_id", "INTEGER", None),
         ("zalo_groups", "added_by_id", "VARCHAR(60)", None),
         # 2026-10-28: mã PIN cho link công khai
         ("public_report_tokens", "pin_hash", "VARCHAR(64)", None),
@@ -1596,6 +1597,10 @@ def delete_fee_type(
     tx_count = db.query(models.Transaction).filter(models.Transaction.fee_type_id == ft_id).count()
     if tx_count:
         raise HTTPException(400, f"Không thể xoá: có {tx_count} giao dịch đang dùng khoản này")
+    rule_count = db.query(models.Announcement).filter(models.Announcement.club_id == perms.club_id,
+                                                      models.Announcement.report_fee_type_id == ft_id).count()
+    if rule_count:
+        raise HTTPException(400, f"Không thể xoá: có {rule_count} quy tắc báo cáo đang dùng khoản này")
     db.query(models.ReminderLog).filter(models.ReminderLog.fee_type_id == ft_id).delete(synchronize_session=False)
     db.delete(ft)
     db.commit()
@@ -6655,12 +6660,17 @@ import announcements as _ann
 import webpush_service as _wp
 import zalo_bot as _zalo
 import report_notify as _rn
+from sqlalchemy.orm import object_session as _object_session
 import hmac as _hmac
 
 
 def _announcement_out(a: models.Announcement) -> dict:
     d = {c.name: getattr(a, c.name) for c in models.Announcement.__table__.columns}
     d["fee_type_name"] = a.fee_type.name if a.fee_type else None
+    d["report_fee_type_name"] = None
+    if a.report_fee_type_id:   # đợt 2: tên khoản của báo cáo Đóng góp / Theo dõi phí (None nếu khoản đã bị xoá)
+        ft = _object_session(a).query(models.FeeType).filter(models.FeeType.id == a.report_fee_type_id).first()
+        d["report_fee_type_name"] = ft.name if ft else None
     d["recurrence_label"] = _ann.recurrence_label(a)
     return d
 
@@ -6675,6 +6685,12 @@ def _validate_announcement_payload(db: Session, club_id: int, merged: dict):
         ft = db.query(models.FeeType).filter(models.FeeType.id == merged["fee_type_id"], models.FeeType.club_id == club_id).first()
         if not ft:
             raise HTTPException(400, "Khoản thu không thuộc câu lạc bộ này")
+    if merged.get("report_fee_type_id") and str(getattr(merged.get("kind"), "value", merged.get("kind"))) == "report":
+        ft = db.query(models.FeeType).filter(models.FeeType.id == merged["report_fee_type_id"], models.FeeType.club_id == club_id).first()
+        if not ft:
+            raise HTTPException(400, "Khoản thu không thuộc câu lạc bộ này")
+        if str(getattr(ft.type, "value", ft.type)) != "income":
+            raise HTTPException(400, "Báo cáo chỉ chọn được khoản thu, không chọn khoản chi")
 
 
 def _announcement_feed(db: Session, club_id: int, today: date, horizon_days: int = 14,
@@ -6769,7 +6785,8 @@ def update_announcement(aid: int, data: schemas.AnnouncementUpdate, background: 
         # cùng chuẩn hoá như schemas._check_announcement_rule (PUT chỉ kiểm tra rồi áp changes thô)
         changes.update({"lead_days": 0, "repeat_daily": False, "show_public": False, "fee_type_id": None, "start_time": None,
                         "duration_min": None, "remind_before_min": None,
-                        "report_channels": sorted(set(merged.get("report_channels") or ["telegram"]))})
+                        "report_channels": sorted(set(merged.get("report_channels") or ["telegram"])),
+                        "report_fee_type_id": merged.get("report_fee_type_id") if merged.get("report_type") in ("contributions", "fee_status") else None})
     for k, v in changes.items():
         setattr(a, k, v)
     db.commit(); db.refresh(a)
@@ -6951,6 +6968,7 @@ def _report_fields(r) -> dict:
     """Trường của quy tắc báo cáo gắn vào item để các hàm gửi tự sinh nội dung theo từng kênh."""
     return {"report_type": r.report_type, "report_range": r.report_range, "report_range_days": r.report_range_days,
             "report_from": r.report_from.isoformat() if r.report_from else None, "report_to": r.report_to.isoformat() if r.report_to else None,
+            "report_fee_type_id": r.report_fee_type_id,
             "channels": list(r.report_channels or ["telegram"]), "hide_names": bool(r.report_hide_names)}
 
 
@@ -6965,7 +6983,8 @@ def _ensure_report(db: Session, club_id: int, it: dict) -> None:
         return
     today = date.fromisoformat(it["date"])   # ngày gửi: khoảng tương đối tính theo ngày này
     start, end = _rn.resolve_range(it.get("report_range"), today, it.get("report_range_days"), it.get("report_from"), it.get("report_to"))
-    it["_report"] = _rn.build_report(db, club_id, it.get("report_type"), start, end, hide_names=bool(it.get("hide_names")))
+    it["_report"] = _rn.build_report(db, club_id, it.get("report_type"), start, end, hide_names=bool(it.get("hide_names")),
+                                     fee_type_id=it.get("report_fee_type_id"))
 
 
 def _push_announcement_items(db: Session, club_id: int, items: list, today: date, bot_token: str, dedupe: bool = True, source: str = "cron") -> dict:
