@@ -4,7 +4,7 @@ import {
   Avatar, Dropdown, Space, Result, Button, Drawer,
 } from "antd";
 import {
-  DashboardOutlined, TeamOutlined, DollarOutlined, SwapOutlined, BarChartOutlined, TrophyOutlined, UserOutlined, LogoutOutlined, LockOutlined, RobotOutlined, UserAddOutlined, SettingOutlined, NotificationOutlined, MessageOutlined,
+  DashboardOutlined, TeamOutlined, DollarOutlined, SwapOutlined, BarChartOutlined, TrophyOutlined, UserOutlined, LogoutOutlined, LockOutlined, UserAddOutlined, SettingOutlined, NotificationOutlined, MessageOutlined,
 } from "@ant-design/icons";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { announcementsApi, logoSrc } from "./api";
@@ -33,7 +33,6 @@ const PublicReport = lazy(() => import("./pages/PublicReport"));
 const Announcements = lazy(() => import("./pages/Announcements"));
 const ChatAdmin = lazy(() => import("./pages/Chat"));
 const NotificationBell = lazy(() => import("./components/NotificationBell"));
-const BotConfigPanel = lazy(() => import("./components/BotConfigPanel"));
 
 function PageSpinner() {
   return (
@@ -84,7 +83,6 @@ function AppShell() {
   const [current, setCurrent] = useState("dashboard");
   const [mode, setMode] = useState(null); // null | "admin" | "member"
   const [moreOpen, setMoreOpen] = useState(false);
-  const [botDrawerOpen, setBotDrawerOpen] = useState(false);
   const { token } = theme.useToken();
   const { isMobileView } = useViewMode();
   const { themeConfig, themeName, setThemeName } = useAppTheme();
@@ -173,15 +171,13 @@ function AppShell() {
         disabled: true,
       },
       { type: "divider" },
-      { key: "bot_config", label: "Cài đặt Telegram Bot", icon: <RobotOutlined /> },
-      ...(perms.canEdit ? [{ key: "brand", label: "Cài đặt CLB", icon: <SettingOutlined /> }] : []),   // logo + màu thương hiệu
+      ...(perms.canEdit ? [{ key: "brand", label: "Cài đặt CLB", icon: <SettingOutlined /> }] : []),   // logo, màu, link công khai, Telegram Bot, Zalo
       ...(memberships.length > 1 ? [{ key: "switch_club", label: "Đổi câu lạc bộ", icon: <SwapOutlined /> }] : []),
       { key: "logout", label: "Đăng xuất", icon: <LogoutOutlined />, danger: true },
     ],
     onClick: ({ key }) => {
       if (key === "logout") { logout(); setMode(null); }
       if (key === "switch_club") { selectClub(null); }
-      if (key === "bot_config") { setBotDrawerOpen(true); }
       if (key === "brand") { setBrandOpen(true); }
     },
   };
@@ -335,19 +331,6 @@ function AppShell() {
         </>
       )}
 
-      {/* Drawer Cài đặt Telegram Bot */}
-      <Drawer
-        title={<><RobotOutlined style={{ marginRight: 8 }} />Cài đặt Telegram Bot</>}
-        placement="right"
-        width={isMobileView ? "100%" : 620}
-        open={botDrawerOpen}
-        onClose={() => setBotDrawerOpen(false)}
-        styles={{ body: { padding: "16px" } }}
-      >
-        <Suspense fallback={<div style={{ textAlign: "center", padding: 48 }}><Spin /></div>}>
-          <BotConfigPanel />
-        </Suspense>
-      </Drawer>
     </Layout>
   );
 }

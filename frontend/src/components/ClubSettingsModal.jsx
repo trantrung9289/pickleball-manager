@@ -3,13 +3,15 @@
  *  - Link công khai (chuyển từ trang Báo cáo): 1 link/CLB, mã PIN 4/6 số.
  *  - Logo: tải ảnh (PNG/JPEG/WebP ≤ 5MB) → backend thu nhỏ ≤512px, lưu trong DB; xem trước; xoá.
  *  - Màu thương hiệu (lớp 1 đổi giao diện 2026-10-26): chọn màu, xem thử ngay (setBrandColor), Lưu → PUT /api/club/appearance.
+ * Từ 2026-10-30 thêm "Telegram Bot" (chuyển từ menu tài khoản: tin chào mừng, bật/tắt chức năng bot, tài khoản được dùng bot) và "Zalo".
  * Props: { club, onSaved(), onClose(), initialTab? }
  */
-import { useState } from "react";
-import { Alert, Button, ColorPicker, Modal, Space, Tabs, Tag, Typography, Upload, message, Popconfirm } from "antd";
-import { UploadOutlined, DeleteOutlined, PictureOutlined, BgColorsOutlined, LinkOutlined, MessageOutlined } from "@ant-design/icons";
+import { lazy, Suspense, useState } from "react";
+import { Alert, Button, ColorPicker, Modal, Space, Spin, Tabs, Tag, Typography, Upload, message, Popconfirm } from "antd";
+import { UploadOutlined, DeleteOutlined, PictureOutlined, BgColorsOutlined, LinkOutlined, MessageOutlined, RobotOutlined } from "@ant-design/icons";
 import PublicLinksTab from "./PublicLinksTab";
 import ZaloTab from "./ZaloTab";
+const BotConfigPanel = lazy(() => import("./BotConfigPanel"));   // Cài đặt Telegram Bot (chuyển từ menu tài khoản 2026-10-30)
 import { authApi, logoSrc } from "../api";
 import { useAppTheme } from "../contexts/ThemeContext";
 import { BRAND_PRESETS, DEFAULT_BRAND, brandPalette, contrast, isHex } from "../utils/color";
@@ -117,11 +119,15 @@ export default function ClubSettingsModal({ club, onSaved, onClose, initialTab =
     </Space>
   ) : <Button onClick={cancel}>Đóng</Button>;
   return (
-    <Modal open title="Cài đặt CLB" onCancel={cancel} width={560} footer={footer}>
+    <Modal open title="Cài đặt CLB" onCancel={cancel} width={720} footer={footer}
+      styles={{ body: { maxHeight: "72vh", overflowY: "auto", paddingRight: 4 } }}>
       <Tabs activeKey={tab} onChange={setTab} items={[
         { key: "logo", label: <span><PictureOutlined /> Logo</span>, children: <LogoTab club={club} onSaved={onSaved} /> },
         { key: "brand", label: <span><BgColorsOutlined /> Màu thương hiệu</span>, children: <BrandTab club={club} value={value} setValue={setValue} saved={saved} /> },
         { key: "links", label: <span><LinkOutlined /> Link công khai</span>, children: <PublicLinksTab /> },
+        { key: "telegram", label: <span><RobotOutlined /> Telegram Bot</span>, children: (
+          <Suspense fallback={<div style={{ textAlign: "center", padding: 48 }}><Spin /></div>}><BotConfigPanel /></Suspense>
+        ) },
         { key: "zalo", label: <span><MessageOutlined /> Zalo</span>, children: <ZaloTab /> },
       ]} />
     </Modal>
