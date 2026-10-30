@@ -23,7 +23,7 @@ import { announcementsApi, feeTypesApi } from "../api";
 import useHotkey from "../hooks/useHotkey";
 import usePublicLink from "../hooks/usePublicLink";
 import PushHistoryCard from "../components/PushHistoryCard";
-import { WEEKDAY_LABELS, KIND_LABELS, groupByDate, remindLabel, REPORT_TYPE_LABELS, REPORT_RANGE_OPTIONS, REPORT_CHANNEL_LABELS, reportSummaryText, REPORT_NAME_TYPES, REPORT_FEE_TYPES } from "../utils/announcements";
+import { WEEKDAY_LABELS, KIND_LABELS, groupByDate, remindLabel, REPORT_TYPE_LABELS, REPORT_RANGE_OPTIONS, REPORT_CHANNEL_LABELS, reportSummaryText, REPORT_NAME_TYPES, REPORT_FEE_TYPES, reportExposureText } from "../utils/announcements";
 
 const { Title, Text } = Typography;
 const { TextArea } = Input;
@@ -149,13 +149,13 @@ export default function Announcements({ perms, clubName = "" }) {
       title: "Gửi ngay?",
       content: r.kind === "report"
         ? <div>Gửi báo cáo <b>{r.title}</b> ngay (khoảng thời gian tính theo hôm nay) tới: {(r.report_channels?.length ? r.report_channels : ["telegram"]).map((c) => REPORT_CHANNEL_LABELS[c]).join(", ")}.</div>
-        : <div>Gửi lần xuất hiện gần nhất của <b>{r.title}</b> tới quản trị viên đã liên kết Telegram, thiết bị đã bật thông báo và nhóm Zalo của CLB.</div>,
+        : <div>Gửi lần xuất hiện gần nhất của <b>{r.title}</b> tới quản trị viên đã liên kết Telegram, người xem Trang Public đã bật thông báo và nhóm Zalo của CLB.</div>,
       okText: "Gửi",
     });
     if (!ok) return;
     try {
       const d = (await announcementsApi.push(r.id)).data;
-      const parts = [`Telegram ${d.sent}`, `thiết bị ${d.web_push_sent ?? 0}`, `Zalo ${d.zalo_sent ?? 0}`];
+      const parts = [`Telegram ${d.sent}`, `Trang Public ${d.web_push_sent ?? 0}`, `Zalo ${d.zalo_sent ?? 0}`];
       const errs = (d.errors?.length || 0) + (d.web_push_errors || 0) + (d.zalo_errors || 0);
       message.success(`Đã gửi (ngày ${dayjs(d.date).format("DD/MM")}): ${parts.join(", ")}${errs ? `, ${errs} lỗi` : ""}`);
       setHistKey((k) => k + 1);
@@ -182,7 +182,7 @@ export default function Announcements({ perms, clubName = "" }) {
     { title: "Hiệu lực", render: (_, r) => (r.start_date || r.end_date) ? `${r.start_date ? dayjs(r.start_date).format("DD/MM/YY") : "…"} → ${r.end_date ? dayjs(r.end_date).format("DD/MM/YY") : "…"}` : "—" },
     { title: "Public", dataIndex: "show_public", render: (v, r) => (r.kind === "report" ? <Text type="secondary">—</Text> : <Switch size="small" checked={v} disabled={!canEdit} onChange={(c) => toggle(r, "show_public", c)} />) },
     { title: "Bật", dataIndex: "is_active", render: (v, r) => <Switch size="small" checked={v} disabled={!canEdit} onChange={(c) => toggle(r, "is_active", c)} /> },
-    { title: "Đẩy", dataIndex: "push_telegram", render: (v, r) => <Tooltip title="Gửi Telegram cho admin + đẩy tới thiết bị đã bật vào ngày đầu cửa sổ hiện trước và đúng ngày, khi tới Giờ đẩy (cron 15 phút); không gửi trùng trong ngày"><Switch size="small" checked={v} disabled={!canEdit} onChange={(c) => toggle(r, "push_telegram", c)} /></Tooltip> },
+    { title: "Đẩy", dataIndex: "push_telegram", render: (v, r) => <Tooltip title="Gửi Telegram cho admin + đẩy tới người xem Trang Public đã bật thông báo vào ngày đầu cửa sổ hiện trước và đúng ngày, khi tới Giờ đẩy (cron 15 phút); không gửi trùng trong ngày"><Switch size="small" checked={v} disabled={!canEdit} onChange={(c) => toggle(r, "push_telegram", c)} /></Tooltip> },
     {
       title: "Giờ đẩy", dataIndex: "push_time",
       render: (v, r) => (
@@ -196,7 +196,7 @@ export default function Announcements({ perms, clubName = "" }) {
       title: "Thao tác", width: 130,
       render: (_, r) => canEdit ? (
         <Space>
-          <Tooltip title="Gửi ngay (Telegram, thiết bị, Zalo)"><Button size="small" icon={<SendOutlined />} onClick={() => pushNow(r)} /></Tooltip>
+          <Tooltip title="Gửi ngay (Telegram, Trang Public, Zalo)"><Button size="small" icon={<SendOutlined />} onClick={() => pushNow(r)} /></Tooltip>
           <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(r)} />
           <Button size="small" danger icon={<DeleteOutlined />} onClick={() => handleDelete(r)} />
         </Space>
@@ -270,7 +270,7 @@ export default function Announcements({ perms, clubName = "" }) {
           {isReport && (
             <>
               <Alert type="info" showIcon style={{ marginBottom: 12 }} message="Báo cáo định kỳ chỉ được đẩy qua kênh bạn chọn, không hiện ở chuông hay trang công khai. Số liệu lấy đến hết hôm qua so với ngày gửi."
-                description="Báo cáo gửi cho nhóm Zalo hoặc thiết bị sẽ cho nhiều người thấy số tiền thu chi." />
+                description="Báo cáo gửi cho nhóm Zalo hoặc Trang Public sẽ cho nhiều người thấy số tiền thu chi." />
               <Form.Item name="report_type" label="Loại báo cáo" rules={[{ required: true, message: "Chọn loại báo cáo" }]}>
                 <Radio.Group optionType="button" options={Object.entries(REPORT_TYPE_LABELS).map(([value, label]) => ({ value, label }))} />
               </Form.Item>
@@ -351,18 +351,18 @@ export default function Announcements({ perms, clubName = "" }) {
             {!isReport && <Form.Item name="show_public" label="Hiện trên trang public" valuePropName="checked" style={{ marginBottom: 0 }}><Switch /></Form.Item>}
             <Form.Item name="is_active" label="Bật" valuePropName="checked" style={{ marginBottom: 0 }}><Switch /></Form.Item>
             <Form.Item name="push_telegram"
-              label={<Tooltip title={isReport ? "Tự động gửi báo cáo vào ngày gửi, khi tới Giờ đẩy bên dưới. Tắt thì chỉ gửi khi bấm Gửi ngay." : "Gửi Telegram cho admin + đẩy tới thiết bị đã bật vào ngày đầu cửa sổ hiện trước và đúng ngày, khi tới Giờ đẩy bên dưới"}>{isReport ? "Gửi tự động" : "Đẩy thông báo"}</Tooltip>}
+              label={<Tooltip title={isReport ? "Tự động gửi báo cáo vào ngày gửi, khi tới Giờ đẩy bên dưới. Tắt thì chỉ gửi khi bấm Gửi ngay." : "Gửi Telegram cho admin + đẩy tới người xem Trang Public đã bật thông báo vào ngày đầu cửa sổ hiện trước và đúng ngày, khi tới Giờ đẩy bên dưới"}>{isReport ? "Gửi tự động" : "Đẩy thông báo"}</Tooltip>}
               valuePropName="checked" style={{ marginBottom: 0 }}><Switch /></Form.Item>
             {!isReport && <Form.Item name="repeat_daily" label={<Tooltip title="Đẩy lại mỗi ngày trong cửa sổ hiện trước (một lần/ngày), thay vì chỉ ngày đầu và đúng ngày. Dùng cho nhắc đóng phí.">Nhắc lại hằng ngày</Tooltip>} valuePropName="checked" style={{ marginBottom: 0 }}><Switch /></Form.Item>}
           </Space>
           {isReport && (
             <div style={{ marginTop: 16 }}>
               <Form.Item name="report_channels" label="Gửi tới" rules={[{ required: true, type: "array", min: 1, message: "Chọn ít nhất một kênh" }]}
-                extra="Mặc định chỉ Telegram quản trị viên. Nhóm Zalo (đã duyệt) và thiết bị đã bật thông báo phải bật tay.">
+                extra="Mặc định chỉ Telegram quản trị viên. Nhóm Zalo (đã duyệt) và Trang Public (người xem đã bật thông báo) phải bật tay.">
                 <Checkbox.Group options={Object.entries(REPORT_CHANNEL_LABELS).map(([value, label]) => ({ value, label }))} />
               </Form.Item>
-              {(reportChannels || []).some((c) => c === "zalo" || c === "web") && (
-                <Alert type="warning" showIcon style={{ marginBottom: 12 }} message="Nhóm Zalo và thiết bị sẽ thấy số liệu thu chi" />
+              {reportExposureText(reportChannels) && (
+                <Alert type="warning" showIcon style={{ marginBottom: 12 }} message={reportExposureText(reportChannels)} />
               )}
               {REPORT_NAME_TYPES.includes(reportType) && (
                 <Form.Item name="report_hide_names" label={reportType === "transactions" ? "Ẩn tên thành viên và ghi chú" : "Ẩn tên thành viên"} valuePropName="checked" style={{ marginBottom: 0 }}

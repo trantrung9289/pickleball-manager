@@ -113,7 +113,7 @@ export function shareText(it, { clubName = "", publicUrl = "" } = {}) {
 }
 
 // ── Lịch sử đẩy (2026-10-30) ──
-export const PUSH_CHANNEL_LABELS = { telegram: "Telegram", web: "Thiết bị", zalo: "Zalo" };
+export const PUSH_CHANNEL_LABELS = { telegram: "Telegram", web: "Trang Public", zalo: "Zalo" };   // web = thông báo đẩy tới người xem đã bật trên trang public
 export const PUSH_SOURCE_LABELS = { cron: "Tự động", save: "Khi lưu", manual: "Gửi ngay" };
 
 /** "2026-10-30T07:05:09Z" → "07:05:09 30/10/2026" theo giờ máy (người dùng Việt Nam); lỗi → "". */
@@ -138,7 +138,17 @@ export const REPORT_TYPE_LABELS = { summary: "Tổng hợp thu chi", transaction
 export const REPORT_NAME_TYPES = ["transactions", "contributions", "fee_status"];
 /** Loại báo cáo dùng khoản thu: fee_status bắt buộc, contributions tuỳ chọn (lọc một khoản). */
 export const REPORT_FEE_TYPES = ["contributions", "fee_status"];
-export const REPORT_CHANNEL_LABELS = { telegram: "Telegram quản trị viên", zalo: "Nhóm Zalo", web: "Thiết bị" };
+export const REPORT_CHANNEL_LABELS = { telegram: "Telegram quản trị viên", zalo: "Nhóm Zalo", web: "Trang Public" };
+
+/** Cảnh báo lộ số liệu theo ĐÚNG các kênh đang chọn (Telegram quản trị viên không cần cảnh báo); "" khi chỉ Telegram. */
+export function reportExposureText(channels) {
+  const zalo = (channels || []).includes("zalo");
+  const web = (channels || []).includes("web");
+  if (zalo && web) return "Nhóm Zalo và người xem Trang Public (đã bật thông báo) sẽ thấy số liệu thu chi";
+  if (zalo) return "Nhóm Zalo sẽ thấy số liệu thu chi";
+  if (web) return "Người xem Trang Public (đã bật thông báo) sẽ thấy số liệu thu chi";
+  return "";
+}
 /** Khoảng thời gian tương đối theo ngày gửi; luôn kết thúc HẾT HÔM QUA (chỉ lấy ngày trọn vẹn). */
 export const REPORT_RANGE_OPTIONS = [
   { value: "yesterday", label: "Hôm qua" },

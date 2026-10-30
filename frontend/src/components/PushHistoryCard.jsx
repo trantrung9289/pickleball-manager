@@ -1,5 +1,5 @@
 /**
- * PushHistoryCard — "Lịch sử đẩy" trong trang Thông báo (2026-10-30): mỗi tin hệ thống đã gửi thật, theo kênh (Telegram, thiết bị, Zalo),
+ * PushHistoryCard — "Lịch sử đẩy" trong trang Thông báo (2026-10-30): mỗi tin hệ thống đã gửi thật, theo kênh (Telegram, Trang Public, Zalo),
  * nguồn (tự động / khi lưu quy tắc / Gửi ngay) và kết quả. Chỉ giữ 7 ngày gần nhất, xoá ngày xa nhất (backend tự dọn).
  * Props: { refreshKey } — đổi giá trị để tải lại (sau khi Gửi ngay / Làm mới trang).
  */
@@ -66,7 +66,7 @@ export default function PushHistoryCard({ refreshKey = 0 }) {
     >
       <Text type="secondary" style={{ display: "block", fontSize: 12, marginBottom: 8 }}>
         Chỉ giữ {days} ngày gần nhất; ngày xa nhất tự xoá. Ghi mỗi lần gửi thật, không ghi các lượt bỏ qua vì đã gửi trong ngày.
-        ✔ là số thiết bị, quản trị viên hoặc nhóm nhận được; ✖ là số lỗi.
+        ✔ là số quản trị viên, nhóm Zalo hoặc thiết bị Trang Public nhận được; ✖ là số lỗi.
       </Text>
       <ResponsiveTable columns={columns} dataSource={rows} rowKey="id" loading={loading} size="small"
         pagination={{ pageSize: 15, showSizeChanger: false, hideOnSinglePage: true }}
