@@ -66,8 +66,8 @@ def test_repeat_daily_sends_every_day_in_window_once_per_day(client, world, db, 
     h1 = World.headers(world.admin1, world.club1)
     today = _today(client, world)
     # Cả 2 quy tắc: d = hôm nay + 2, lead 4 → hôm nay ở GIỮA cửa sổ. Chỉ quy tắc nhắc hằng ngày được gửi.
-    client.post("/api/announcements", json={"title": "Hằng ngày", "recurrence": "none", "start_date": (today + timedelta(days=2)).isoformat(), "lead_days": 4, "repeat_daily": True, "push_telegram": True}, headers=h1)
-    client.post("/api/announcements", json={"title": "Hai mốc", "recurrence": "none", "start_date": (today + timedelta(days=2)).isoformat(), "lead_days": 4, "repeat_daily": False, "push_telegram": True}, headers=h1)
+    client.post("/api/announcements", json={"title": "Hằng ngày", "recurrence": "none", "start_date": (today + timedelta(days=2)).isoformat(), "lead_days": 4, "repeat_daily": True, "push_telegram": True, "push_time": "00:00"}, headers=h1)
+    client.post("/api/announcements", json={"title": "Hai mốc", "recurrence": "none", "start_date": (today + timedelta(days=2)).isoformat(), "lead_days": 4, "repeat_daily": False, "push_telegram": True, "push_time": "00:00"}, headers=h1)
     m = db.query(models.ClubMembership).filter(models.ClubMembership.user_id == world.admin1.id).first()
     m.telegram_chat_id = 111; db.commit()
     r = client.post("/api/internal/send-announcements", headers={"X-Internal-Secret": "s3cr3t"})

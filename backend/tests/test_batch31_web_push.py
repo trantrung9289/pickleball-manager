@@ -58,9 +58,9 @@ def test_cron_sends_web_push_once_and_removes_gone(client, world, db, monkeypatc
     today = _today(client, world)
     slug = world.token1.slug
     # A: hôm nay là ngày đầu cửa sổ; B: không push_telegram → không gửi; E: phí hôm nay (đăng ký thiết bị SAU khi tạo → cron là lần gửi đầu)
-    client.post("/api/announcements", json={"title": "A", "recurrence": "none", "start_date": (today + timedelta(days=2)).isoformat(), "lead_days": 2, "push_telegram": True, "start_time": "19:00", "body": "Sân A"}, headers=h1)
+    client.post("/api/announcements", json={"title": "A", "recurrence": "none", "start_date": (today + timedelta(days=2)).isoformat(), "lead_days": 2, "push_telegram": True, "push_time": "00:00", "start_time": "19:00", "body": "Sân A"}, headers=h1)
     client.post("/api/announcements", json={"title": "B", "recurrence": "none", "start_date": today.isoformat(), "lead_days": 0, "push_telegram": False}, headers=h1)
-    client.post("/api/announcements", json={"kind": "fee", "title": "E", "fee_type_id": world.fee1.id, "recurrence": "monthly", "day_of_month": today.day, "lead_days": 0, "push_telegram": True}, headers=h1)
+    client.post("/api/announcements", json={"kind": "fee", "title": "E", "fee_type_id": world.fee1.id, "recurrence": "monthly", "day_of_month": today.day, "lead_days": 0, "push_telegram": True, "push_time": "00:00"}, headers=h1)
     client.post(f"/api/public/report/{slug}/push/subscribe", json=SUB)
     client.post(f"/api/public/report/{slug}/push/subscribe", json=SUB2)
 
@@ -85,7 +85,7 @@ def test_cron_counts_errors_and_removes_after_5_failures(client, world, db, monk
     h1 = World.headers(world.admin1, world.club1)
     today = _today(client, world)
     for i in range(6):   # 6 thông báo hôm nay → lỗi liên tiếp, tới lần 5 thì xoá subscription
-        client.post("/api/announcements", json={"title": f"T{i}", "recurrence": "none", "start_date": today.isoformat(), "lead_days": 0, "push_telegram": True}, headers=h1)
+        client.post("/api/announcements", json={"title": f"T{i}", "recurrence": "none", "start_date": today.isoformat(), "lead_days": 0, "push_telegram": True, "push_time": "00:00"}, headers=h1)
     client.post(f"/api/public/report/{world.token1.slug}/push/subscribe", json=SUB)
     r = client.post("/api/internal/send-announcements", headers={"X-Internal-Secret": "s3cr3t"})
     assert r.json()["web_push"]["errors"] == 5 and r.json()["web_push"]["removed"] == 1 and len(sent) == 5
@@ -138,7 +138,7 @@ def test_create_or_update_sends_immediately_when_due_today(client, world, db, mo
     today = _today(client, world)
     client.post(f"/api/public/report/{world.token1.slug}/push/subscribe", json=SUB)
     # Tạo với push bật, hôm nay → gửi ngay 1 tin
-    r = client.post("/api/announcements", json={"title": "Hẹn vụt hôm nay", "recurrence": "none", "start_date": today.isoformat(), "lead_days": 0, "push_telegram": True}, headers=h1)
+    r = client.post("/api/announcements", json={"title": "Hẹn vụt hôm nay", "recurrence": "none", "start_date": today.isoformat(), "lead_days": 0, "push_telegram": True, "push_time": "00:00"}, headers=h1)
     assert r.status_code == 201 and len(sent) == 1 and sent[0][1]["title"].startswith("Hẹn vụt hôm nay")
     # Cron chạy tiếp → bỏ qua (đã có log)
     r2 = client.post("/api/internal/send-announcements", headers={"X-Internal-Secret": "s3cr3t"})
@@ -146,8 +146,8 @@ def test_create_or_update_sends_immediately_when_due_today(client, world, db, mo
     # Tạo với push TẮT → không gửi; bật lên qua PUT → gửi ngay
     aid = client.post("/api/announcements", json={"title": "Bật sau", "recurrence": "none", "start_date": today.isoformat(), "lead_days": 0, "push_telegram": False}, headers=h1).json()["id"]
     assert len(sent) == 1
-    client.put(f"/api/announcements/{aid}", json={"push_telegram": True}, headers=h1)
+    client.put(f"/api/announcements/{aid}", json={"push_telegram": True, "push_time": "00:00"}, headers=h1)
     assert len(sent) == 2 and sent[1][1]["title"].startswith("Bật sau")
     # Chưa đến ngày (ngày kia, lead 0) → không gửi
-    client.post("/api/announcements", json={"title": "Xa", "recurrence": "none", "start_date": (today + timedelta(days=2)).isoformat(), "lead_days": 0, "push_telegram": True}, headers=h1)
+    client.post("/api/announcements", json={"title": "Xa", "recurrence": "none", "start_date": (today + timedelta(days=2)).isoformat(), "lead_days": 0, "push_telegram": True, "push_time": "00:00"}, headers=h1)
     assert len(sent) == 2

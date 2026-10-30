@@ -59,7 +59,7 @@ def test_web_push_cron_still_sends_with_pin(client, world, db, monkeypatch):
     h1 = World.headers(world.admin1, world.club1)
     from datetime import date
     today = date.fromisoformat(client.get("/api/announcements/feed", headers=h1).json()["today"])
-    client.post("/api/announcements", json={"title": "Hôm nay", "recurrence": "none", "start_date": today.isoformat(), "lead_days": 0, "push_telegram": True}, headers=h1)
+    client.post("/api/announcements", json={"title": "Hôm nay", "recurrence": "none", "start_date": today.isoformat(), "lead_days": 0, "push_telegram": True, "push_time": "00:00"}, headers=h1)
     sub = {"endpoint": "https://push.example.com/sub/abc123def456", "keys": {"p256dh": "BPkeypkeypkeypkey", "auth": "authauth"}}
     assert client.post(f"/api/public/report/{world.token1.slug}/push/subscribe", json=sub).status_code == 200
     client.put(f"/api/report-links/{world.token1.id}/pin", json={"pin": "9999"}, headers=h1)

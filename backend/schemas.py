@@ -1107,6 +1107,8 @@ class AnnouncementBase(BaseModel):
     is_active: bool = True
     show_public: bool = True
     push_telegram: bool = False
+    push_time: Optional[str] = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")      # giờ đẩy VN, bắt buộc khi push_telegram
+    remind_before_min: Optional[int] = Field(default=None, ge=0, le=1440)                     # nhắc trước giờ bắt đầu (phút)
 
     @field_validator("weekdays")
     @classmethod
@@ -1131,6 +1133,15 @@ def _check_announcement_rule(m):
         raise ValueError("Thông báo khoản thu cần fee_type_id")
     if m.start_date and m.end_date and m.end_date < m.start_date:
         raise ValueError("end_date phải sau start_date")
+    # 2026-10-30: bật đẩy thì phải đặt giờ đẩy (không có giờ mặc định — tất cả cấu hình thủ công)
+    if m.push_telegram and not m.push_time:
+        raise ValueError("Bật đẩy thông báo cần đặt Giờ đẩy")
+    if m.remind_before_min is not None:
+        if not m.start_time:
+            raise ValueError("Nhắc trước giờ bắt đầu cần có Giờ bắt đầu")
+        h, mi = (int(x) for x in m.start_time.split(":"))
+        if m.remind_before_min > h * 60 + mi:
+            raise ValueError("Nhắc trước giờ bắt đầu không được lùi sang ngày hôm trước")
     return m
 
 
@@ -1161,6 +1172,8 @@ class AnnouncementUpdate(BaseModel):
     is_active: Optional[bool] = None
     show_public: Optional[bool] = None
     push_telegram: Optional[bool] = None
+    push_time: Optional[str] = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    remind_before_min: Optional[int] = Field(default=None, ge=0, le=1440)
 
 
 class AnnouncementOut(AnnouncementBase):

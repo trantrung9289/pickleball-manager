@@ -3,6 +3,8 @@
  * - Hai loại: lịch sinh hoạt (nội dung tự đặt) và khoản thu (nội dung tự sinh từ người chưa đóng, chọn khoản thu định kỳ).
  * - Lặp: một lần / hàng tuần (chọn thứ) / hàng tháng (ngày). Hiện trước N ngày (lead_days).
  * - Đợt 3: push_telegram → cron gửi Telegram tới admin CLB vào ngày đầu cửa sổ và đúng ngày; nút "Gửi ngay" gửi lần gần nhất.
+ * - 2026-10-30: giờ đẩy push_time theo từng quy tắc (bắt buộc khi bật đẩy, không mặc định — trước đó cron gửi ngay sau 0h);
+ *   nhắc trước giờ bắt đầu remind_before_min (giờ + phút, chỉ lịch có Giờ), gửi đúng ngày diễn ra một lần.
  * - "Xem trước 4 tuần": feed include_later để kiểm tra quy tắc nổ đúng ngày.
  */
 import { useEffect, useMemo, useState } from "react";
@@ -17,7 +19,7 @@ import { StatusChip } from "../components/ui";
 import { FeedItem } from "../components/NotificationBell";
 import { announcementsApi, feeTypesApi } from "../api";
 import useHotkey from "../hooks/useHotkey";
-import { WEEKDAY_LABELS, KIND_LABELS, groupByDate } from "../utils/announcements";
+import { WEEKDAY_LABELS, KIND_LABELS, groupByDate, remindLabel } from "../utils/announcements";
 
 const { Title, Text } = Typography;
 const { TextArea } = Input;
@@ -32,6 +34,10 @@ const toForm = (r) => ({
   start_date: r.start_date ? dayjs(r.start_date) : null,
   end_date: r.end_date ? dayjs(r.end_date) : null,
   start_time: r.start_time ? dayjs(r.start_time, "HH:mm") : null,
+  push_time: r.push_time ? dayjs(r.push_time, "HH:mm") : null,
+  remind_enabled: r.remind_before_min != null,
+  remind_h: r.remind_before_min != null ? Math.floor(r.remind_before_min / 60) : null,
+  remind_m: r.remind_before_min != null ? r.remind_before_min % 60 : null,
 });
 
 const fromForm = (v) => ({
@@ -47,6 +53,8 @@ const fromForm = (v) => ({
   start_date: v.start_date ? v.start_date.format("YYYY-MM-DD") : null,
   end_date: v.end_date ? v.end_date.format("YYYY-MM-DD") : null,
   is_active: v.is_active ?? true, show_public: v.show_public ?? true, push_telegram: v.push_telegram ?? false,
+  push_time: v.push_time ? v.push_time.format("HH:mm") : null,
+  remind_before_min: v.remind_enabled && v.start_time ? (Number(v.remind_h) || 0) * 60 + (Number(v.remind_m) || 0) : null,
 });
 
 export default function Announcements({ perms }) {
@@ -60,6 +68,9 @@ export default function Announcements({ perms }) {
   const [form] = Form.useForm();
   const kind = Form.useWatch("kind", form);
   const recurrence = Form.useWatch("recurrence", form);
+  const pushOn = Form.useWatch("push_telegram", form);
+  const startTime = Form.useWatch("start_time", form);
+  const remindOn = Form.useWatch("remind_enabled", form);
   const canEdit = perms?.canEdit ?? true;
 
   useHotkey({
@@ -83,7 +94,7 @@ export default function Announcements({ perms }) {
   const openCreate = () => {
     setEditing(null);
     form.resetFields();
-    form.setFieldsValue({ kind: "schedule", recurrence: "weekly", weekdays: [], lead_days: 3, repeat_daily: false, is_active: true, show_public: true, push_telegram: false });
+    form.setFieldsValue({ kind: "schedule", recurrence: "weekly", weekdays: [], lead_days: 3, repeat_daily: false, is_active: true, show_public: true, push_telegram: false, push_time: null, remind_enabled: false, remind_h: null, remind_m: null });
     setModalOpen(true);
   };
   const openEdit = (r) => { setEditing(r); form.setFieldsValue(toForm(r)); setModalOpen(true); };
@@ -127,7 +138,16 @@ export default function Announcements({ perms }) {
     { title: "Hiệu lực", render: (_, r) => (r.start_date || r.end_date) ? `${r.start_date ? dayjs(r.start_date).format("DD/MM/YY") : "…"} → ${r.end_date ? dayjs(r.end_date).format("DD/MM/YY") : "…"}` : "—" },
     { title: "Public", dataIndex: "show_public", render: (v, r) => <Switch size="small" checked={v} disabled={!canEdit} onChange={(c) => toggle(r, "show_public", c)} /> },
     { title: "Bật", dataIndex: "is_active", render: (v, r) => <Switch size="small" checked={v} disabled={!canEdit} onChange={(c) => toggle(r, "is_active", c)} /> },
-    { title: "Đẩy", dataIndex: "push_telegram", render: (v, r) => <Tooltip title="Gửi Telegram cho admin + đẩy tới thiết bị đã bật: ngay khi lưu nếu đã đến ngày, và mỗi 15 phút (ngày đầu cửa sổ hiện trước, đúng ngày); không gửi trùng trong ngày"><Switch size="small" checked={v} disabled={!canEdit} onChange={(c) => toggle(r, "push_telegram", c)} /></Tooltip> },
+    { title: "Đẩy", dataIndex: "push_telegram", render: (v, r) => <Tooltip title="Gửi Telegram cho admin + đẩy tới thiết bị đã bật vào ngày đầu cửa sổ hiện trước và đúng ngày, khi tới Giờ đẩy (cron 15 phút); không gửi trùng trong ngày"><Switch size="small" checked={v} disabled={!canEdit} onChange={(c) => toggle(r, "push_telegram", c)} /></Tooltip> },
+    {
+      title: "Giờ đẩy", dataIndex: "push_time",
+      render: (v, r) => (
+        <span>
+          {v ? v : r.push_telegram ? <StatusChip tone="danger">Chưa đặt giờ</StatusChip> : <Text type="secondary">—</Text>}
+          {r.remind_before_min != null && <Text type="secondary" style={{ display: "block", fontSize: 12 }}>nhắc trước {remindLabel(r.remind_before_min)}</Text>}
+        </span>
+      ),
+    },
     {
       title: "Thao tác", width: 130,
       render: (_, r) => canEdit ? (
@@ -237,9 +257,35 @@ export default function Announcements({ perms }) {
           <Space size="large" wrap>
             <Form.Item name="show_public" label="Hiện trên trang public" valuePropName="checked" style={{ marginBottom: 0 }}><Switch /></Form.Item>
             <Form.Item name="is_active" label="Bật" valuePropName="checked" style={{ marginBottom: 0 }}><Switch /></Form.Item>
-            <Form.Item name="push_telegram" label={<Tooltip title="Gửi Telegram cho admin + đẩy tới thiết bị đã bật: ngay khi lưu nếu đã đến ngày, và mỗi 15 phút">Đẩy thông báo</Tooltip>} valuePropName="checked" style={{ marginBottom: 0 }}><Switch /></Form.Item>
+            <Form.Item name="push_telegram" label={<Tooltip title="Gửi Telegram cho admin + đẩy tới thiết bị đã bật vào ngày đầu cửa sổ hiện trước và đúng ngày, khi tới Giờ đẩy bên dưới">Đẩy thông báo</Tooltip>} valuePropName="checked" style={{ marginBottom: 0 }}><Switch /></Form.Item>
             <Form.Item name="repeat_daily" label={<Tooltip title="Đẩy lại mỗi ngày trong cửa sổ hiện trước (một lần/ngày), thay vì chỉ ngày đầu và đúng ngày. Dùng cho nhắc đóng phí.">Nhắc lại hằng ngày</Tooltip>} valuePropName="checked" style={{ marginBottom: 0 }}><Switch /></Form.Item>
           </Space>
+          {pushOn && (
+            <Row gutter={12} style={{ marginTop: 16 }}>
+              <Col span={8}>
+                <Form.Item name="push_time" label="Giờ đẩy" rules={[{ required: true, message: "Đặt giờ đẩy" }]}
+                  extra="Giờ VN. Tin đến trong vòng 15 phút sau giờ này; không có giờ mặc định.">
+                  <TimePicker format="HH:mm" minuteStep={5} style={{ width: "100%" }} placeholder="Chọn giờ" />
+                </Form.Item>
+              </Col>
+              {kind === "schedule" && (
+                <Col span={16}>
+                  <Form.Item label={<Tooltip title="Đúng ngày diễn ra, gửi thêm một lần trước giờ bắt đầu (cần đặt Giờ ở trên). Mỗi lần diễn ra chỉ nhắc một lần.">Nhắc trước giờ bắt đầu</Tooltip>}
+                    extra={!startTime ? "Cần đặt Giờ bắt đầu ở trên." : remindOn ? "Không được lùi sang hôm trước." : null} style={{ marginBottom: 0 }}>
+                    <Space align="start" wrap>
+                      <Form.Item name="remind_enabled" valuePropName="checked" noStyle><Switch disabled={!startTime} /></Form.Item>
+                      {remindOn && startTime && (
+                        <>
+                          <Form.Item name="remind_h" noStyle><InputNumber min={0} max={23} placeholder="giờ" style={{ width: 80 }} addonAfter="giờ" /></Form.Item>
+                          <Form.Item name="remind_m" noStyle><InputNumber min={0} max={59} step={5} placeholder="phút" style={{ width: 96 }} addonAfter="phút" /></Form.Item>
+                        </>
+                      )}
+                    </Space>
+                  </Form.Item>
+                </Col>
+              )}
+            </Row>
+          )}
         </Form>
       </Modal>
     </div>

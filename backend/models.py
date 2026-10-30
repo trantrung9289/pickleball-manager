@@ -787,6 +787,10 @@ class Announcement(Base):
     is_active = Column(Boolean, nullable=False, default=True)
     show_public = Column(Boolean, nullable=False, default=True)
     push_telegram = Column(Boolean, nullable=False, default=False)
+    # 2026-10-30: giờ đẩy "HH:MM" giờ VN — cron 15 phút chỉ gửi khi đã qua giờ này; KHÔNG có mặc định (bật đẩy thì bắt buộc đặt)
+    push_time = Column(String(5), nullable=True)
+    # 2026-10-30: nhắc thêm một lần trước giờ bắt đầu (phút), chỉ lịch có start_time, gửi đúng ngày diễn ra; NULL = không nhắc
+    remind_before_min = Column(Integer, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
@@ -834,6 +838,24 @@ class PushSubscription(Base):
     last_seen_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
     token = relationship("PublicReportToken")
+
+
+class AnnouncementPreRemindLog(Base):
+    """2026-10-30: chống trùng cho lần NHẮC TRƯỚC GIỜ BẮT ĐẦU (một lần cho mỗi lần xuất hiện, mỗi kênh/đích).
+    Bảng riêng vì hai log ngày có UNIQUE (thông báo, ngày, đích, ngày gửi) trùng khoá với lần đẩy đúng ngày.
+    channel: tg (target_id = chat_id Telegram) | wp (target_id = push_subscriptions.id)."""
+    __tablename__ = "announcement_pre_remind_log"
+
+    id = Column(Integer, primary_key=True, index=True)
+    announcement_id = Column(Integer, ForeignKey("announcements.id"), nullable=False, index=True)
+    occurrence_date = Column(Date, nullable=False)
+    channel = Column(String(2), nullable=False)
+    target_id = Column(Integer, nullable=False)
+    sent_at = Column(DateTime, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("announcement_id", "occurrence_date", "channel", "target_id", name="uq_announcement_pre_remind"),
+    )
 
 
 class WebPushLog(Base):

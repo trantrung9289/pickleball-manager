@@ -101,7 +101,7 @@ umask 022
 {
   echo "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
   echo "0 18 * * * root . /run/clb.env && cd /app && python backup_db.py --tag daily > ${CRON_LOG} 2>&1"
-  # Thông báo (Telegram + Web Push) mỗi 15 phút — backend chống trùng theo ngày; không cần token Telegram (Web Push vẫn chạy).
+  # Thông báo (Telegram + Web Push) mỗi 15 phút — backend chỉ gửi khi tới Giờ đẩy của từng quy tắc (2026-10-30), chống trùng theo ngày; không cần token Telegram (Web Push vẫn chạy).
   # Nhắc phí Telegram cũ (7h UTC) đã gỡ 2026-10-28 — thay bằng quy tắc thông báo khoản thu "nhắc lại hằng ngày".
   if [ -n "${INTERNAL_SECRET:-}" ]; then
     echo "*/15 * * * * root . /run/clb.env && cd /bot && python notify_bot.py --announcements-only > ${CRON_LOG} 2>&1"

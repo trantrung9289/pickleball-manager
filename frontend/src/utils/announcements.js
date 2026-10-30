@@ -71,3 +71,10 @@ export function groupByDate(items) {
   }
   return out;
 }
+
+/** Nhắc trước giờ bắt đầu (phút) → "1 giờ 30 phút" / "1 giờ" / "45 phút" (2026-10-30). */
+export const remindLabel = (min) => {
+  if (min == null) return "";
+  const h = Math.floor(min / 60), m = min % 60;
+  return h && m ? `${h} giờ ${m} phút` : h ? `${h} giờ` : `${m} phút`;
+};

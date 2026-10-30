@@ -158,6 +158,9 @@ def _run_migration():
         ("clubs", "logo_hash", "VARCHAR(16)", None),
         # 2026-10-28: thông báo nhắc lại mỗi ngày trong cửa sổ (thay nhắc phí Telegram cũ)
         ("announcements", "repeat_daily", "BOOLEAN DEFAULT 0 NOT NULL", None),
+        # 2026-10-30: giờ đẩy theo quy tắc (không mặc định) + nhắc trước giờ bắt đầu (phút)
+        ("announcements", "push_time", "VARCHAR(5)", None),
+        ("announcements", "remind_before_min", "INTEGER", None),
         # 2026-10-28: mã PIN cho link công khai
         ("public_report_tokens", "pin_hash", "VARCHAR(64)", None),
         ("public_report_tokens", "pin_length", "INTEGER", None),
@@ -6689,8 +6692,9 @@ def _push_announcement_if_due_now(announcement_id: int, club_id: int) -> None:
     (chống trùng theo log như cron, nên cron 15 phút chạy sau không gửi lại). Lỗi nuốt, không ảnh hưởng thao tác lưu."""
     db = SessionLocal()
     try:
-        today = _now_vn().date()
-        due = [it for it in _due_announcement_items(db, club_id, today) if it["announcement_id"] == announcement_id]
+        now = _now_vn()
+        today = now.date()
+        due = [it for it in _due_announcement_items(db, club_id, now) if it["announcement_id"] == announcement_id]
         if not due:
             return
         bot_token = _os.environ.get("TELEGRAM_BOT_TOKEN") or _os.environ.get("BOT_TOKEN", "")
@@ -6749,6 +6753,8 @@ def delete_announcement(aid: int, db: Session = Depends(get_db), perms: ClubPerm
     a = db.query(models.Announcement).filter(models.Announcement.id == aid, models.Announcement.club_id == perms.club_id).first()
     if not a:
         raise HTTPException(404, "Không tìm thấy thông báo")
+    for log_model in (models.AnnouncementPushLog, models.WebPushLog, models.AnnouncementPreRemindLog):
+        db.query(log_model).filter(log_model.announcement_id == aid).delete()
     db.delete(a); db.commit()
     return None
 
@@ -6782,16 +6788,48 @@ def _club_admin_chat_ids(db: Session, club_id: int) -> list:
     return [m.telegram_chat_id for m in rows]
 
 
+PRE_REMIND_GRACE_MIN = 30   # nhắc trước giờ bắt đầu: còn gửi tối đa 30 phút sau giờ bắt đầu (cron chậm/máy khởi động lại), quá thì bỏ
+
+
+def _fmt_minutes(n: int) -> str:
+    """90 → '1 giờ 30 phút', 60 → '1 giờ', 45 → '45 phút', 0 → '0 phút'."""
+    n = max(0, int(n or 0))
+    h, m = divmod(n, 60)
+    if h and m:
+        return f"{h} giờ {m} phút"
+    return f"{h} giờ" if h else f"{m} phút"
+
+
+def _pre_remind_logged(db: Session, item: dict, channel: str, target_id: int) -> bool:
+    occ = date.fromisoformat(item["date"])
+    return db.query(models.AnnouncementPreRemindLog).filter(
+        models.AnnouncementPreRemindLog.announcement_id == item["announcement_id"],
+        models.AnnouncementPreRemindLog.occurrence_date == occ,
+        models.AnnouncementPreRemindLog.channel == channel,
+        models.AnnouncementPreRemindLog.target_id == target_id).first() is not None
+
+
+def _pre_remind_log(db: Session, item: dict, channel: str, target_id: int) -> None:
+    db.add(models.AnnouncementPreRemindLog(announcement_id=item["announcement_id"], occurrence_date=date.fromisoformat(item["date"]),
+                                           channel=channel, target_id=target_id))
+
+
 def _announcement_push_text(item: dict, club_name: str) -> str:
-    """Nội dung Telegram (Markdown) cho một lần xuất hiện: lịch sinh hoạt hoặc khoản thu (kèm tên chưa đóng)."""
+    """Nội dung Telegram (Markdown) cho một lần xuất hiện: lịch sinh hoạt hoặc khoản thu (kèm tên chưa đóng).
+    item["pre_minutes"] (nhắc trước giờ bắt đầu) → tiêu đề "Sắp đến giờ" + dòng còn bao lâu."""
     d = date.fromisoformat(item["date"])
     when = f"{_ann.WEEKDAY_LABELS[d.weekday()]}, {d.strftime('%d/%m/%Y')}"
     if item.get("start_time"):
         when += f" · {item['start_time']}"
     if item.get("duration_min"):
         when += f" · {item['duration_min']} phút"
-    head = "🔔" if item["kind"] == "fee" else "📅"
-    lines = [f"{head} *{item['title']}*", f"CLB: {club_name}", when]
+    pre = item.get("pre_minutes")
+    if pre is not None:
+        lines = [f"⏰ *Sắp đến giờ: {item['title']}*", f"CLB: {club_name}", when,
+                 f"Bắt đầu lúc {item.get('start_time')} — còn {_fmt_minutes(pre)}" if pre else f"Đã đến giờ bắt đầu ({item.get('start_time')})"]
+    else:
+        head = "🔔" if item["kind"] == "fee" else "📅"
+        lines = [f"{head} *{item['title']}*", f"CLB: {club_name}", when]
     if item.get("body"):
         lines.append("")
         lines.append(item["body"])
@@ -6826,19 +6864,23 @@ def _push_announcement_items(db: Session, club_id: int, items: list, today: date
     for it in items:
         occ = date.fromisoformat(it["date"])
         text = _announcement_push_text(it, club_name)
+        pre = it.get("pre_minutes") is not None   # lần nhắc trước giờ bắt đầu: log riêng, một lần cho mỗi lần xuất hiện
         for chat_id in chat_ids:
-            if dedupe and db.query(models.AnnouncementPushLog).filter(
+            if dedupe and (_pre_remind_logged(db, it, "tg", chat_id) if pre else db.query(models.AnnouncementPushLog).filter(
                 models.AnnouncementPushLog.announcement_id == it["announcement_id"],
                 models.AnnouncementPushLog.occurrence_date == occ,
                 models.AnnouncementPushLog.chat_id == chat_id,
                 models.AnnouncementPushLog.send_date == today,
-            ).first():
+            ).first() is not None):
                 out["skipped"] += 1
                 continue
             try:
                 _telegram_send(bot_token, chat_id, text)
                 if dedupe:   # gửi tay (dedupe=False) không ghi log — như nhắc phí thủ công, gửi bao nhiêu lần tuỳ admin
-                    db.add(models.AnnouncementPushLog(announcement_id=it["announcement_id"], occurrence_date=occ, chat_id=chat_id, send_date=today))
+                    if pre:
+                        _pre_remind_log(db, it, "tg", chat_id)
+                    else:
+                        db.add(models.AnnouncementPushLog(announcement_id=it["announcement_id"], occurrence_date=occ, chat_id=chat_id, send_date=today))
                     db.commit()
                 out["sent"] += 1
             except Exception as exc:
@@ -6854,9 +6896,14 @@ def _bot_token_or_500() -> str:
     return tok
 
 
-def _due_announcement_items(db: Session, club_id: int, today: date) -> list:
-    """Lần xuất hiện cần đẩy hôm nay cho quy tắc push_telegram: ngày đầu cửa sổ (d − lead_days) và đúng ngày d;
-    repeat_daily → mọi ngày trong cửa sổ (chống trùng theo ngày ở log)."""
+def _due_announcement_items(db: Session, club_id: int, now: datetime) -> list:
+    """Lần xuất hiện cần đẩy lúc `now` (giờ VN) cho quy tắc push_telegram.
+    - Đẩy theo ngày: ngày đầu cửa sổ (d − lead_days) và đúng ngày d (repeat_daily → mọi ngày trong cửa sổ), CHỈ KHI đã qua
+      giờ đẩy push_time của quy tắc (2026-10-30; không có mặc định → chưa đặt giờ thì không gửi). Chống trùng theo ngày ở log.
+    - Nhắc trước giờ bắt đầu (remind_before_min, cần start_time): đúng ngày d, từ (start − N phút) tới start + PRE_REMIND_GRACE_MIN,
+      trả bản sao item kèm "pre_minutes"; chống trùng ở announcement_pre_remind_log (một lần cho mỗi lần xuất hiện)."""
+    today = now.date()
+    hhmm = now.strftime("%H:%M")
     items = _announcement_feed(db, club_id, today, 60)
     rules = {a.id: a for a in db.query(models.Announcement).filter(
         models.Announcement.club_id == club_id, models.Announcement.push_telegram.is_(True)).all()}
@@ -6867,11 +6914,14 @@ def _due_announcement_items(db: Session, club_id: int, today: date) -> list:
             continue
         d = date.fromisoformat(it["date"])
         first_day = d - timedelta(days=max(0, int(r.lead_days or 0)))
-        if r.repeat_daily:
-            if first_day <= today <= d:          # nhắc lại mỗi ngày trong cửa sổ (như nhắc phí Telegram cũ)
-                due.append(it)
-        elif today == first_day or today == d:
+        day_due = (first_day <= today <= d) if r.repeat_daily else (today == first_day or today == d)
+        if day_due and r.push_time and hhmm >= r.push_time:
             due.append(it)
+        if today == d and r.remind_before_min is not None and it.get("start_time"):
+            h, m = (int(x) for x in it["start_time"].split(":"))
+            start_dt = datetime.combine(d, datetime.min.time()).replace(hour=h, minute=m)
+            if start_dt - timedelta(minutes=int(r.remind_before_min)) <= now <= start_dt + timedelta(minutes=PRE_REMIND_GRACE_MIN):
+                due.append({**it, "pre_minutes": int(r.remind_before_min)})
     return due
 
 
@@ -6879,6 +6929,11 @@ def _web_push_payload(it: dict, club_name: str, slug) -> dict:
     """Nội dung thông báo hệ điều hành: tiêu đề ngắn, thân ≤ 200 ký tự, bấm vào mở trang public."""
     d = date.fromisoformat(it["date"])
     when = f"{_ann.WEEKDAY_LABELS[d.weekday()]} {d.strftime('%d/%m')}" + (f" · {it['start_time']}" if it.get("start_time") else "")
+    pre = it.get("pre_minutes")
+    if pre is not None:   # nhắc trước giờ bắt đầu
+        body = (f"Bắt đầu lúc {it.get('start_time')}, còn {_fmt_minutes(pre)}. " if pre else f"Đã đến giờ bắt đầu ({it.get('start_time')}). ") + (it.get("body") or "").strip()
+        return {"title": f"⏰ Sắp đến giờ: {it['title']} — {club_name}", "body": body.strip()[:200],
+                "tag": f"ann-pre-{it['announcement_id']}-{it['date']}", "url": f"/public/report/{slug}" if slug else "/"}
     if it["kind"] == "fee":
         body = f"{when}. " + (f"Còn {it['unpaid_count']} người chưa đóng." if it.get("unpaid_count") else "Tất cả đã đóng.")
     else:
@@ -6910,9 +6965,10 @@ def _send_web_push_items(db: Session, club_id: int, items: list, today: date, de
         dead = False
         for it in items:
             occ = date.fromisoformat(it["date"])
-            if dedupe and db.query(models.WebPushLog).filter(
+            pre = it.get("pre_minutes") is not None
+            if dedupe and (_pre_remind_logged(db, it, "wp", sub.id) if pre else db.query(models.WebPushLog).filter(
                 models.WebPushLog.announcement_id == it["announcement_id"], models.WebPushLog.occurrence_date == occ,
-                models.WebPushLog.subscription_id == sub.id, models.WebPushLog.send_date == today).first():
+                models.WebPushLog.subscription_id == sub.id, models.WebPushLog.send_date == today).first() is not None):
                 out["skipped"] += 1
                 continue
             res = _wp.send_push(sub_info, _web_push_payload(it, club_name, slug))
@@ -6920,7 +6976,10 @@ def _send_web_push_items(db: Session, club_id: int, items: list, today: date, de
                 out["sent"] += 1
                 sub.failures = 0
                 if dedupe:
-                    db.add(models.WebPushLog(announcement_id=it["announcement_id"], occurrence_date=occ, subscription_id=sub.id, send_date=today))
+                    if pre:
+                        _pre_remind_log(db, it, "wp", sub.id)
+                    else:
+                        db.add(models.WebPushLog(announcement_id=it["announcement_id"], occurrence_date=occ, subscription_id=sub.id, send_date=today))
                     db.commit()
             elif res == "gone":
                 dead = True; break
@@ -6931,6 +6990,8 @@ def _send_web_push_items(db: Session, club_id: int, items: list, today: date, de
                     dead = True; break
         if dead:
             db.query(models.WebPushLog).filter(models.WebPushLog.subscription_id == sub.id).delete()
+            db.query(models.AnnouncementPreRemindLog).filter(models.AnnouncementPreRemindLog.channel == "wp",
+                                                              models.AnnouncementPreRemindLog.target_id == sub.id).delete()
             db.delete(sub); out["removed"] += 1
         db.commit()
     return out
@@ -6938,16 +6999,18 @@ def _send_web_push_items(db: Session, club_id: int, items: list, today: date, de
 
 @app.post("/api/internal/send-announcements")
 def send_announcements_internal(db: Session = Depends(get_db), _: None = Depends(_check_internal_secret)):
-    """Cron (notify_bot.py, 14h VN hằng ngày): với quy tắc push_telegram, gửi Telegram tới admin CLB + Web Push tới người xem
-    public đã đăng ký, vào NGÀY ĐẦU cửa sổ hiển thị (d − lead_days) và ĐÚNG NGÀY d. Chống trùng theo announcement_push_log / web_push_log."""
+    """Cron (notify_bot.py, mỗi 15 phút): với quy tắc push_telegram, gửi Telegram tới admin CLB + Web Push tới người xem public
+    đã đăng ký, vào NGÀY ĐẦU cửa sổ hiển thị (d − lead_days) và ĐÚNG NGÀY d, khi đã qua GIỜ ĐẨY push_time của quy tắc (2026-10-30);
+    kèm lần nhắc trước giờ bắt đầu nếu đặt remind_before_min. Chống trùng theo announcement_push_log / web_push_log / pre_remind_log."""
     bot_token = _os.environ.get("TELEGRAM_BOT_TOKEN") or _os.environ.get("BOT_TOKEN", "")
-    today = _now_vn().date()
+    now = _now_vn()
+    today = now.date()
     club_ids = [r[0] for r in db.query(models.Announcement.club_id).filter(
         models.Announcement.is_active.is_(True), models.Announcement.push_telegram.is_(True)).distinct().all()]
     total = {"sent": 0, "skipped": 0, "errors": [], "clubs": len(club_ids),
              "web_push": {"sent": 0, "skipped": 0, "removed": 0, "errors": 0}}
     for cid in club_ids:
-        due = _due_announcement_items(db, cid, today)
+        due = _due_announcement_items(db, cid, now)
         if bot_token:
             res = _push_announcement_items(db, cid, due, today, bot_token, dedupe=True)
             total["sent"] += res["sent"]; total["skipped"] += res["skipped"]; total["errors"].extend(res["errors"])

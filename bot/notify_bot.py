@@ -1,6 +1,7 @@
 """
 Script cron: đẩy thông báo (lịch sinh hoạt / khoản thu) qua Telegram + Web Push — gọi backend mỗi 15 phút.
-Backend tự chọn ngày (ngày đầu cửa sổ, đúng ngày, hoặc mỗi ngày nếu "nhắc lại hằng ngày") và chống trùng theo ngày.
+Backend tự chọn ngày (ngày đầu cửa sổ, đúng ngày, hoặc mỗi ngày nếu "nhắc lại hằng ngày"), chỉ gửi khi tới Giờ đẩy của quy tắc
+(2026-10-30, trước đó gửi ngay sau 0h) kèm nhắc trước giờ bắt đầu nếu đặt, và chống trùng theo ngày.
 Nhắc đóng phí Telegram cũ đã gỡ (2026-10-28) — khoản thu đã chuyển thành quy tắc thông báo. Cờ --announcements-only giữ để tương thích.
 """
 import json
