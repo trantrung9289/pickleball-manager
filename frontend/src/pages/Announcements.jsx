@@ -122,9 +122,14 @@ export default function Announcements({ perms, clubName = "" }) {
   };
 
   const pushNow = async (r) => {
-    const ok = await confirm({ title: "Gửi Telegram ngay?", content: <div>Gửi lần xuất hiện gần nhất của <b>{r.title}</b> tới các quản trị viên đã liên kết Telegram.</div>, okText: "Gửi" });
+    const ok = await confirm({ title: "Gửi ngay?", content: <div>Gửi lần xuất hiện gần nhất của <b>{r.title}</b> tới quản trị viên đã liên kết Telegram, thiết bị đã bật thông báo và nhóm Zalo của CLB.</div>, okText: "Gửi" });
     if (!ok) return;
-    try { const res = await announcementsApi.push(r.id); message.success(`Đã gửi ${res.data.sent} tin (ngày ${dayjs(res.data.date).format("DD/MM")})${res.data.errors?.length ? `, ${res.data.errors.length} lỗi` : ""}`); }
+    try {
+      const d = (await announcementsApi.push(r.id)).data;
+      const parts = [`Telegram ${d.sent}`, `thiết bị ${d.web_push_sent ?? 0}`, `Zalo ${d.zalo_sent ?? 0}`];
+      const errs = (d.errors?.length || 0) + (d.web_push_errors || 0) + (d.zalo_errors || 0);
+      message.success(`Đã gửi (ngày ${dayjs(d.date).format("DD/MM")}): ${parts.join(", ")}${errs ? `, ${errs} lỗi` : ""}`);
+    }
     catch (err) { message.error(err.response?.data?.detail || "Không gửi được"); }
   };
 
@@ -155,7 +160,7 @@ export default function Announcements({ perms, clubName = "" }) {
       title: "Thao tác", width: 130,
       render: (_, r) => canEdit ? (
         <Space>
-          <Tooltip title="Gửi Telegram ngay"><Button size="small" icon={<SendOutlined />} onClick={() => pushNow(r)} /></Tooltip>
+          <Tooltip title="Gửi ngay (Telegram, thiết bị, Zalo)"><Button size="small" icon={<SendOutlined />} onClick={() => pushNow(r)} /></Tooltip>
           <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(r)} />
           <Button size="small" danger icon={<DeleteOutlined />} onClick={() => handleDelete(r)} />
         </Space>

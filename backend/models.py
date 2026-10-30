@@ -139,6 +139,13 @@ class Club(Base):
     # không vào được bot ở CLB này, không liên kết Telegram, không nhận nhắc phí — bất kể cờ theo tài khoản.
     bot_enabled = Column(Boolean, default=True, nullable=False)
     chat_locked = Column(Boolean, default=False, nullable=False)   # 2026-10-28: admin khoá kênh trò chuyện public
+    # 2026-10-30: Zalo Bot Platform (chính thức, miễn phí) — mỗi CLB một bot, gửi thông báo vào nhóm Zalo đã nhận diện (bảng zalo_groups)
+    zalo_bot_token_enc = Column(Text, nullable=True)            # token bot mã hoá Fernet (zalo_bot.encrypt_token), không trả ra API
+    zalo_bot_id = Column(String(40), nullable=True)
+    zalo_bot_name = Column(String(100), nullable=True)
+    zalo_webhook_secret = Column(String(64), nullable=True)      # header X-Bot-Api-Secret-Token
+    zalo_webhook_ok = Column(Boolean, default=False, nullable=False)
+    zalo_show_unpaid_names = Column(Boolean, default=True, nullable=False)   # tin nhắc phí vào nhóm có liệt kê tên chưa đóng
     created_at = Column(DateTime, server_default=func.now())
 
     @property
@@ -948,3 +955,38 @@ class ClubBotMessage(Base):
     rows = Column(JSON, nullable=True)
     kind = Column(String(10), nullable=True)
     created_at = Column(DateTime, nullable=False, server_default=func.now(), index=True)   # main ghi utcnow tường minh
+
+
+class ZaloGroup(Base):
+    """2026-10-30: nhóm Zalo đích của CLB. Nhận diện tự động khi bot được thêm vào nhóm và được @nhắc tên (webhook/getUpdates).
+    Sự kiện Zalo không kèm tên nhóm → admin đặt nhãn; enabled do admin; failures/last_error để tự tắt khi chat_id hỏng (410)."""
+    __tablename__ = "zalo_groups"
+
+    id = Column(Integer, primary_key=True, index=True)
+    club_id = Column(Integer, ForeignKey("clubs.id"), nullable=False, index=True)
+    chat_id = Column(String(60), nullable=False)
+    label = Column(String(200), nullable=True)
+    added_by = Column(String(100), nullable=True)      # display_name người @nhắc bot lần đầu
+    first_text = Column(Text, nullable=True)           # nội dung tin @nhắc đầu tiên (giúp admin nhận ra nhóm)
+    enabled = Column(Boolean, default=True, nullable=False)
+    failures = Column(Integer, default=0, nullable=False)
+    last_error = Column(String(300), nullable=True)
+    last_sent_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+    __table_args__ = (UniqueConstraint("club_id", "chat_id", name="uq_zalo_group_per_club"),)
+
+
+class ZaloPushLog(Base):
+    """Chống gửi trùng Zalo theo (thông báo, ngày xuất hiện, nhóm, ngày gửi) — như web_push_log. Nhắc trước giờ bắt đầu dùng
+    announcement_pre_remind_log channel 'zl' (target_id = zalo_groups.id)."""
+    __tablename__ = "zalo_push_log"
+
+    id = Column(Integer, primary_key=True, index=True)
+    announcement_id = Column(Integer, ForeignKey("announcements.id"), nullable=False, index=True)
+    occurrence_date = Column(Date, nullable=False)
+    group_id = Column(Integer, ForeignKey("zalo_groups.id"), nullable=False)
+    send_date = Column(Date, nullable=False)
+    sent_at = Column(DateTime, server_default=func.now())
+
+    __table_args__ = (UniqueConstraint("announcement_id", "occurrence_date", "group_id", "send_date", name="uq_zalo_push_per_day"),)

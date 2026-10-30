@@ -1277,3 +1277,17 @@ class ClubBotMessageIn(BaseModel):
 
 class ClubBotHistoryIn(BaseModel):
     messages: List[ClubBotMessageIn] = Field(..., min_length=1, max_length=50)
+
+
+# ── ZALO BOT (2026-10-30) ─────────────────────────────────────────────────────
+class ZaloTokenIn(BaseModel):
+    token: str = Field(min_length=10, max_length=300)
+
+
+class ZaloGroupPatch(BaseModel):
+    label: Optional[str] = Field(default=None, max_length=200)
+    enabled: Optional[bool] = None
+
+
+class ZaloSettingsIn(BaseModel):
+    show_unpaid_names: bool

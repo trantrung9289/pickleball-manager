@@ -161,6 +161,13 @@ def _run_migration():
         # 2026-10-30: giờ đẩy theo quy tắc (không mặc định) + nhắc trước giờ bắt đầu (phút)
         ("announcements", "push_time", "VARCHAR(5)", None),
         ("announcements", "remind_before_min", "INTEGER", None),
+        # 2026-10-30: Zalo Bot Platform theo CLB
+        ("clubs", "zalo_bot_token_enc", "TEXT", None),
+        ("clubs", "zalo_bot_id", "VARCHAR(40)", None),
+        ("clubs", "zalo_bot_name", "VARCHAR(100)", None),
+        ("clubs", "zalo_webhook_secret", "VARCHAR(64)", None),
+        ("clubs", "zalo_webhook_ok", "BOOLEAN DEFAULT 0 NOT NULL", None),
+        ("clubs", "zalo_show_unpaid_names", "BOOLEAN DEFAULT 1 NOT NULL", None),
         # 2026-10-28: mã PIN cho link công khai
         ("public_report_tokens", "pin_hash", "VARCHAR(64)", None),
         ("public_report_tokens", "pin_length", "INTEGER", None),
@@ -6635,6 +6642,8 @@ def _unpaid_members(db: Session, club_id: int, fee_type_id: int, month: int, yea
 # Thông báo khoản thu: nội dung tự sinh từ _unpaid_members (dùng chung với nhắc phí Telegram), public hiện cả tên.
 import announcements as _ann
 import webpush_service as _wp
+import zalo_bot as _zalo
+import hmac as _hmac
 
 
 def _announcement_out(a: models.Announcement) -> dict:
@@ -6701,6 +6710,7 @@ def _push_announcement_if_due_now(announcement_id: int, club_id: int) -> None:
         if bot_token:
             _push_announcement_items(db, club_id, due, today, bot_token, dedupe=True)
         _send_web_push_items(db, club_id, due, today, dedupe=True)
+        _send_zalo_items(db, club_id, due, today, dedupe=True)
     except Exception as exc:   # noqa: BLE001
         print(f"[announcements] gửi ngay khi lưu thất bại: {exc}")
     finally:
@@ -6753,7 +6763,7 @@ def delete_announcement(aid: int, db: Session = Depends(get_db), perms: ClubPerm
     a = db.query(models.Announcement).filter(models.Announcement.id == aid, models.Announcement.club_id == perms.club_id).first()
     if not a:
         raise HTTPException(404, "Không tìm thấy thông báo")
-    for log_model in (models.AnnouncementPushLog, models.WebPushLog, models.AnnouncementPreRemindLog):
+    for log_model in (models.AnnouncementPushLog, models.WebPushLog, models.AnnouncementPreRemindLog, models.ZaloPushLog):
         db.query(log_model).filter(log_model.announcement_id == aid).delete()
     db.delete(a); db.commit()
     return None
@@ -6997,6 +7007,276 @@ def _send_web_push_items(db: Session, club_id: int, items: list, today: date, de
     return out
 
 
+# ── ZALO BOT (2026-10-30): gửi thông báo vào nhóm Zalo của CLB qua Zalo Bot Platform chính thức ──
+def _zalo_token(club) -> Optional[str]:
+    return _zalo.decrypt_token(club.zalo_bot_token_enc) if club and club.zalo_bot_token_enc else None
+
+
+def _zalo_enabled_groups(db: Session, club_id: int) -> list:
+    return db.query(models.ZaloGroup).filter(models.ZaloGroup.club_id == club_id, models.ZaloGroup.enabled.is_(True)).all()
+
+
+def _zalo_text(it: dict, club) -> str:
+    """Nội dung tin nhóm Zalo: dùng chung _announcement_push_text (markdown) nhưng KHÔNG kèm SĐT (nhóm đông người);
+    tắt zalo_show_unpaid_names → bỏ danh sách tên (giữ dòng 'Còn N người chưa đóng' trong body)."""
+    item = dict(it)
+    if item.get("kind") == "fee":
+        members = item.get("unpaid_members") or []
+        item["unpaid_members"] = [] if not club.zalo_show_unpaid_names else [{"full_name": m.get("full_name")} for m in members]
+    return _announcement_push_text(item, club.name)
+
+
+def _send_zalo_items(db: Session, club_id: int, items: list, today: date, dedupe: bool = True) -> dict:
+    """Gửi các item tới mọi nhóm Zalo đang bật của CLB. dedupe → bỏ qua (thông báo, ngày, nhóm) đã gửi hôm nay (zalo_push_log;
+    nhắc trước: pre_remind_log channel 'zl'). Tin dài cắt ≤2000 ký tự. Lỗi 410/404 (chat_id hỏng) → tắt nhóm; lỗi khác failures+1,
+    ≥5 lần tắt. Không có token/nhóm → {0}."""
+    out = {"sent": 0, "skipped": 0, "errors": 0, "disabled": 0}
+    club = db.query(models.Club).filter(models.Club.id == club_id).first()
+    token = _zalo_token(club)
+    groups = _zalo_enabled_groups(db, club_id) if token else []
+    if not groups or not items:
+        return out
+    for g in groups:
+        for it in items:
+            occ = date.fromisoformat(it["date"])
+            pre = it.get("pre_minutes") is not None
+            if dedupe and (_pre_remind_logged(db, it, "zl", g.id) if pre else db.query(models.ZaloPushLog).filter(
+                    models.ZaloPushLog.announcement_id == it["announcement_id"], models.ZaloPushLog.occurrence_date == occ,
+                    models.ZaloPushLog.group_id == g.id, models.ZaloPushLog.send_date == today).first() is not None):
+                out["skipped"] += 1
+                continue
+            try:
+                for chunk in _zalo.chunk_text(_zalo_text(it, club)):
+                    _zalo.send_text(token, g.chat_id, chunk)
+                g.failures, g.last_error, g.last_sent_at = 0, None, datetime.utcnow()
+                if dedupe:
+                    if pre:
+                        _pre_remind_log(db, it, "zl", g.id)
+                    else:
+                        db.add(models.ZaloPushLog(announcement_id=it["announcement_id"], occurrence_date=occ, group_id=g.id, send_date=today))
+                out["sent"] += 1
+                db.commit()
+            except _zalo.ZaloError as exc:
+                out["errors"] += 1
+                g.last_error = f"{exc.code}: {exc.description}"[:300]
+                if exc.code in (404, 410):
+                    g.enabled = False; out["disabled"] += 1
+                else:
+                    g.failures = (g.failures or 0) + 1
+                    if g.failures >= 5:
+                        g.enabled = False; out["disabled"] += 1
+                db.commit()
+                if not g.enabled:
+                    break
+    return out
+
+
+def _zalo_handle_event(db: Session, club, ev: dict) -> Optional[str]:
+    """Sự kiện từ webhook/getUpdates: tin trong NHÓM (chat_type GROUP, chat_id 'zgr-…') → ghi nhận nhóm (lần đầu) để admin chọn;
+    tin RIÊNG → trả lời hướng dẫn (bot chỉ gửi vào nhóm). Trả 'group' | 'private' | None."""
+    msg = (ev or {}).get("message") or {}
+    chat = msg.get("chat") or {}
+    sender = msg.get("from") or {}
+    if sender.get("is_bot"):
+        return None
+    chat_id = str(chat.get("id") or "")
+    if not chat_id:
+        return None
+    if chat.get("chat_type") == "GROUP" or _zalo.is_group_chat(chat_id):
+        g = db.query(models.ZaloGroup).filter(models.ZaloGroup.club_id == club.id, models.ZaloGroup.chat_id == chat_id).first()
+        if not g:
+            db.add(models.ZaloGroup(club_id=club.id, chat_id=chat_id, added_by=(sender.get("display_name") or "")[:100],
+                                    first_text=(msg.get("text") or "")[:500]))
+            db.commit()
+        return "group"
+    token = _zalo_token(club)
+    if token:
+        try:
+            _zalo.send_text(token, chat_id, f"Bot này chỉ gửi thông báo của CLB {club.name} vào nhóm Zalo. "
+                                            "Hãy thêm bot vào nhóm của CLB rồi nhắc @tên bot một lần để hệ thống nhận diện nhóm.", markdown=False)
+        except _zalo.ZaloError:
+            pass
+    return "private"
+
+
+def _zalo_webhook_url(request: Request, club_id: int) -> str:
+    base = _os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
+    if not base:
+        host = request.headers.get("host", "localhost")
+        scheme = "http" if host.split(":")[0] in ("localhost", "127.0.0.1") else "https"
+        base = f"{scheme}://{host}"
+    return f"{base}/api/zalo/webhook/{club_id}"
+
+
+def _zalo_status(db: Session, club) -> dict:
+    token = _zalo_token(club)
+    groups = db.query(models.ZaloGroup).filter(models.ZaloGroup.club_id == club.id).order_by(models.ZaloGroup.id).all()
+    return {
+        "connected": bool(token),
+        "token_stored": bool(club.zalo_bot_token_enc),      # có token nhưng không giải mã được → yêu cầu nhập lại
+        "bot_id": club.zalo_bot_id, "bot_name": club.zalo_bot_name, "token_tail": _zalo.token_tail(token),
+        "webhook_ok": bool(club.zalo_webhook_ok), "show_unpaid_names": bool(club.zalo_show_unpaid_names),
+        "groups": [{"id": g.id, "chat_id": g.chat_id, "label": g.label, "added_by": g.added_by, "first_text": g.first_text,
+                    "enabled": g.enabled, "failures": g.failures, "last_error": g.last_error,
+                    "last_sent_at": g.last_sent_at.isoformat() + "Z" if g.last_sent_at else None,
+                    "created_at": g.created_at.isoformat() + "Z" if g.created_at else None} for g in groups],
+    }
+
+
+def _club_or_404(db: Session, club_id: int):
+    club = db.query(models.Club).filter(models.Club.id == club_id).first()
+    if not club:
+        raise HTTPException(404, "Không tìm thấy CLB")
+    return club
+
+
+@app.get("/api/club/zalo")
+def zalo_status(db: Session = Depends(get_db), perms: ClubPermissions = Depends(get_club_permission)):
+    perms.require_view()
+    return _zalo_status(db, _club_or_404(db, perms.club_id))
+
+
+@app.put("/api/club/zalo/token")
+def zalo_set_token(data: schemas.ZaloTokenIn, request: Request, db: Session = Depends(get_db),
+                   perms: ClubPermissions = Depends(get_club_permission)):
+    """Kết nối bot: kiểm tra token bằng getMe, lưu mã hoá, sinh secret, đăng ký webhook (HTTPS; dev localhost không được →
+    webhook_ok=False, dùng nút 'Quét tin mới' getUpdates)."""
+    perms.require_edit()
+    club = _club_or_404(db, perms.club_id)
+    token = data.token.strip()
+    try:
+        me = _zalo.get_me(token)
+    except _zalo.ZaloError as exc:
+        raise HTTPException(400, f"Token không hợp lệ ({exc.code}): {exc.description}")
+    club.zalo_bot_token_enc = _zalo.encrypt_token(token)
+    club.zalo_bot_id = str(me.get("id") or "")[:40]
+    club.zalo_bot_name = (me.get("display_name") or me.get("account_name") or "")[:100]
+    club.zalo_webhook_secret = club.zalo_webhook_secret or secrets.token_urlsafe(32)[:48]
+    try:
+        _zalo.set_webhook(token, _zalo_webhook_url(request, club.id), club.zalo_webhook_secret)
+        club.zalo_webhook_ok = True
+        warn = None
+    except _zalo.ZaloError as exc:
+        club.zalo_webhook_ok = False
+        warn = f"Chưa đăng ký được webhook ({exc.code}): {exc.description}. Dùng 'Quét tin mới' để nhận diện nhóm."
+    db.commit()
+    return {**_zalo_status(db, club), "warning": warn, "can_join_groups": me.get("can_join_groups")}
+
+
+@app.delete("/api/club/zalo/token")
+def zalo_disconnect(db: Session = Depends(get_db), perms: ClubPermissions = Depends(get_club_permission)):
+    """Ngắt kết nối: gỡ webhook (best effort), xoá token, nhóm và log của CLB."""
+    perms.require_edit()
+    club = _club_or_404(db, perms.club_id)
+    token = _zalo_token(club)
+    if token and club.zalo_webhook_ok:
+        try:
+            _zalo.delete_webhook(token)
+        except _zalo.ZaloError:
+            pass
+    gids = [g.id for g in db.query(models.ZaloGroup).filter(models.ZaloGroup.club_id == club.id).all()]
+    if gids:
+        db.query(models.ZaloPushLog).filter(models.ZaloPushLog.group_id.in_(gids)).delete(synchronize_session=False)
+        db.query(models.AnnouncementPreRemindLog).filter(models.AnnouncementPreRemindLog.channel == "zl",
+                                                          models.AnnouncementPreRemindLog.target_id.in_(gids)).delete(synchronize_session=False)
+        db.query(models.ZaloGroup).filter(models.ZaloGroup.id.in_(gids)).delete(synchronize_session=False)
+    club.zalo_bot_token_enc = club.zalo_bot_id = club.zalo_bot_name = None
+    club.zalo_webhook_ok = False
+    db.commit()
+    return _zalo_status(db, club)
+
+
+@app.post("/api/club/zalo/poll")
+def zalo_poll(db: Session = Depends(get_db), perms: ClubPermissions = Depends(get_club_permission)):
+    """'Quét tin mới' (dev / khi webhook chưa đăng ký được): getUpdates long-poll 25s → ghi nhận nhóm @nhắc bot TRONG LÚC đang quét.
+    Đã kiểm chứng 2026-10-30: getUpdates KHÔNG trả tin đã đến khi không có ai lắng nghe → prod phải dùng webhook."""
+    perms.require_edit()
+    club = _club_or_404(db, perms.club_id)
+    token = _zalo_token(club)
+    if not token:
+        raise HTTPException(400, "Chưa kết nối bot Zalo")
+    if club.zalo_webhook_ok:
+        raise HTTPException(400, "Đang nhận qua webhook, không cần quét tay")
+    try:
+        events = _zalo.get_updates(token, 25)
+    except _zalo.ZaloError as exc:
+        raise HTTPException(502, f"Zalo lỗi ({exc.code}): {exc.description}")
+    kinds = [_zalo_handle_event(db, club, ev) for ev in events]
+    return {**_zalo_status(db, club), "events": len(events), "groups_seen": kinds.count("group")}
+
+
+@app.post("/api/zalo/webhook/{club_id}")
+@limiter.limit("120/minute")
+async def zalo_webhook(request: Request, club_id: int, db: Session = Depends(get_db),
+                       x_bot_api_secret_token: Optional[str] = Header(None)):
+    """Zalo gọi khi bot nhận tin (riêng, hoặc trong nhóm khi được @nhắc). Kiểm secret theo CLB; luôn trả 200 để Zalo không gửi lại."""
+    club = db.query(models.Club).filter(models.Club.id == club_id).first()
+    if not club or not club.zalo_webhook_secret or not x_bot_api_secret_token \
+            or not _hmac.compare_digest(club.zalo_webhook_secret, x_bot_api_secret_token):
+        raise HTTPException(403, "Sai secret webhook")
+    try:
+        ev = await request.json()
+    except Exception:   # noqa: BLE001
+        return {"ok": True}
+    kind = _zalo_handle_event(db, club, ev if isinstance(ev, dict) else {})
+    return {"ok": True, "handled": kind}
+
+
+@app.patch("/api/club/zalo/groups/{gid}")
+def zalo_group_patch(gid: int, data: schemas.ZaloGroupPatch, db: Session = Depends(get_db),
+                     perms: ClubPermissions = Depends(get_club_permission)):
+    perms.require_edit()
+    g = db.query(models.ZaloGroup).filter(models.ZaloGroup.id == gid, models.ZaloGroup.club_id == perms.club_id).first()
+    if not g:
+        raise HTTPException(404, "Không tìm thấy nhóm")
+    if data.label is not None:
+        g.label = data.label.strip() or None
+    if data.enabled is not None:
+        g.enabled = data.enabled
+        if data.enabled:
+            g.failures, g.last_error = 0, None
+    db.commit()
+    return _zalo_status(db, _club_or_404(db, perms.club_id))
+
+
+@app.delete("/api/club/zalo/groups/{gid}")
+def zalo_group_delete(gid: int, db: Session = Depends(get_db), perms: ClubPermissions = Depends(get_club_permission)):
+    perms.require_edit()
+    g = db.query(models.ZaloGroup).filter(models.ZaloGroup.id == gid, models.ZaloGroup.club_id == perms.club_id).first()
+    if not g:
+        raise HTTPException(404, "Không tìm thấy nhóm")
+    db.query(models.ZaloPushLog).filter(models.ZaloPushLog.group_id == gid).delete()
+    db.query(models.AnnouncementPreRemindLog).filter(models.AnnouncementPreRemindLog.channel == "zl",
+                                                      models.AnnouncementPreRemindLog.target_id == gid).delete()
+    db.delete(g); db.commit()
+    return _zalo_status(db, _club_or_404(db, perms.club_id))
+
+
+@app.post("/api/club/zalo/groups/{gid}/test")
+def zalo_group_test(gid: int, db: Session = Depends(get_db), perms: ClubPermissions = Depends(get_club_permission)):
+    perms.require_edit()
+    club = _club_or_404(db, perms.club_id)
+    g = db.query(models.ZaloGroup).filter(models.ZaloGroup.id == gid, models.ZaloGroup.club_id == club.id).first()
+    token = _zalo_token(club)
+    if not g or not token:
+        raise HTTPException(404, "Không tìm thấy nhóm hoặc chưa kết nối bot")
+    try:
+        _zalo.send_text(token, g.chat_id, f"✅ Tin thử từ hệ thống CLB {club.name}: nhóm này sẽ nhận thông báo nhắc nhở.", markdown=False)
+    except _zalo.ZaloError as exc:
+        raise HTTPException(502, f"Gửi thất bại ({exc.code}): {exc.description}")
+    g.last_sent_at = datetime.utcnow(); db.commit()
+    return {"ok": True}
+
+
+@app.put("/api/club/zalo/settings")
+def zalo_settings(data: schemas.ZaloSettingsIn, db: Session = Depends(get_db), perms: ClubPermissions = Depends(get_club_permission)):
+    perms.require_edit()
+    club = _club_or_404(db, perms.club_id)
+    club.zalo_show_unpaid_names = data.show_unpaid_names
+    db.commit()
+    return _zalo_status(db, club)
+
+
 @app.post("/api/internal/send-announcements")
 def send_announcements_internal(db: Session = Depends(get_db), _: None = Depends(_check_internal_secret)):
     """Cron (notify_bot.py, mỗi 15 phút): với quy tắc push_telegram, gửi Telegram tới admin CLB + Web Push tới người xem public
@@ -7008,7 +7288,8 @@ def send_announcements_internal(db: Session = Depends(get_db), _: None = Depends
     club_ids = [r[0] for r in db.query(models.Announcement.club_id).filter(
         models.Announcement.is_active.is_(True), models.Announcement.push_telegram.is_(True)).distinct().all()]
     total = {"sent": 0, "skipped": 0, "errors": [], "clubs": len(club_ids),
-             "web_push": {"sent": 0, "skipped": 0, "removed": 0, "errors": 0}}
+             "web_push": {"sent": 0, "skipped": 0, "removed": 0, "errors": 0},
+             "zalo": {"sent": 0, "skipped": 0, "errors": 0, "disabled": 0}}
     for cid in club_ids:
         due = _due_announcement_items(db, cid, now)
         if bot_token:
@@ -7017,6 +7298,9 @@ def send_announcements_internal(db: Session = Depends(get_db), _: None = Depends
         wp = _send_web_push_items(db, cid, due, today, dedupe=True)
         for k in total["web_push"]:
             total["web_push"][k] += wp[k]
+        zl = _send_zalo_items(db, cid, due, today, dedupe=True)
+        for k in total["zalo"]:
+            total["zalo"][k] += zl[k]
     return total
 
 
@@ -7034,13 +7318,17 @@ def push_announcement_now(aid: int, db: Session = Depends(get_db), perms: ClubPe
         raise HTTPException(400, "Quy tắc không có lần xuất hiện nào trong 60 ngày tới")
     tg_ok = _club_bot_enabled(db, perms.club_id) and bool(_club_admin_chat_ids(db, perms.club_id))
     wp_subs = db.query(models.PushSubscription).filter(models.PushSubscription.club_id == perms.club_id).count() if _wp.enabled() else 0
-    if not tg_ok and not wp_subs:
-        raise HTTPException(400, "Chưa có kênh nhận: không có quản trị viên liên kết Telegram và chưa ai bật thông báo trên thiết bị")
+    club = _club_or_404(db, perms.club_id)
+    zl_ok = bool(_zalo_token(club)) and bool(_zalo_enabled_groups(db, perms.club_id))
+    if not tg_ok and not wp_subs and not zl_ok:
+        raise HTTPException(400, "Chưa có kênh nhận: không có quản trị viên liên kết Telegram, chưa ai bật thông báo trên thiết bị và chưa có nhóm Zalo")
     res = {"sent": 0, "errors": []}
     if tg_ok:
         res = _push_announcement_items(db, perms.club_id, items[:1], today, _bot_token_or_500(), dedupe=False)
     wp = _send_web_push_items(db, perms.club_id, items[:1], today, dedupe=False) if wp_subs else {"sent": 0, "removed": 0, "errors": 0, "skipped": 0}
-    return {"sent": res["sent"], "errors": res["errors"], "date": items[0]["date"], "web_push_sent": wp["sent"], "web_push_errors": wp["errors"]}
+    zl = _send_zalo_items(db, perms.club_id, items[:1], today, dedupe=False) if zl_ok else {"sent": 0, "errors": 0, "skipped": 0, "disabled": 0}
+    return {"sent": res["sent"], "errors": res["errors"], "date": items[0]["date"], "web_push_sent": wp["sent"], "web_push_errors": wp["errors"],
+            "zalo_sent": zl["sent"], "zalo_errors": zl["errors"]}
 
 
 # ── Web Push public (2026-10-28): cấu hình, đăng ký/huỷ theo link public, manifest PWA theo CLB ──

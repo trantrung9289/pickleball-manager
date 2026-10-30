@@ -271,6 +271,18 @@ export const chatAdminApi = {
   closePoll: (id) => api.patch(`/api/chat/polls/${id}/close`),
 };
 
+// Zalo Bot Platform theo CLB (2026-10-30): kết nối bot, nhận diện nhóm, bật/tắt nhóm, gửi thử
+export const zaloApi = {
+  status: () => api.get("/api/club/zalo"),
+  setToken: (token) => api.put("/api/club/zalo/token", { token }),
+  disconnect: () => api.delete("/api/club/zalo/token"),
+  poll: () => api.post("/api/club/zalo/poll", {}, { timeout: 45000 }),   // long-poll 25s phía Zalo
+  patchGroup: (id, data) => api.patch(`/api/club/zalo/groups/${id}`, data),
+  deleteGroup: (id) => api.delete(`/api/club/zalo/groups/${id}`),
+  testGroup: (id) => api.post(`/api/club/zalo/groups/${id}/test`),
+  setSettings: (data) => api.put("/api/club/zalo/settings", data),
+};
+
 export const reportLinksApi = {
   list: () => api.get("/api/report-links"),
   create: (data) => api.post("/api/report-links", data),

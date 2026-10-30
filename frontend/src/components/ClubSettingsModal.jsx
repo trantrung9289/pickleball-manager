@@ -7,8 +7,9 @@
  */
 import { useState } from "react";
 import { Alert, Button, ColorPicker, Modal, Space, Tabs, Tag, Typography, Upload, message, Popconfirm } from "antd";
-import { UploadOutlined, DeleteOutlined, PictureOutlined, BgColorsOutlined, LinkOutlined } from "@ant-design/icons";
+import { UploadOutlined, DeleteOutlined, PictureOutlined, BgColorsOutlined, LinkOutlined, MessageOutlined } from "@ant-design/icons";
 import PublicLinksTab from "./PublicLinksTab";
+import ZaloTab from "./ZaloTab";
 import { authApi, logoSrc } from "../api";
 import { useAppTheme } from "../contexts/ThemeContext";
 import { BRAND_PRESETS, DEFAULT_BRAND, brandPalette, contrast, isHex } from "../utils/color";
@@ -121,6 +122,7 @@ export default function ClubSettingsModal({ club, onSaved, onClose, initialTab =
         { key: "logo", label: <span><PictureOutlined /> Logo</span>, children: <LogoTab club={club} onSaved={onSaved} /> },
         { key: "brand", label: <span><BgColorsOutlined /> Màu thương hiệu</span>, children: <BrandTab club={club} value={value} setValue={setValue} saved={saved} /> },
         { key: "links", label: <span><LinkOutlined /> Link công khai</span>, children: <PublicLinksTab /> },
+        { key: "zalo", label: <span><MessageOutlined /> Zalo</span>, children: <ZaloTab /> },
       ]} />
     </Modal>
   );
