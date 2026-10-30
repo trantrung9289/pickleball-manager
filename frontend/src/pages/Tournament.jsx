@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { createPortal } from "react-dom";
 import {
-  Button, Space, Tag, Modal, Form, Input, Select, message, Typography, Row, Col, Card, Steps, InputNumber, Tabs, Badge, Empty, Divider, Alert, Checkbox, Collapse, AutoComplete, Switch, Tooltip, Popover, Dropdown,
+  Button, Space, Tag, Modal, Form, Input, Select, message, Typography, Row, Col, Card, Steps, InputNumber, Tabs, Badge, Empty, Divider, Alert, Checkbox, Collapse, AutoComplete, Switch, Tooltip, Dropdown,
 } from "antd";
 import {
   PlusOutlined, ThunderboltOutlined, TrophyOutlined, EditOutlined, DeleteOutlined, ReloadOutlined, CheckCircleOutlined, SaveOutlined, ArrowRightOutlined, UserOutlined, TeamOutlined, UserAddOutlined, PrinterOutlined, GiftOutlined, WarningOutlined, DownloadOutlined, SettingOutlined, StarOutlined, FileTextOutlined, HistoryOutlined, UsergroupAddOutlined, ArrowLeftOutlined, MoreOutlined,
@@ -22,7 +22,8 @@ import TieRubbersInline from "../components/team/TieRubbersInline";
 import { useViewMode } from "../contexts/ViewModeContext";
 import { useAuth } from "../context/AuthContext";
 import { useRankLevels } from "../hooks/useRankLevels";
-import { buildRealBracketNodes, computeBracketGeometry, findThirdPlaceMatch, isSideMatch, findPlacementMatches } from "../utils/bracketLayout";
+import { isSideMatch, findPlacementMatches } from "../utils/bracketLayout";
+import BracketTree from "../components/BracketTree";
 import { teamLabel, teamRank } from "../utils/tournamentLabels";
 import { TEAM_TYPE_LABELS, defaultTeamRules, normalizeTeamRules, tieScoreLabel, indexTeamPlayers, rubberTotals } from "../utils/teamFormat";
 import TeamOverviewPanel from "../components/team/TeamOverviewPanel";
@@ -711,7 +712,7 @@ function KnockoutBracket({ matches, onScoreClick, renderDetail }) {
   return (
     <>
       <BracketFrame>
-        <BracketTreeDesktop matches={matches} onScoreClick={onScoreClick} renderDetail={renderDetail} />
+        <BracketTree matches={matches} onOpen={onScoreClick} renderDetail={renderDetail} />
       </BracketFrame>
       {placements.length > 0 && (
         <Row gutter={[12, 12]} style={{ marginTop: 12 }}>
@@ -725,214 +726,6 @@ function KnockoutBracket({ matches, onScoreClick, renderDetail }) {
         </Row>
       )}
     </>
-  );
-}
-
-/** Bọc ô nhánh bằng Popover chi tiết trận thành phần (chỉ khi có renderDetail và trận đủ 2 đội). */
-function DetailPopover({ match, renderDetail, children }) {
-  if (!renderDetail || !match?.p1_id || !match?.p2_id) return children;
-  return (
-    <Popover content={<div style={{ maxWidth: 560 }}>{renderDetail(match)}</div>} placement="right" mouseEnterDelay={0.25}
-      title={<span style={{ fontSize: 12 }}>{teamLabel(match.p1)} vs {teamLabel(match.p2)}</span>}>
-      {children}
-    </Popover>
-  );
-}
-
-// ── Sơ đồ nhánh trên màn hình — cùng logic hình học với bảng in (bracketLayout.js),
-// khác style: full tên đội (bọc 2 dòng thay vì cắt "..."), bấm vào ô để nhập điểm luôn.
-const TREE_BOX_W = 232;
-const TREE_COL_GAP = 56;
-const TREE_BOX_H = 78;
-const TREE_HEADER_H = 34;
-
-function treeNodeLabels(node) {
-  const m = node.match;
-  const topLabel = m.p1_id ? teamLabel(m.p1) : (node.feeders[0] ? `Thắng #${node.feeders[0].match_number}` : null);
-  const bottomLabel = m.p2_id ? teamLabel(m.p2) : (node.feeders[1] ? `Thắng #${node.feeders[1].match_number}` : null);
-  // Bye cấu trúc (1 bên trống thật, không phải bỏ giải) chỉ xảy ra ở vòng đầu — phân biệt
-  // với is_walkover (2 bên đều là người thật, 1 bên bỏ giải) để không ẩn mất tên đối thủ.
-  const isStructuralBye = m.status === "completed" && (!m.p1_id || !m.p2_id);
-  return {
-    top: isStructuralBye ? teamLabel(m.p1 || m.p2) : topLabel,
-    bottom: bottomLabel,
-    isBye: isStructuralBye,
-    // Bye hoàn thành mà không có người thắng = đội duy nhất trong ô đã bỏ giải → không ai đi tiếp
-    byeNote: isStructuralBye && m.winner_id == null ? "bỏ giải — không vào vòng sau" : null,
-    scored: m.status === "completed" && m.score1 != null,
-  };
-}
-
-function TreeSlot({ label, rank, score, scored, isWalkover, isWinner, isPending, last }) {
-  return (
-    <div style={{
-      display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
-      padding: "6px 10px", minHeight: 36,
-      borderBottom: last ? "none" : "1px solid #eef0f2",
-      borderLeft: isWinner ? "3px solid #52c41a" : "3px solid transparent",
-      background: isWinner ? "#f6ffed" : "transparent",
-    }}>
-      <span style={{
-        fontSize: 13, lineHeight: 1.25, fontWeight: isWinner ? 700 : 400,
-        color: isPending ? "#aaa" : (isWinner ? "#237804" : "#141413"),
-        display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical",
-        overflow: "hidden", wordBreak: "break-word",
-      }}>
-        {label || "Chờ kết quả"}
-        {rank && <Tag color="purple" style={{ marginLeft: 4, fontSize: 10, lineHeight: "14px", padding: "0 4px" }}>{rank}</Tag>}
-      </span>
-      <span style={{
-        flex: "none", minWidth: 26, height: 22, borderRadius: 4, textAlign: "center", lineHeight: "22px",
-        fontSize: isWalkover ? 10 : 13, fontWeight: 700,
-        background: isWalkover ? "#fffbe6" : "#f5f5f5", color: isWalkover ? "#ad6800" : "#141413",
-        border: isWalkover ? "1px solid #ffe58f" : "1px solid #eee",
-      }}>
-        {isWalkover ? "XT" : (scored ? score : "–")}
-      </span>
-    </div>
-  );
-}
-
-function ThirdPlaceTreeBox({ info, onScoreClick, renderDetail }) {
-  const { match: m, feeders } = info;
-  const nameFor = (side) => {
-    const pid = side === 1 ? m.p1_id : m.p2_id;
-    if (pid) return teamLabel(side === 1 ? m.p1 : m.p2);
-    const feeder = feeders.find((f) => f.loser_next_match_slot === side);
-    return feeder ? `Thua #${feeder.match_number}` : null;
-  };
-  const scored = m.status === "completed" && m.score1 != null;
-  const clickable = !!onScoreClick && !!m.p1_id && !!m.p2_id;
-  return (
-    <DetailPopover match={m} renderDetail={renderDetail}>
-      <div
-        onClick={clickable ? () => onScoreClick(m) : undefined}
-        style={{ border: "1.5px solid #ffe58f", borderRadius: 8, background: "#fff", cursor: clickable ? "pointer" : "default" }}
-      >
-        <TreeSlot label={nameFor(1)} rank={teamRank(m.p1)} score={m.score1} scored={scored}
-          isWalkover={m.is_walkover} isWinner={scored && m.winner_id === m.p1_id} isPending={!m.p1_id} />
-        <TreeSlot label={nameFor(2)} rank={teamRank(m.p2)} score={m.score2} scored={scored}
-          isWalkover={m.is_walkover} isWinner={scored && m.winner_id === m.p2_id} isPending={!m.p2_id} last />
-      </div>
-    </DetailPopover>
-  );
-}
-
-function BracketTreeDesktop({ matches, onScoreClick, renderDetail }) {
-  const roundsNodes = buildRealBracketNodes(matches);
-  if (!roundsNodes.length) return null;
-  const thirdPlaceInfo = findThirdPlaceMatch(matches);
-  const { centers, totalHeight } = computeBracketGeometry(roundsNodes, { boxHeight: TREE_BOX_H, minGap: 30 });
-  // Cột bên phải: ô "Vô địch" (160) và, nếu có, ô "Tranh giải 3" (200) xếp dưới nó — tính đủ để không bị cắt mép
-  const treeWidth = roundsNodes.length * (TREE_BOX_W + TREE_COL_GAP) + (thirdPlaceInfo ? 210 : 190);
-
-  const lines = [];
-  roundsNodes.forEach((round, r) => {
-    if (r === 0) return;
-    const xEnd = r * (TREE_BOX_W + TREE_COL_GAP);
-    const xStart = xEnd - TREE_COL_GAP;
-    const xMid = xStart + TREE_COL_GAP / 2;
-    round.forEach((node) => {
-      const [a, b] = node.feederIds || [];
-      if (a == null || b == null) return;
-      const ya = centers[a], yb = centers[b], yMid = centers[node.id];
-      lines.push(<path key={`${node.id}-l`} d={`M${xStart},${ya} H${xMid} V${yb} M${xStart},${yb} H${xMid} M${xMid},${yMid} H${xEnd}`} />);
-    });
-  });
-  const finalRound = roundsNodes[roundsNodes.length - 1];
-  const finalId = finalRound[0]?.id;
-  const finalY = finalId != null ? centers[finalId] : totalHeight / 2;
-  const champX = roundsNodes.length * (TREE_BOX_W + TREE_COL_GAP);
-  if (finalId != null) lines.push(<path key="champ" d={`M${champX - TREE_COL_GAP},${finalY} H${champX}`} />);
-
-  const finalMatch = finalRound?.[0]?.match;
-  const championName = finalMatch?.status === "completed" && finalMatch.winner_id
-    ? teamLabel(finalMatch.winner_id === finalMatch.p1_id ? finalMatch.p1 : finalMatch.p2)
-    : null;
-  const champBoxTop = finalY - 36 + TREE_HEADER_H;
-  // Ô tranh giải 3 nằm dưới ô vô địch (+78): chừa chỗ (nhãn + 2 dòng tên có thể bọc) kẻo bị cắt đáy khi giải chỉ có 2 trận ở vòng đầu
-  const treeHeight = Math.max(totalHeight + TREE_HEADER_H + 16, thirdPlaceInfo ? champBoxTop + 78 + 24 + 110 : 0);
-
-  return (
-    <div>   {/* cuộn ngang/dọc do khung BracketFrame lo — không tự cuộn ở đây (tự cuộn thì bị co khít cây, kẹt thanh cuộn) */}
-      <div style={{ position: "relative", width: treeWidth, height: treeHeight }}>
-        {roundsNodes.map((round, i) => {
-          const done = round.filter(n => n.match.status === "completed").length;
-          return (
-            <div key={i} style={{ position: "absolute", left: i * (TREE_BOX_W + TREE_COL_GAP), top: 0, width: TREE_BOX_W }}>
-              <Text strong style={{ display: "block", color: "#1677ff", fontSize: 12.5, letterSpacing: ".03em", textTransform: "uppercase" }}>
-                {round[0]?.match?.round_name || `Vòng ${i + 1}`}
-              </Text>
-              <Text type="secondary" style={{ fontSize: 11 }}>{done}/{round.length} đã đấu</Text>
-            </div>
-          );
-        })}
-        <div style={{ position: "absolute", left: champX, top: 0, width: 160 }}>
-          <Text strong style={{ display: "block", color: "#d48806", fontSize: 12.5, letterSpacing: ".03em", textTransform: "uppercase" }}>
-            <TrophyOutlined /> Vô địch
-          </Text>
-        </div>
-        <svg width={treeWidth} height={totalHeight} style={{ position: "absolute", left: 0, top: TREE_HEADER_H }} stroke="#c1c7cd" strokeWidth="2" fill="none">
-          {lines}
-        </svg>
-        {roundsNodes.map((round, r) =>
-          round.map((node) => {
-            const m = node.match;
-            const c = treeNodeLabels(node);
-            const y = centers[node.id] - TREE_BOX_H / 2 + TREE_HEADER_H;
-            const x = r * (TREE_BOX_W + TREE_COL_GAP);
-            if (c.isBye) {
-              return (
-                <div key={node.id} style={{
-                  position: "absolute", left: x, top: y, width: TREE_BOX_W, minHeight: TREE_BOX_H,
-                  border: "1.5px dashed #d9d9d9", borderRadius: 8, background: "#fafafa",
-                  display: "flex", alignItems: "center", padding: "0 10px", gap: 6,
-                }}>
-                  <Text style={{ fontSize: 12.5, color: "#888" }}>{c.top}</Text>
-                  <Text type="secondary" style={{ fontSize: 10.5 }}>({c.byeNote || "miễn — vào vòng sau"})</Text>
-                </div>
-              );
-            }
-            const clickable = !!onScoreClick && !!m.p1_id && !!m.p2_id;
-            return (
-              <DetailPopover key={node.id} match={m} renderDetail={renderDetail}>
-                <div
-                  onClick={clickable ? () => onScoreClick(m) : undefined}
-                  style={{
-                    position: "absolute", left: x, top: y, width: TREE_BOX_W,
-                    border: `1.5px solid ${m.status === "completed" ? "#b7eb8f" : "#d9d9d9"}`,
-                    borderRadius: 8, background: "#fff", boxShadow: "0 1px 2px rgba(0,0,0,.04)",
-                    cursor: clickable ? "pointer" : "default",
-                  }}
-                >
-                  <Text style={{ position: "absolute", right: 8, top: -18, fontSize: 10.5, color: "#aaa" }}>#{m.match_number}</Text>
-                  <TreeSlot label={c.top} rank={teamRank(m.p1)} score={m.score1} scored={c.scored}
-                    isWalkover={m.is_walkover} isWinner={c.scored && m.winner_id === m.p1_id} isPending={!m.p1_id} />
-                  <TreeSlot label={c.bottom} rank={teamRank(m.p2)} score={m.score2} scored={c.scored}
-                    isWalkover={m.is_walkover} isWinner={c.scored && m.winner_id === m.p2_id} isPending={!m.p2_id} last />
-                </div>
-              </DetailPopover>
-            );
-          })
-        )}
-        {thirdPlaceInfo && (
-          <div style={{ position: "absolute", left: champX, top: champBoxTop + 78, width: 200 }}>
-            <Text strong style={{ display: "block", color: "#d48806", fontSize: 11.5, letterSpacing: ".03em", textTransform: "uppercase", marginBottom: 4 }}>
-              Tranh giải 3
-            </Text>
-            <ThirdPlaceTreeBox info={thirdPlaceInfo} onScoreClick={onScoreClick} renderDetail={renderDetail} />
-          </div>
-        )}
-        <div style={{
-          position: "absolute", left: champX, top: champBoxTop, width: 160, minHeight: 66,
-          border: "2px solid #d4b106", borderRadius: 8, background: "#fffbe6",
-          display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 2, padding: "8px 10px",
-        }}>
-          <TrophyOutlined style={{ color: "#d4b106", fontSize: 18 }} />
-          <Text strong style={{ fontSize: 12.5, textAlign: "center", color: "#874d00" }}>{championName || "Chưa xác định"}</Text>
-        </div>
-      </div>
-    </div>
   );
 }
 

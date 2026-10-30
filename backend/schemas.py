@@ -740,6 +740,8 @@ class PublicMatchOut(BaseModel):
     is_walkover: bool = False
     next_match_id: Optional[int] = None
     next_match_slot: Optional[int] = None
+    loser_next_match_id: Optional[int] = None     # đường THUA → Tranh giải 3 (sơ đồ nhánh public cần để ghi "Thua #n")
+    loser_next_match_slot: Optional[int] = None
     rubbers: List[MatchRubberOut] = []   # giải đồng đội: trận thành phần (id VĐV → tra PublicTournamentOut.team_players)
     p1: Optional[PublicParticipantOut] = None
     p2: Optional[PublicParticipantOut] = None

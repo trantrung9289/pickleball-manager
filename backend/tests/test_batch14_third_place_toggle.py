@@ -261,3 +261,15 @@ def test_combined_disable_before_start_knockout_then_reenable(client, world):
     d = _toggle(client, world, tid, True).json()
     third = _third(d)
     assert third is not None and third["match_number"] == max_num + 1
+
+
+def test_public_matches_expose_loser_path_for_third_place(client, world):
+    """Sơ đồ nhánh public cần loser_next_match_id/slot để ghi "Thua #n" ở ô Tranh giải 3 khi chưa có đội."""
+    tid = _create(client, world, world.members1[:4], third_place_enabled=True)
+    assert client.post(f"/api/tournaments/{tid}/generate", headers=_h(world)).status_code == 200
+    d = _detail(client, world, tid)
+    third = _third(d)
+    pub = client.get(f"/api/public/report/{world.token1.slug}/tournaments/{tid}").json()
+    feeders = [m for m in pub["matches"] if m.get("loser_next_match_id") == third["id"]]
+    assert len(feeders) == 2
+    assert {m["loser_next_match_slot"] for m in feeders} == {1, 2}

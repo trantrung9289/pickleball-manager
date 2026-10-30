@@ -316,6 +316,9 @@ a:focus-visible,
 .ui-table-scroll .ant-table-thead > tr > th { position: sticky; top: 0; z-index: 3; }
 .ui-table-scroll .ant-table-summary { position: sticky; bottom: 0; z-index: 3; background: var(--surface); }
 /* 2026-10-30: nút Toàn màn hình cho bảng/sơ đồ (components/ui/FullscreenPanel). z-index 960 < 1000 để Modal/Popover antd nổi lên trên. */
+/* ô trận sơ đồ nhánh: bấm được thì nổi viền khi rê chuột */
+.ui-bracket-box { transition: box-shadow .15s ease, border-color .15s ease; }
+.ui-bracket-box.is-click:hover { border-color: var(--brand, #1677ff) !important; box-shadow: 0 3px 12px rgba(0, 0, 0, .28); }
 /* khung cuộn của sơ đồ nhánh: thanh cuộn mảnh, hợp giao diện tối (thanh mặc định trắng chói ở Galaxy) */
 .ui-zoombox { scrollbar-width: thin; scrollbar-color: var(--line, rgba(128,128,128,.5)) transparent; }
 .ui-fs-bar { display: flex; justify-content: flex-end; align-items: center; gap: 6px; margin-bottom: 4px; }

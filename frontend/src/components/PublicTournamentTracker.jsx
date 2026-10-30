@@ -20,6 +20,7 @@ import TeamOverviewPanel from "./team/TeamOverviewPanel";
 import TeamStatsTable from "./team/TeamStatsTable";
 import TeamStandingsTable from "./team/TeamStandingsTable";
 import { isSideMatch } from "../utils/bracketLayout";
+import BracketTree from "./BracketTree";
 import { MatchScoreCell, StatusChip, matchCardStyle, BracketFrame, FullscreenPanel } from "./ui";
 import TieRubbersInline from "./team/TieRubbersInline";
 import {
@@ -228,9 +229,9 @@ function KnockoutBracket({ matches: allMatches, onOpen, renderDetail }) {
   const sideMatches = allMatches.filter(m => isSideMatch(m));
   const matches = allMatches.filter(m => !isSideMatch(m));
   const rounds = [...new Set(matches.map(m => m.round_number))].sort((a, b) => a - b);
-  const sideCards = sideMatches.length > 0 && (
+  const cardsFor = (list) => list.length > 0 && (
     <Row gutter={[12, 12]} style={{ marginTop: 12 }}>
-      {sideMatches.map(m => (
+      {list.map(m => (
         <Col xs={24} md={12} lg={8} key={m.id}>
           <Card size="small" title={<Text strong style={{ color: m.round_name === "Tranh giải 3" ? "#d48806" : "#722ed1" }}>{m.round_name}</Text>}>
             <BracketCard match={m} onOpen={onOpen} renderDetail={renderDetail} inlineDetail={isMobileView} />
@@ -239,6 +240,8 @@ function KnockoutBracket({ matches: allMatches, onOpen, renderDetail }) {
       ))}
     </Row>
   );
+  const sideCards = cardsFor(sideMatches);                                          // mobile: Tranh giải 3 + tranh hạng thành thẻ riêng
+  const placementCards = cardsFor(sideMatches.filter(m => m.round_name !== "Tranh giải 3"));   // desktop: Tranh giải 3 đã nằm trong sơ đồ
 
   if (isMobileView) {
     return (
@@ -268,24 +271,9 @@ function KnockoutBracket({ matches: allMatches, onOpen, renderDetail }) {
   return (
     <>
     <BracketFrame>
-      <div style={{ display: "flex", gap: 24, minWidth: rounds.length * 220 }}>
-        {rounds.map(r => {
-          const rMatches = matches.filter(m => m.round_number === r);
-          const rName = rMatches[0]?.round_name || `Vòng ${r}`;
-          return (
-            <div key={r} style={{ flex: "0 0 200px" }}>
-              <Text strong style={{ display: "block", textAlign: "center", marginBottom: 8, color: "#1677ff" }}>
-                {rName}
-              </Text>
-              <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-                {rMatches.map(m => <BracketCard key={m.id} match={m} onOpen={onOpen} renderDetail={renderDetail} />)}
-              </div>
-            </div>
-          );
-        })}
-      </div>
+      <BracketTree matches={allMatches} onOpen={onOpen} renderDetail={renderDetail} />
     </BracketFrame>
-    {sideCards}
+    {placementCards}
     </>
   );
 }
