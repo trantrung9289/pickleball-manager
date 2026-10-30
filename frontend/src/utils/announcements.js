@@ -111,3 +111,23 @@ export function shareText(it, { clubName = "", publicUrl = "" } = {}) {
   }
   return text;
 }
+
+// ── Lịch sử đẩy (2026-10-30) ──
+export const PUSH_CHANNEL_LABELS = { telegram: "Telegram", web: "Thiết bị", zalo: "Zalo" };
+export const PUSH_SOURCE_LABELS = { cron: "Tự động", save: "Khi lưu", manual: "Gửi ngay" };
+
+/** "2026-10-30T07:05:09Z" → "07:05:09 30/10/2026" theo giờ máy (người dùng Việt Nam); lỗi → "". */
+export function formatHistoryTime(iso) {
+  const d = new Date(iso);
+  if (!iso || Number.isNaN(d.getTime())) return "";
+  const p = (n) => String(n).padStart(2, "0");
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())} ${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()}`;
+}
+
+/** Kết quả một dòng: "✔ 2" / "✖ 1" / "✔ 2 · ✖ 1" (số người nhận/thiết bị/nhóm). */
+export function historyResult(row) {
+  const parts = [];
+  if (row.sent_count) parts.push(`✔ ${row.sent_count}`);
+  if (row.error_count) parts.push(`✖ ${row.error_count}`);
+  return parts.join(" · ") || "—";
+}

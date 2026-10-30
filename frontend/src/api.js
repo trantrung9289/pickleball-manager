@@ -249,6 +249,7 @@ export const announcementsApi = {
   delete: (id) => api.delete(`/api/announcements/${id}`),
   feed: (params) => api.get("/api/announcements/feed", { params }),   // { days, include_later }
   push: (id) => api.post(`/api/announcements/${id}/push`),             // đợt 3: gửi Telegram ngay tới admin CLB
+  pushHistory: (params) => api.get("/api/announcements/push-history", { params }),   // { channel?, limit? } → { retention_days, items } (7 ngày gần nhất)
 };
 
 // Trò chuyện — quản trị (đợt 2, 2026-10-28)

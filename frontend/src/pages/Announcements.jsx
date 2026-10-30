@@ -20,6 +20,7 @@ import { FeedItem } from "../components/NotificationBell";
 import { announcementsApi, feeTypesApi } from "../api";
 import useHotkey from "../hooks/useHotkey";
 import usePublicLink from "../hooks/usePublicLink";
+import PushHistoryCard from "../components/PushHistoryCard";
 import { WEEKDAY_LABELS, KIND_LABELS, groupByDate, remindLabel } from "../utils/announcements";
 
 const { Title, Text } = Typography;
@@ -68,6 +69,7 @@ export default function Announcements({ perms, clubName = "" }) {
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [preview, setPreview] = useState(null);
+  const [histKey, setHistKey] = useState(0);   // tăng để thẻ Lịch sử đẩy tải lại
   const [form] = Form.useForm();
   const kind = Form.useWatch("kind", form);
   const recurrence = Form.useWatch("recurrence", form);
@@ -89,7 +91,7 @@ export default function Announcements({ perms, clubName = "" }) {
       const [a, f, p] = await Promise.all([
         announcementsApi.list(), feeTypesApi.list(), announcementsApi.feed({ days: 28, include_later: true }),
       ]);
-      setData(a.data); setFeeTypes((f.data || []).filter((x) => x.type === "income")); setPreview(p.data);
+      setData(a.data); setFeeTypes((f.data || []).filter((x) => x.type === "income")); setPreview(p.data); setHistKey((k) => k + 1);
     } finally { setLoading(false); }
   };
   useEffect(() => { load(); }, []);
@@ -129,6 +131,7 @@ export default function Announcements({ perms, clubName = "" }) {
       const parts = [`Telegram ${d.sent}`, `thiết bị ${d.web_push_sent ?? 0}`, `Zalo ${d.zalo_sent ?? 0}`];
       const errs = (d.errors?.length || 0) + (d.web_push_errors || 0) + (d.zalo_errors || 0);
       message.success(`Đã gửi (ngày ${dayjs(d.date).format("DD/MM")}): ${parts.join(", ")}${errs ? `, ${errs} lỗi` : ""}`);
+      setHistKey((k) => k + 1);
     }
     catch (err) { message.error(err.response?.data?.detail || "Không gửi được"); }
   };
@@ -186,6 +189,7 @@ export default function Announcements({ perms, clubName = "" }) {
             <ResponsiveTable columns={columns} dataSource={data} rowKey="id" loading={loading} size="small" pagination={false}
               mobileTitle={(r) => r.title} mobileHideColumns={["Tiêu đề"]} />
           </Card>
+          <PushHistoryCard refreshKey={histKey} />
         </Col>
         <Col xs={24} xxl={9}>
           <Card size="small" title={<span>Xem trước 4 tuần tới {preview && <StatusChip tone="brand">{preview.items.length}</StatusChip>}</span>}>

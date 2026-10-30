@@ -1008,3 +1008,24 @@ class ZaloPushLog(Base):
     sent_at = Column(DateTime, server_default=func.now())
 
     __table_args__ = (UniqueConstraint("announcement_id", "occurrence_date", "group_id", "send_date", name="uq_zalo_push_per_day"),)
+
+
+class AnnouncementPushHistory(Base):
+    """2026-10-30: LỊCH SỬ ĐẨY thông báo để admin tra "tin này ai gửi, lúc nào, kênh nào". Mỗi dòng = một thông báo × một kênh trong một lượt gửi
+    (gộp theo người nhận: sent_count/error_count; detail = ✔/✖ từng nhóm Zalo hoặc lỗi). Không ghi lượt bị bỏ qua vì đã gửi.
+    Tự xoá: chỉ giữ PUSH_HISTORY_DAYS (7) ngày theo lịch VN gần nhất (hôm nay và 6 ngày trước), xoá ngày xa nhất.
+    announcement_id KHÔNG khoá ngoại + title chụp lại → xoá quy tắc vẫn giữ dòng lịch sử cho tới khi hết hạn."""
+    __tablename__ = "announcement_push_history"
+
+    id = Column(Integer, primary_key=True, index=True)
+    club_id = Column(Integer, ForeignKey("clubs.id"), nullable=False, index=True)
+    announcement_id = Column(Integer, nullable=True, index=True)
+    title = Column(String(200), nullable=False)
+    kind = Column(String(20), nullable=False, default="schedule")
+    channel = Column(String(10), nullable=False)      # telegram | web | zalo
+    source = Column(String(10), nullable=False)       # cron (tự động) | save (khi lưu quy tắc) | manual (nút Gửi ngay)
+    pre = Column(Boolean, nullable=False, default=False)   # lần nhắc trước giờ bắt đầu
+    sent_count = Column(Integer, nullable=False, default=0)
+    error_count = Column(Integer, nullable=False, default=0)
+    detail = Column(String(400), nullable=True)
+    sent_at = Column(DateTime, nullable=False, index=True)   # UTC (suy ra từ _now_vn() − 7h để test điều khiển được đồng hồ)

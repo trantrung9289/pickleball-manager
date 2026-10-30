@@ -6711,9 +6711,9 @@ def _push_announcement_if_due_now(announcement_id: int, club_id: int) -> None:
             return
         bot_token = _os.environ.get("TELEGRAM_BOT_TOKEN") or _os.environ.get("BOT_TOKEN", "")
         if bot_token:
-            _push_announcement_items(db, club_id, due, today, bot_token, dedupe=True)
-        _send_web_push_items(db, club_id, due, today, dedupe=True)
-        _send_zalo_items(db, club_id, due, today, dedupe=True)
+            _push_announcement_items(db, club_id, due, today, bot_token, dedupe=True, source="save")
+        _send_web_push_items(db, club_id, due, today, dedupe=True, source="save")
+        _send_zalo_items(db, club_id, due, today, dedupe=True, source="save")
     except Exception as exc:   # noqa: BLE001
         print(f"[announcements] gửi ngay khi lưu thất bại: {exc}")
     finally:
@@ -6779,6 +6779,24 @@ def announcements_feed(days: int = Query(14, ge=0, le=90), include_later: bool =
     perms.require_view()
     today = _now_vn().date()
     return {"today": today.isoformat(), "items": _announcement_feed(db, perms.club_id, today, days, include_later=include_later)}
+
+
+@app.get("/api/announcements/push-history")
+def announcement_push_history(channel: Optional[str] = None, limit: int = Query(500, ge=1, le=1000), db: Session = Depends(get_db),
+                              perms: ClubPermissions = Depends(get_club_permission)):
+    """Lịch sử đẩy 7 ngày VN gần nhất của CLB (mới → cũ). Tự dọn dòng quá hạn khi đọc. channel: telegram | web | zalo."""
+    perms.require_view()
+    if channel not in (None, "", "telegram", "web", "zalo"):
+        raise HTTPException(422, "channel phải là telegram, web hoặc zalo")
+    _push_history_purge(db)
+    q = db.query(models.AnnouncementPushHistory).filter(models.AnnouncementPushHistory.club_id == perms.club_id)
+    if channel:
+        q = q.filter(models.AnnouncementPushHistory.channel == channel)
+    rows = q.order_by(models.AnnouncementPushHistory.sent_at.desc(), models.AnnouncementPushHistory.id.desc()).limit(limit).all()
+    return {"retention_days": PUSH_HISTORY_DAYS, "items": [
+        {"id": r.id, "announcement_id": r.announcement_id, "title": r.title, "kind": r.kind, "channel": r.channel, "source": r.source,
+         "pre": bool(r.pre), "sent_count": r.sent_count, "error_count": r.error_count, "detail": r.detail,
+         "sent_at": r.sent_at.isoformat() + "Z"} for r in rows]}
 
 
 @app.get("/api/public/report/{slug}/announcements")
@@ -6864,7 +6882,51 @@ def _telegram_send(bot_token: str, chat_id: int, text: str) -> None:
         resp.read()
 
 
-def _push_announcement_items(db: Session, club_id: int, items: list, today: date, bot_token: str, dedupe: bool = True) -> dict:
+# ── LỊCH SỬ ĐẨY (2026-10-30): ghi mỗi lượt gửi thật, giữ 7 ngày VN gần nhất ──
+PUSH_HISTORY_DAYS = 7
+
+
+def _utc_from_vn(vn: datetime) -> datetime:
+    return vn - timedelta(hours=7)   # Việt Nam UTC+7, không có giờ mùa hè
+
+
+def _hist_acc(acc: dict, it: dict, ok: bool, note: str = "") -> None:
+    """Gộp kết quả gửi theo (thông báo, ngày xuất hiện, có phải nhắc trước) trong một lượt/một kênh."""
+    key = (it["announcement_id"], it["date"], it.get("pre_minutes") is not None)
+    row = acc.setdefault(key, {"it": it, "sent": 0, "errors": 0, "notes": []})
+    row["sent" if ok else "errors"] += 1
+    if note:
+        row["notes"].append(note)
+
+
+def _hist_flush(db: Session, club_id: int, acc: dict, channel: str, source: str) -> None:
+    """Ghi các dòng đã gộp. Lỗi ghi lịch sử không được làm hỏng việc gửi → nuốt + in log."""
+    if not acc:
+        return
+    now_utc = _utc_from_vn(_now_vn())
+    try:
+        for row in acc.values():
+            it = row["it"]
+            db.add(models.AnnouncementPushHistory(
+                club_id=club_id, announcement_id=it["announcement_id"], title=(it.get("title") or "")[:200], kind=it.get("kind") or "schedule",
+                channel=channel, source=source, pre=it.get("pre_minutes") is not None, sent_count=row["sent"], error_count=row["errors"],
+                detail=("; ".join(row["notes"])[:400] or None), sent_at=now_utc))
+        db.commit()
+    except Exception as exc:   # noqa: BLE001
+        db.rollback()
+        print(f"[push-history] không ghi được lịch sử: {exc}")
+
+
+def _push_history_purge(db: Session) -> int:
+    """Xoá lịch sử cũ hơn 7 ngày VN gần nhất: giữ hôm nay và 6 ngày trước, xoá ngày xa nhất. Trả số dòng đã xoá."""
+    cutoff_vn = datetime.combine(_now_vn().date() - timedelta(days=PUSH_HISTORY_DAYS - 1), datetime.min.time())
+    n = db.query(models.AnnouncementPushHistory).filter(
+        models.AnnouncementPushHistory.sent_at < _utc_from_vn(cutoff_vn)).delete(synchronize_session=False)
+    db.commit()
+    return n
+
+
+def _push_announcement_items(db: Session, club_id: int, items: list, today: date, bot_token: str, dedupe: bool = True, source: str = "cron") -> dict:
     """Gửi các item tới admin CLB. dedupe=True (cron): bỏ qua (announcement, ngày xuất hiện, chat_id) đã gửi hôm nay."""
     out = {"sent": 0, "skipped": 0, "errors": []}
     if not _club_bot_enabled(db, club_id):
@@ -6874,6 +6936,7 @@ def _push_announcement_items(db: Session, club_id: int, items: list, today: date
         return out
     club = db.query(models.Club).filter(models.Club.id == club_id).first()
     club_name = club.name if club else str(club_id)
+    hacc: dict = {}
     for it in items:
         occ = date.fromisoformat(it["date"])
         text = _announcement_push_text(it, club_name)
@@ -6896,9 +6959,12 @@ def _push_announcement_items(db: Session, club_id: int, items: list, today: date
                         db.add(models.AnnouncementPushLog(announcement_id=it["announcement_id"], occurrence_date=occ, chat_id=chat_id, send_date=today))
                     db.commit()
                 out["sent"] += 1
+                _hist_acc(hacc, it, True)
             except Exception as exc:
                 db.rollback()
                 out["errors"].append({"chat_id": chat_id, "announcement_id": it["announcement_id"], "error": str(exc)})
+                _hist_acc(hacc, it, False, f"lỗi: {str(exc)[:80]}")
+    _hist_flush(db, club_id, hacc, "telegram", source)
     return out
 
 
@@ -6959,7 +7025,7 @@ def _web_push_payload(it: dict, club_name: str, slug) -> dict:
     }
 
 
-def _send_web_push_items(db: Session, club_id: int, items: list, today: date, dedupe: bool = True) -> dict:
+def _send_web_push_items(db: Session, club_id: int, items: list, today: date, dedupe: bool = True, source: str = "cron") -> dict:
     """Gửi Web Push các item tới mọi subscription của CLB. dedupe → bỏ qua (thông báo, ngày, subscription) đã gửi hôm nay.
     404/410 → xoá subscription; lỗi khác → tăng failures, ≥5 lần thì xoá."""
     out = {"sent": 0, "skipped": 0, "removed": 0, "errors": 0}
@@ -6972,6 +7038,7 @@ def _send_web_push_items(db: Session, club_id: int, items: list, today: date, de
     club_name = club.name if club else str(club_id)
     fallback = db.query(models.PublicReportToken).filter(
         models.PublicReportToken.club_id == club_id, models.PublicReportToken.is_active.is_(True)).first()
+    hacc: dict = {}
     for sub in subs:
         slug = (sub.token.slug or sub.token.token) if sub.token else (fallback.slug if fallback else None)
         sub_info = {"endpoint": sub.endpoint, "keys": {"p256dh": sub.p256dh, "auth": sub.auth}}
@@ -6987,6 +7054,7 @@ def _send_web_push_items(db: Session, club_id: int, items: list, today: date, de
             res = _wp.send_push(sub_info, _web_push_payload(it, club_name, slug))
             if res == "ok":
                 out["sent"] += 1
+                _hist_acc(hacc, it, True)
                 sub.failures = 0
                 if dedupe:
                     if pre:
@@ -6995,9 +7063,11 @@ def _send_web_push_items(db: Session, club_id: int, items: list, today: date, de
                         db.add(models.WebPushLog(announcement_id=it["announcement_id"], occurrence_date=occ, subscription_id=sub.id, send_date=today))
                     db.commit()
             elif res == "gone":
+                _hist_acc(hacc, it, False, "thiết bị hết hạn, đã gỡ")
                 dead = True; break
             else:
                 out["errors"] += 1
+                _hist_acc(hacc, it, False, "lỗi gửi")
                 sub.failures = (sub.failures or 0) + 1
                 if sub.failures >= 5:
                     dead = True; break
@@ -7007,6 +7077,7 @@ def _send_web_push_items(db: Session, club_id: int, items: list, today: date, de
                                                               models.AnnouncementPreRemindLog.target_id == sub.id).delete()
             db.delete(sub); out["removed"] += 1
         db.commit()
+    _hist_flush(db, club_id, hacc, "web", source)
     return out
 
 
@@ -7030,7 +7101,7 @@ def _zalo_text(it: dict, club) -> str:
     return _announcement_push_text(item, club.name)
 
 
-def _send_zalo_items(db: Session, club_id: int, items: list, today: date, dedupe: bool = True) -> dict:
+def _send_zalo_items(db: Session, club_id: int, items: list, today: date, dedupe: bool = True, source: str = "cron") -> dict:
     """Gửi các item tới mọi nhóm Zalo đang bật của CLB. dedupe → bỏ qua (thông báo, ngày, nhóm) đã gửi hôm nay (zalo_push_log;
     nhắc trước: pre_remind_log channel 'zl'). Tin dài cắt ≤2000 ký tự. Lỗi 410/404 (chat_id hỏng) → tắt nhóm; lỗi khác failures+1,
     ≥5 lần tắt. Không có token/nhóm → {0}."""
@@ -7040,7 +7111,9 @@ def _send_zalo_items(db: Session, club_id: int, items: list, today: date, dedupe
     groups = _zalo_enabled_groups(db, club_id) if token else []
     if not groups or not items:
         return out
+    hacc: dict = {}
     for g in groups:
+        gname = (g.label or f"nhóm …{g.chat_id[-4:]}")[:40]
         for it in items:
             occ = date.fromisoformat(it["date"])
             pre = it.get("pre_minutes") is not None
@@ -7059,9 +7132,11 @@ def _send_zalo_items(db: Session, club_id: int, items: list, today: date, dedupe
                     else:
                         db.add(models.ZaloPushLog(announcement_id=it["announcement_id"], occurrence_date=occ, group_id=g.id, send_date=today))
                 out["sent"] += 1
+                _hist_acc(hacc, it, True, f"✔ {gname}")
                 db.commit()
             except _zalo.ZaloError as exc:
                 out["errors"] += 1
+                _hist_acc(hacc, it, False, f"✖ {gname} ({exc.code})")
                 g.last_error = f"{exc.code}: {exc.description}"[:300]
                 if exc.code in (404, 410):
                     g.enabled = False; out["disabled"] += 1
@@ -7072,6 +7147,7 @@ def _send_zalo_items(db: Session, club_id: int, items: list, today: date, dedupe
                 db.commit()
                 if not g.enabled:
                     break
+    _hist_flush(db, club_id, hacc, "zalo", source)
     return out
 
 
@@ -7372,6 +7448,7 @@ def send_announcements_internal(db: Session = Depends(get_db), _: None = Depends
     bot_token = _os.environ.get("TELEGRAM_BOT_TOKEN") or _os.environ.get("BOT_TOKEN", "")
     now = _now_vn()
     today = now.date()
+    _push_history_purge(db)   # mỗi 15 phút: dọn lịch sử quá 7 ngày
     club_ids = [r[0] for r in db.query(models.Announcement.club_id).filter(
         models.Announcement.is_active.is_(True), models.Announcement.push_telegram.is_(True)).distinct().all()]
     total = {"sent": 0, "skipped": 0, "errors": [], "clubs": len(club_ids),
@@ -7411,9 +7488,9 @@ def push_announcement_now(aid: int, db: Session = Depends(get_db), perms: ClubPe
         raise HTTPException(400, "Chưa có kênh nhận: không có quản trị viên liên kết Telegram, chưa ai bật thông báo trên thiết bị và chưa có nhóm Zalo")
     res = {"sent": 0, "errors": []}
     if tg_ok:
-        res = _push_announcement_items(db, perms.club_id, items[:1], today, _bot_token_or_500(), dedupe=False)
-    wp = _send_web_push_items(db, perms.club_id, items[:1], today, dedupe=False) if wp_subs else {"sent": 0, "removed": 0, "errors": 0, "skipped": 0}
-    zl = _send_zalo_items(db, perms.club_id, items[:1], today, dedupe=False) if zl_ok else {"sent": 0, "errors": 0, "skipped": 0, "disabled": 0}
+        res = _push_announcement_items(db, perms.club_id, items[:1], today, _bot_token_or_500(), dedupe=False, source="manual")
+    wp = _send_web_push_items(db, perms.club_id, items[:1], today, dedupe=False, source="manual") if wp_subs else {"sent": 0, "removed": 0, "errors": 0, "skipped": 0}
+    zl = _send_zalo_items(db, perms.club_id, items[:1], today, dedupe=False, source="manual") if zl_ok else {"sent": 0, "errors": 0, "skipped": 0, "disabled": 0}
     return {"sent": res["sent"], "errors": res["errors"], "date": items[0]["date"], "web_push_sent": wp["sent"], "web_push_errors": wp["errors"],
             "zalo_sent": zl["sent"], "zalo_errors": zl["errors"]}
 

@@ -1,7 +1,7 @@
 // Chạy: npm test (node --test). Hàm thuần của thông báo/chuông: khoá đã xem, đếm chưa xem, nhãn ngày, gộp tên chưa đóng.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { itemKey, weekdayLabelOfDate, formatWhen, statusChip, unreadCount, mergeSeen, unpaidPreview, groupByDate, shareText } from "./announcements.js";
+import { itemKey, weekdayLabelOfDate, formatWhen, statusChip, unreadCount, mergeSeen, unpaidPreview, groupByDate, shareText, formatHistoryTime, historyResult, PUSH_CHANNEL_LABELS, PUSH_SOURCE_LABELS } from "./announcements.js";
 
 test("weekdayLabelOfDate + formatWhen: 2026-10-27 là Thứ 3, có giờ thì nối giờ", () => {
   assert.equal(weekdayLabelOfDate("2026-10-27"), "Thứ 3");
@@ -50,4 +50,17 @@ test("shareText: lịch có CLB + link; phí liệt kê tên; quá 2000 ký tự
   assert.ok(long.length <= 2000);
   assert.ok(long.endsWith("Xem chi tiết: https://x.vn/p"));
   assert.match(long, /… và \d+ người nữa/);
+});
+
+test("lịch sử đẩy: nhãn kênh/nguồn, kết quả ✔/✖, định dạng giờ HH:mm:ss DD/MM/YYYY", () => {
+  assert.deepEqual(PUSH_CHANNEL_LABELS, { telegram: "Telegram", web: "Thiết bị", zalo: "Zalo" });
+  assert.equal(PUSH_SOURCE_LABELS.cron, "Tự động");
+  assert.equal(historyResult({ sent_count: 2, error_count: 0 }), "✔ 2");
+  assert.equal(historyResult({ sent_count: 0, error_count: 1 }), "✖ 1");
+  assert.equal(historyResult({ sent_count: 2, error_count: 1 }), "✔ 2 · ✖ 1");
+  assert.equal(historyResult({ sent_count: 0, error_count: 0 }), "—");
+  const d = new Date(2026, 9, 5, 7, 5, 9);   // giờ máy, 05/10/2026 07:05:09
+  assert.equal(formatHistoryTime(d.toISOString()), "07:05:09 05/10/2026");
+  assert.equal(formatHistoryTime(""), "");
+  assert.equal(formatHistoryTime("không phải ngày"), "");
 });
