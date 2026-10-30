@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Table, Card, Empty, Spin, Pagination, Checkbox } from "antd";
 import { useViewMode } from "../contexts/ViewModeContext";
+import FullscreenPanel from "./ui/FullscreenPanel";
 
 /**
  * Bảng responsive: desktop hiển thị <Table> như cũ, mobile chuyển sang danh sách Card
@@ -12,6 +13,8 @@ import { useViewMode } from "../contexts/ViewModeContext";
  * Tuỳ chọn thêm:
  *  - mobileTitle: (record) => ReactNode   — tiêu đề nổi bật của mỗi card
  *  - mobileHideColumns: [dataIndex|title] — ẩn bớt cột trên card cho gọn
+ *  - fullscreenable (mặc định true): nút Toàn màn hình ở desktop/tablet; đặt false cho bảng nhỏ trong Modal
+ *  - fullscreenTitle: tiêu đề lớp phủ khi phóng to
  */
 export default function ResponsiveTable({
   columns = [],
@@ -26,6 +29,8 @@ export default function ResponsiveTable({
   mobileSummary,
   mobileCardStyle,          // (record) => style thêm cho Card mobile (vd viền trái theo bảng đấu)
   className,
+  fullscreenable = true,
+  fullscreenTitle,
   ...rest
 }) {
   const { isMobileView } = useViewMode();
@@ -33,7 +38,7 @@ export default function ResponsiveTable({
   const [page, setPage] = useState(1);
 
   if (!isMobileView) {
-    return (
+    const table = (
       <Table
         columns={columns}
         dataSource={dataSource}
@@ -47,6 +52,7 @@ export default function ResponsiveTable({
         {...rest}
       />
     );
+    return fullscreenable ? <FullscreenPanel title={fullscreenTitle}>{table}</FullscreenPanel> : table;
   }
 
   // ── Mobile: render dạng Card ──

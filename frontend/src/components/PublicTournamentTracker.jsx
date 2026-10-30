@@ -20,7 +20,7 @@ import TeamOverviewPanel from "./team/TeamOverviewPanel";
 import TeamStatsTable from "./team/TeamStatsTable";
 import TeamStandingsTable from "./team/TeamStandingsTable";
 import { isSideMatch } from "../utils/bracketLayout";
-import { MatchScoreCell, StatusChip, matchCardStyle } from "./ui";
+import { MatchScoreCell, StatusChip, matchCardStyle, BracketFrame, FullscreenPanel } from "./ui";
 import TieRubbersInline from "./team/TieRubbersInline";
 import {
   serverOffset, verifyDraw, verifyPartnerDraw, partnerLabelForStep, partnerDrawFinished, partnerDrawStuck,
@@ -267,7 +267,7 @@ function KnockoutBracket({ matches: allMatches, onOpen, renderDetail }) {
 
   return (
     <>
-    <div style={{ overflowX: "auto" }}>
+    <BracketFrame>
       <div style={{ display: "flex", gap: 24, minWidth: rounds.length * 220 }}>
         {rounds.map(r => {
           const rMatches = matches.filter(m => m.round_number === r);
@@ -284,7 +284,7 @@ function KnockoutBracket({ matches: allMatches, onOpen, renderDetail }) {
           );
         })}
       </div>
-    </div>
+    </BracketFrame>
     {sideCards}
     </>
   );
@@ -304,6 +304,7 @@ function RoundedSchedule({ matches, columns, mobileProps }) {
   const visible = onlyPending ? byRound.filter(({ rMatches }) => !rMatches.every(m => m.status === "completed")) : byRound;
 
   return (
+    <FullscreenPanel title="Lịch thi đấu">
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       {rounds.length > 1 && (
         <Checkbox checked={onlyPending} onChange={(e) => setOnlyPending(e.target.checked)}>Chỉ hiện vòng chưa đủ kết quả</Checkbox>
@@ -322,6 +323,7 @@ function RoundedSchedule({ matches, columns, mobileProps }) {
               : <StatusChip tone={done > 0 ? "info" : "neutral"}>{done}/{rMatches.length}</StatusChip>}
           >
             <ResponsiveTable
+              fullscreenable={false}   /* nút Toàn màn hình nằm ở cả lịch (bọc ngoài), không phải từng vòng */
               columns={roundCols}
               dataSource={rMatches}
               rowKey="id" size="small" pagination={false}
@@ -331,6 +333,7 @@ function RoundedSchedule({ matches, columns, mobileProps }) {
         );
       })}
     </div>
+    </FullscreenPanel>
   );
 }
 

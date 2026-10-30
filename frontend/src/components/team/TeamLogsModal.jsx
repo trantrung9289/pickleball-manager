@@ -65,7 +65,7 @@ export default function TeamLogsModal({ tournament, onClose }) {
       </div>
       {loading && rows.length === 0 ? <div style={{ textAlign: "center", padding: 24 }}><Spin /></div>
         : rows.length === 0 ? <Empty description="Chưa có thao tác nào" image={Empty.PRESENTED_IMAGE_SIMPLE} />
-          : <ResponsiveTable columns={cols} dataSource={rows} rowKey="id" size="small" pagination={{ pageSize: 25 }}
+          : <ResponsiveTable fullscreenable={false} columns={cols} dataSource={rows} rowKey="id" size="small" pagination={{ pageSize: 25 }}
               mobileTitle={(r) => <span>{r.created_at ? dayjs(r.created_at).format("DD/MM HH:mm") : ""} · {(KIND_MAP[r.kind] || { label: r.kind }).label}</span>}
               mobileHideColumns={["Thời gian", "Loại"]} />}
     </Modal>

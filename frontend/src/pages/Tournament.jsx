@@ -28,7 +28,7 @@ import { TEAM_TYPE_LABELS, defaultTeamRules, normalizeTeamRules, tieScoreLabel, 
 import TeamOverviewPanel from "../components/team/TeamOverviewPanel";
 import TeamStatsTable from "../components/team/TeamStatsTable";
 import TeamStandingsTable from "../components/team/TeamStandingsTable";
-import { StatCard, MatchScoreCell, StatusChip, matchCardStyle } from "../components/ui";
+import { StatCard, MatchScoreCell, StatusChip, matchCardStyle, BracketFrame, FullscreenPanel } from "../components/ui";
 import {
   DRAW_FORMATS, serverOffset, normalizeRank, UNRANKED, partnerPlan, normalizePartnerRules, ranksLabel,
 } from "../utils/drawMath";
@@ -710,7 +710,9 @@ function KnockoutBracket({ matches, onScoreClick, renderDetail }) {
   // Desktop: sơ đồ nhánh thật với đường nối giữa các vòng (+ các trận tranh hạng bên dưới)
   return (
     <>
-      <BracketTreeDesktop matches={matches} onScoreClick={onScoreClick} renderDetail={renderDetail} />
+      <BracketFrame>
+        <BracketTreeDesktop matches={matches} onScoreClick={onScoreClick} renderDetail={renderDetail} />
+      </BracketFrame>
       {placements.length > 0 && (
         <Row gutter={[12, 12]} style={{ marginTop: 12 }}>
           {placements.map(m => (
@@ -952,6 +954,7 @@ function RoundedSchedule({ matches, columns, mobileProps }) {
   const visible = onlyPending ? groups.filter(g => !isRoundDone(g.rMatches)) : groups;
 
   return (
+    <FullscreenPanel title="Lịch thi đấu">
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       {groups.length > 1 && (
         <Checkbox checked={onlyPending} onChange={(e) => setOnlyPending(e.target.checked)}>Chỉ hiện vòng chưa đủ kết quả</Checkbox>
@@ -970,6 +973,7 @@ function RoundedSchedule({ matches, columns, mobileProps }) {
               : <StatusChip tone={done > 0 ? "info" : "neutral"}>{done}/{rMatches.length}</StatusChip>}
           >
             <ResponsiveTable
+              fullscreenable={false}   /* nút Toàn màn hình nằm ở cả lịch (bọc ngoài), không phải từng vòng */
               columns={roundCols}
               dataSource={rMatches}
               rowKey="id" size="small" pagination={false}
@@ -979,6 +983,7 @@ function RoundedSchedule({ matches, columns, mobileProps }) {
         );
       })}
     </div>
+    </FullscreenPanel>
   );
 }
 
@@ -1197,7 +1202,7 @@ function ReplaceParticipantModal({ tournament, target, onSaved, onClose }) {
             children: availableMembers.length === 0 ? (
               <Empty description="Không còn thành viên nào chưa tham gia giải" image={Empty.PRESENTED_IMAGE_SIMPLE} />
             ) : (
-              <ResponsiveTable
+              <ResponsiveTable fullscreenable={false}
                 rowSelection={{
                   type: "radio",
                   selectedRowKeys: selectedKey ? [selectedKey] : [],
@@ -1224,7 +1229,7 @@ function ReplaceParticipantModal({ tournament, target, onSaved, onClose }) {
                 {availableGuests.length === 0 ? (
                   <Empty description="Chưa có khách mời nào khả dụng" image={Empty.PRESENTED_IMAGE_SIMPLE} />
                 ) : (
-                  <ResponsiveTable
+                  <ResponsiveTable fullscreenable={false}
                     rowSelection={{
                       type: "radio",
                       selectedRowKeys: selectedKey ? [selectedKey] : [],

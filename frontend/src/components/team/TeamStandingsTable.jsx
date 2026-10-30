@@ -11,6 +11,7 @@ import { Button, Segmented, Space, Table, Tag, Tooltip, Typography } from "antd"
 import { PrinterOutlined } from "@ant-design/icons";
 import { useAuth } from "../../context/AuthContext";
 import { logoSrc } from "../../api";
+import FullscreenPanel from "../ui/FullscreenPanel";
 
 const { Text } = Typography;
 const LEG_LABEL = { leg1: "Lượt đi", leg2: "Lượt về", knockout: "Loại trực tiếp" };
@@ -152,6 +153,7 @@ table{border-collapse:collapse;width:100%}th,td{border:1px solid #bbb;padding:5p
           <Button size="small" icon={<PrinterOutlined />} onClick={printStandings} disabled={!rows.length}>In BXH</Button>
         </Space>
       </Space>
+      <FullscreenPanel title="Bảng xếp hạng">
       <Table columns={cols} dataSource={rows} rowKey="participant_id" size="small" pagination={false}
         scroll={{ x: "max-content" }}
         rowClassName={(_, i) => (i < 2 ? "ant-table-row-selected" : "")}
@@ -159,6 +161,7 @@ table{border-collapse:collapse;width:100%}th,td{border:1px solid #bbb;padding:5p
           expandedRowRender: (r) => <H2HDetail row={r} matchesById={matchesById} onOpenMatch={onOpenMatch} />,
           expandRowByClick: true,
         }} />
+      </FullscreenPanel>
     </div>
   );
 }

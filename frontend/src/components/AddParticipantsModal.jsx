@@ -203,6 +203,7 @@ export function AddParticipantsModal({
                   onChange={(e) => setMemberSearch(e.target.value)} style={{ marginBottom: 12 }} />
                 {selectionBar(selectableMembers, selectedIds, setSelectedIds, "thành viên")}
                 <ResponsiveTable
+                  fullscreenable={false}
                   loading={loading}
                   rowSelection={{
                     selectedRowKeys: selectedIds,
@@ -243,6 +244,7 @@ export function AddParticipantsModal({
                       onChange={(e) => setGuestSearch(e.target.value)} style={{ marginBottom: 12 }} />
                     {selectionBar(selectableGuests, selectedGuestIds, setSelectedGuestIds, "khách mời")}
                     <ResponsiveTable
+                      fullscreenable={false}
                       loading={loading}
                       rowSelection={{
                         selectedRowKeys: selectedGuestIds,
