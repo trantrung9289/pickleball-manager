@@ -182,7 +182,7 @@ export default function Announcements({ perms, clubName = "" }) {
     { title: "Hiệu lực", render: (_, r) => (r.start_date || r.end_date) ? `${r.start_date ? dayjs(r.start_date).format("DD/MM/YY") : "…"} → ${r.end_date ? dayjs(r.end_date).format("DD/MM/YY") : "…"}` : "—" },
     { title: "Public", dataIndex: "show_public", render: (v, r) => (r.kind === "report" ? <Text type="secondary">—</Text> : <Switch size="small" checked={v} disabled={!canEdit} onChange={(c) => toggle(r, "show_public", c)} />) },
     { title: "Bật", dataIndex: "is_active", render: (v, r) => <Switch size="small" checked={v} disabled={!canEdit} onChange={(c) => toggle(r, "is_active", c)} /> },
-    { title: "Đẩy", dataIndex: "push_telegram", render: (v, r) => <Tooltip title="Gửi Telegram cho admin + đẩy tới người xem Trang Public đã bật thông báo vào ngày đầu cửa sổ hiện trước và đúng ngày, khi tới Giờ đẩy (cron 15 phút); không gửi trùng trong ngày"><Switch size="small" checked={v} disabled={!canEdit} onChange={(c) => toggle(r, "push_telegram", c)} /></Tooltip> },
+    { title: "Đẩy", dataIndex: "push_telegram", render: (v, r) => <Tooltip title="Gửi Telegram cho admin, đẩy tới người xem Trang Public đã bật thông báo và gửi vào các nhóm Zalo đã duyệt, vào ngày đầu cửa sổ hiện trước và đúng ngày, khi tới Giờ đẩy (cron 15 phút); không gửi trùng trong ngày"><Switch size="small" checked={v} disabled={!canEdit} onChange={(c) => toggle(r, "push_telegram", c)} /></Tooltip> },
     {
       title: "Giờ đẩy", dataIndex: "push_time",
       render: (v, r) => (
@@ -255,6 +255,7 @@ export default function Announcements({ perms, clubName = "" }) {
               });
             }
           }}>
+          <Form.Item name="is_active" label={<Tooltip title="Công tắc tổng của thông báo: tắt thì không hiện trên chuông, trang public và không đẩy tin nào, cấu hình vẫn được giữ.">Bật thông báo</Tooltip>} valuePropName="checked"><Switch /></Form.Item>
           <Form.Item name="kind" label="Loại" rules={[{ required: true }]}>
             <Radio.Group optionType="button" buttonStyle="solid" options={[{ label: "Lịch sinh hoạt", value: "schedule" }, { label: "Khoản thu", value: "fee" }, { label: "Báo cáo", value: "report" }]} />
           </Form.Item>
@@ -349,9 +350,8 @@ export default function Announcements({ perms, clubName = "" }) {
           )}
           <Space size="large" wrap>
             {!isReport && <Form.Item name="show_public" label="Hiện trên trang public" valuePropName="checked" style={{ marginBottom: 0 }}><Switch /></Form.Item>}
-            <Form.Item name="is_active" label="Bật" valuePropName="checked" style={{ marginBottom: 0 }}><Switch /></Form.Item>
             <Form.Item name="push_telegram"
-              label={<Tooltip title={isReport ? "Tự động gửi báo cáo vào ngày gửi, khi tới Giờ đẩy bên dưới. Tắt thì chỉ gửi khi bấm Gửi ngay." : "Gửi Telegram cho admin + đẩy tới người xem Trang Public đã bật thông báo vào ngày đầu cửa sổ hiện trước và đúng ngày, khi tới Giờ đẩy bên dưới"}>{isReport ? "Gửi tự động" : "Đẩy thông báo"}</Tooltip>}
+              label={<Tooltip title={isReport ? "Tự động gửi báo cáo vào ngày gửi, khi tới Giờ đẩy bên dưới. Tắt thì chỉ gửi khi bấm Gửi ngay." : "Gửi Telegram cho admin, đẩy tới người xem Trang Public đã bật thông báo và gửi vào các nhóm Zalo đã duyệt, vào ngày đầu cửa sổ hiện trước và đúng ngày, khi tới Giờ đẩy bên dưới"}>{isReport ? "Gửi tự động" : "Đẩy thông báo"}</Tooltip>}
               valuePropName="checked" style={{ marginBottom: 0 }}><Switch /></Form.Item>
             {!isReport && <Form.Item name="repeat_daily" label={<Tooltip title="Đẩy lại mỗi ngày trong cửa sổ hiện trước (một lần/ngày), thay vì chỉ ngày đầu và đúng ngày. Dùng cho nhắc đóng phí.">Nhắc lại hằng ngày</Tooltip>} valuePropName="checked" style={{ marginBottom: 0 }}><Switch /></Form.Item>}
           </Space>
