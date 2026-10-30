@@ -18,6 +18,7 @@ import NotificationBell from "../components/NotificationBell";
 import PushSettings from "../components/PushSettings";
 import { InstallButton, InstallBanner, InstallGuide } from "../components/InstallApp";
 import useInstallPrompt from "../hooks/useInstallPrompt";
+import useAutoPush from "../hooks/useAutoPush";
 import { shouldShowInstallBanner, bannerKey, nudgeKey, readLS, writeLS } from "../utils/install";
 import { savePin, clearPin, pinErrorCode, isValidPin, pinLengthFromError, forceNumericInputs } from "../utils/publicPin";
 import { useAppTheme } from "../contexts/ThemeContext";
@@ -43,6 +44,7 @@ function PublicReportInner({ token }) {
 
   const api = useMemo(() => createPublicReportApi(token), [token]);
   const install = useInstallPrompt();
+  useAutoPush(api.push, !!meta && !pinNeeded);   // thông báo nhắc nhở mặc định bật (2026-10-30), chỉ chạy khi đã vào được trang
   const [guideOpen, setGuideOpen] = useState(false);
   const [bellSignal, setBellSignal] = useState(0);
   const showBanner = shouldShowInstallBanner({ platform: install.platform, dismissedAt: readLS(bannerKey(token)) });

@@ -57,3 +57,22 @@ export async function unsubscribeBrowser() {
   await sub.unsubscribe();
   return json;
 }
+
+/** Sự kiện cửa sổ: đăng ký thông báo vừa thay đổi (useAutoPush) → PushSettings tải lại trạng thái. */
+export const PUSH_CHANGED_EVENT = "clb:push-changed";
+
+/**
+ * Kế hoạch tự bật thông báo trên trang public (2026-10-30: mặc định BẬT, không có nút tắt):
+ *  - "none"      : chưa thể (trình duyệt không hỗ trợ / iOS chưa thêm vào màn hình chính / máy chủ chưa bật / thiếu khoá / bị chặn quyền)
+ *  - "resync"    : đã có subscription → gửi lại cho máy chủ (làm mới liên kết CLB/link, xoá bộ đếm lỗi)
+ *  - "subscribe" : đã cấp quyền nhưng chưa có subscription (vd bản cũ đã Tắt) → đăng ký ngầm, không hỏi
+ *  - "arm"       : chưa hỏi quyền → chờ lần chạm đầu tiên của người dùng rồi mới hỏi (Safari/iOS bắt buộc có thao tác người dùng)
+ * Không thể ép quyền: người dùng vẫn có thể chặn ở trình duyệt/điện thoại.
+ */
+export function autoPushPlan({ state, enabledOnServer, hasKey, permission, hasSubscription }) {
+  if (state !== "ready" || !enabledOnServer || !hasKey) return "none";
+  if (hasSubscription) return "resync";
+  if (permission === "granted") return "subscribe";
+  if (permission === "default") return "arm";
+  return "none";
+}

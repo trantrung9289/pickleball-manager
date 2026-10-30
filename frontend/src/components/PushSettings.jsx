@@ -1,14 +1,16 @@
 /**
  * PushSettings — khối "Thông báo trên thiết bị" trong Drawer chuông trang public (2026-10-28).
  * Trạng thái: máy chủ chưa cấu hình / trình duyệt không hỗ trợ / iOS chưa thêm vào màn hình chính (hướng dẫn 3 bước) /
- * bị chặn quyền / sẵn sàng (nút Bật) / đã bật (nút Tắt). Đăng ký qua props.push (createPublicReportApi().push).
+ * bị chặn quyền / sẵn sàng (nút Bật) / đã bật. Đăng ký qua props.push (createPublicReportApi().push).
+ * 2026-10-30: thông báo nhắc nhở MẶC ĐỊNH BẬT và KHÔNG CÓ NÚT TẮT: hooks/useAutoPush (gắn ở PublicReport) tự đăng ký; khối này chỉ hiển thị
+ * trạng thái, giữ nút "Bật thông báo" khi chưa bật và tự cập nhật khi nhận sự kiện PUSH_CHANGED_EVENT.
  * 2026-10-29: khi đã bật, hiện thêm khối RIÊNG "Thông báo trò chuyện" (tách khỏi nhắc nhở): chế độ Tất cả / Chỉ nhắc tên & bình chọn / Tắt,
  * giờ yên tĩnh theo thiết bị (mặc định 22h–7h). Lưu theo endpoint subscription của thiết bị.
  */
 import { useEffect, useState } from "react";
 import { Alert, Button, Select, Space, Switch, Typography, message } from "antd";
 import { BellOutlined, CheckCircleOutlined, ShareAltOutlined, MessageOutlined } from "@ant-design/icons";
-import { pushSupportState, readPushEnv, currentSubscription, subscribeBrowser, unsubscribeBrowser } from "../utils/webPush";
+import { pushSupportState, readPushEnv, currentSubscription, subscribeBrowser, PUSH_CHANGED_EVENT } from "../utils/webPush";
 
 const { Text } = Typography;
 
@@ -89,16 +91,12 @@ export default function PushSettings({ push }) {
       message.error(err?.response?.data?.detail || err?.message || "Không bật được thông báo");
     } finally { setBusy(false); }
   };
-  const disable = async () => {
-    setBusy(true);
-    try {
-      const json = await unsubscribeBrowser();
-      if (json?.endpoint) await push.unsubscribe({ endpoint: json.endpoint });
-      setSubscribed(false);
-      message.success("Đã tắt thông báo trên thiết bị này");
-    } catch (err) { message.error(err?.message || "Không tắt được"); }
-    finally { setBusy(false); }
-  };
+  // useAutoPush vừa đăng ký xong (khi Drawer đang mở) → cập nhật trạng thái
+  useEffect(() => {
+    const refresh = () => { setEnv(readPushEnv()); currentSubscription().then((s) => setSubscribed(!!s)).catch(() => {}); };
+    window.addEventListener(PUSH_CHANGED_EVENT, refresh);
+    return () => window.removeEventListener(PUSH_CHANGED_EVENT, refresh);
+  }, []);
 
   let body;
   if (cfg && !cfg.enabled) body = <Text type="secondary">Máy chủ chưa bật thông báo đẩy.</Text>;
@@ -111,16 +109,16 @@ export default function PushSettings({ push }) {
       </ol>} />
   );
   else if (state === "unsupported") body = <Text type="secondary">Trình duyệt này không hỗ trợ thông báo đẩy.</Text>;
-  else if (state === "denied") body = <Text type="secondary">Bạn đã chặn thông báo cho trang này. Mở cài đặt trình duyệt để cho phép lại.</Text>;
+  else if (state === "denied") body = <Text type="secondary">Thông báo đang bị chặn cho trang này. Mở cài đặt trình duyệt (hoặc điện thoại) để cho phép lại, thông báo sẽ tự bật.</Text>;
   else if (subscribed) body = (
-    <Space>
+    <Space direction="vertical" size={2}>
       <Text><CheckCircleOutlined style={{ color: "var(--ok)" }} /> Đã bật trên thiết bị này</Text>
-      <Button size="small" onClick={disable} loading={busy}>Tắt</Button>
+      <Text type="secondary" style={{ fontSize: 12 }}>Thông báo nhắc nhở luôn bật để không bỏ lỡ lịch sinh hoạt và nhắc phí.</Text>
     </Space>
   );
   else body = (
     <Space wrap>
-      <Text type="secondary">Nhận lịch sinh hoạt và nhắc phí ngay cả khi không mở trang.</Text>
+      <Text type="secondary">Thông báo được bật mặc định để không bỏ lỡ lịch sinh hoạt và nhắc phí, kể cả khi không mở trang.</Text>
       <Button size="small" type="primary" icon={<BellOutlined />} onClick={enable} loading={busy} disabled={!cfg?.public_key}>Bật thông báo</Button>
     </Space>
   );
