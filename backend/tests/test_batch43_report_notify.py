@@ -44,17 +44,17 @@ def test_validation_and_normalization(client, world):
     assert post(report_range="fixed").status_code == 422                                    # thiếu từ/đến
     assert post(report_range="fixed", report_from="2026-10-05", report_to="2026-10-01", recurrence="none", start_date="2026-11-01", weekdays=None).status_code == 422
     assert post(report_range="fixed", report_from="2026-10-01", report_to="2026-10-31").status_code == 422   # fixed + lặp tuần
-    assert post(report_channels=["sms"]).status_code == 422
+    assert post(push_channels=["sms"]).status_code == 422
     assert post(report_type="chart").status_code == 422
     assert post(push_time=None).status_code == 422                                          # bật đẩy phải có giờ đẩy
     r = post(lead_days=5, show_public=True, start_time="19:00", remind_before_min=30, fee_type_id=world.fee1.id, repeat_daily=True)
     assert r.status_code == 201, r.text
     a = r.json()
     assert a["kind"] == "report" and a["lead_days"] == 0 and a["show_public"] is False and a["start_time"] is None \
-        and a["remind_before_min"] is None and a["fee_type_id"] is None and a["repeat_daily"] is False and a["report_channels"] == ["telegram"]
+        and a["remind_before_min"] is None and a["fee_type_id"] is None and a["repeat_daily"] is False and a["push_channels"] == ["telegram"]
     # PUT cũng chuẩn hoá, kênh được khử trùng + sắp xếp
-    r = client.put(f"/api/announcements/{a['id']}", json={"lead_days": 4, "show_public": True, "report_channels": ["zalo", "telegram", "zalo"]}, headers=h1).json()
-    assert r["lead_days"] == 0 and r["show_public"] is False and r["report_channels"] == ["telegram", "zalo"]
+    r = client.put(f"/api/announcements/{a['id']}", json={"lead_days": 4, "show_public": True, "push_channels": ["zalo", "telegram", "zalo"]}, headers=h1).json()
+    assert r["lead_days"] == 0 and r["show_public"] is False and r["push_channels"] == ["telegram", "zalo"]
     # last_n hợp lệ khi có số ngày; fixed hợp lệ khi gửi một lần
     assert post(report_range="last_n", report_range_days=30).status_code == 201
     assert post(report_range="fixed", report_from="2026-10-01", report_to="2026-10-31", recurrence="none", start_date="2026-11-12", weekdays=None).status_code == 201
@@ -114,7 +114,7 @@ def test_build_report_numbers_render_cap_and_hide_names(client, world, db):
     assert "*" not in rn.render_text(d, {"title": "Thu *chi* _tuần_", "report_range": "yesterday"}, "CLB [A]").replace("📊 *", "").replace("Thu chi tuần*", "")
 
 
-def test_cron_report_channels_default_dedupe_history_and_manual(client, world, db, monkeypatch):
+def test_cron_push_channels_default_dedupe_history_and_manual(client, world, db, monkeypatch):
     h1, fz, web, tele = _setup(client, world, db, monkeypatch)
     zsent = []                                       # ghi lại tin Zalo thật sự gửi đi
     inner = zalo_bot.call
@@ -135,7 +135,7 @@ def test_cron_report_channels_default_dedupe_history_and_manual(client, world, d
     assert [(r["channel"], r["source"]) for r in hist] == [("telegram", "save")]
     assert db.query(models.AnnouncementPushHistory).filter_by(announcement_id=aid).first().kind == "report"
     # bật thêm Zalo + thiết bị → lưu lại gửi bổ sung cho kênh mới (Telegram đã gửi nên bỏ qua)
-    client.put(f"/api/announcements/{aid}", json={"report_channels": ["telegram", "web", "zalo"]}, headers=h1)
+    client.put(f"/api/announcements/{aid}", json={"push_channels": ["telegram", "web", "zalo"]}, headers=h1)
     assert len(tele) == 1 and len(web) == 1 and web[0]["title"] == "📊 Báo cáo tháng — Club One" and "tồn cuối 1.400.000 ₫" in web[0]["body"] and len(web[0]["body"]) <= 200
     assert len(zsent) == 1 and zsent[0]["chat_id"] == "zgr-A" and zsent[0]["text"] == text      # Zalo nhận đúng bản như Telegram
     channels = sorted(r["channel"] for r in client.get("/api/announcements/push-history", headers=h1).json()["items"])
@@ -161,7 +161,7 @@ def test_cron_report_channels_default_dedupe_history_and_manual(client, world, d
     r = client.post(f"/api/announcements/{pid}/push", headers=h1)
     assert r.status_code == 200 and r.json()["sent"] == 1 and "Kỳ: 05/11/2026 – 11/11/2026" in tele[0][1]
     # kênh không được chọn thì Gửi ngay báo 400 (báo cáo chỉ Zalo nhưng admin chỉ có Telegram → Zalo vẫn có nhóm nên OK; chọn web-only khi không có thiết bị)
-    client.put(f"/api/announcements/{pid}", json={"report_channels": ["web"]}, headers=h1)
+    client.put(f"/api/announcements/{pid}", json={"push_channels": ["web"]}, headers=h1)
     db.query(models.WebPushLog).delete(); db.query(models.AnnouncementPreRemindLog).delete(); db.query(models.PushSubscription).delete(); db.commit()
     assert client.post(f"/api/announcements/{pid}/push", headers=h1).status_code == 400
     # khoảng cố định gửi đúng một lần

@@ -1116,7 +1116,7 @@ class AnnouncementBase(BaseModel):
     report_range_days: Optional[int] = Field(default=None, ge=1, le=366)
     report_from: Optional[date] = None
     report_to: Optional[date] = None
-    report_channels: Optional[List[str]] = None
+    push_channels: Optional[List[str]] = None
     report_hide_names: bool = False
     report_fee_type_id: Optional[int] = None
 
@@ -1161,13 +1161,14 @@ def _check_announcement_rule(m):
                 raise ValueError("Đến ngày phải sau từ ngày")
             if m.recurrence != AnnouncementRecurrence.none:
                 raise ValueError("Khoảng cố định chỉ dùng cho báo cáo gửi một lần")
-        chans = [c for c in (m.report_channels or ["telegram"])]
-        if not chans or any(c not in ("telegram", "zalo", "web") for c in chans):
-            raise ValueError("Kênh nhận báo cáo chỉ gồm telegram, zalo, web")
-        m.report_channels = sorted(set(chans))
         # báo cáo không có cửa sổ hiện trước, không hiện trang public, không có giờ bắt đầu / nhắc trước / khoản thu
         m.lead_days, m.repeat_daily, m.show_public, m.fee_type_id = 0, False, False, None
         m.start_time, m.duration_min, m.remind_before_min = None, None, None
+    # kênh gửi (mọi loại, 2026-10-30): chỉ telegram / zalo / web; trống → báo cáo chỉ telegram, loại khác đủ ba kênh (hành vi cũ)
+    chans = list(m.push_channels or [])
+    if any(c not in ("telegram", "zalo", "web") for c in chans):
+        raise ValueError("Kênh gửi chỉ gồm telegram, zalo, web")
+    m.push_channels = sorted(set(chans)) or (["telegram"] if m.kind == AnnouncementKind.report else ["telegram", "web", "zalo"])
     # 2026-10-30: bật đẩy thì phải đặt giờ đẩy (không có giờ mặc định — tất cả cấu hình thủ công)
     if m.push_telegram and not m.push_time:
         raise ValueError("Bật đẩy thông báo cần đặt Giờ đẩy")
@@ -1214,7 +1215,7 @@ class AnnouncementUpdate(BaseModel):
     report_range_days: Optional[int] = Field(default=None, ge=1, le=366)
     report_from: Optional[date] = None
     report_to: Optional[date] = None
-    report_channels: Optional[List[str]] = None
+    push_channels: Optional[List[str]] = None
     report_hide_names: Optional[bool] = None
     report_fee_type_id: Optional[int] = None
 

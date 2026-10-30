@@ -144,7 +144,7 @@ def test_cron_sends_new_report_types_and_channels(client, world, db, monkeypatch
     rep = {"kind": "report", "recurrence": "monthly", "day_of_month": 12, "push_telegram": True, "push_time": "07:00", "report_range": "last_month"}
     client.post("/api/announcements", json={**rep, "title": "Theo dõi phí tháng", "report_type": "fee_status", "report_fee_type_id": world.fee1.id}, headers=h1)
     client.post("/api/announcements", json={**rep, "title": "Đóng góp tháng", "report_type": "contributions", "report_hide_names": True,
-                                            "report_channels": ["telegram", "web"]}, headers=h1)
+                                            "push_channels": ["telegram", "web"]}, headers=h1)
     assert len(tele) == 2
     fee_txt = next(t for _, t in tele if t.startswith("📊 *Theo dõi phí tháng*"))
     assert "Đã đóng: 2/7 thành viên (29%)" in fee_txt and "  • M Member 3" in fee_txt

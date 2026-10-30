@@ -138,7 +138,13 @@ export const REPORT_TYPE_LABELS = { summary: "Tổng hợp thu chi", transaction
 export const REPORT_NAME_TYPES = ["transactions", "contributions", "fee_status"];
 /** Loại báo cáo dùng khoản thu: fee_status bắt buộc, contributions tuỳ chọn (lọc một khoản). */
 export const REPORT_FEE_TYPES = ["contributions", "fee_status"];
-export const REPORT_CHANNEL_LABELS = { telegram: "Telegram quản trị viên", zalo: "Nhóm Zalo", web: "Trang Public" };
+export const CHANNEL_LABELS = { telegram: "Telegram quản trị viên", zalo: "Nhóm Zalo", web: "Trang Public" };
+export const ALL_CHANNELS = ["telegram", "zalo", "web"];
+/** Kênh gửi của quy tắc: đã lưu thì dùng; chưa có → báo cáo mặc định chỉ Telegram, loại khác đủ ba kênh (đúng hành vi cũ). */
+export function channelsOf(r) {
+  if (r?.push_channels?.length) return r.push_channels;
+  return r?.kind === "report" ? ["telegram"] : ALL_CHANNELS;
+}
 
 /** Cảnh báo lộ số liệu theo ĐÚNG các kênh đang chọn (Telegram quản trị viên không cần cảnh báo); "" khi chỉ Telegram. */
 export function reportExposureText(channels) {
@@ -173,7 +179,7 @@ export function reportRangeText(r) {
 
 /** Dòng mô tả quy tắc báo cáo trong bảng: "Theo dõi phí · Quỹ CLB · Tháng trước · Telegram quản trị viên, Nhóm Zalo · ẩn tên". */
 export function reportSummaryText(r) {
-  const chans = (r.report_channels?.length ? r.report_channels : ["telegram"]).map((c) => REPORT_CHANNEL_LABELS[c] || c).join(", ");
+  const chans = channelsOf({ ...r, kind: "report" }).map((c) => CHANNEL_LABELS[c] || c).join(", ");
   const fee = REPORT_FEE_TYPES.includes(r.report_type) && r.report_fee_type_id ? (r.report_fee_type_name || "khoản đã xoá") : "";
   return [REPORT_TYPE_LABELS[r.report_type] || "", fee, reportRangeText(r), chans, REPORT_NAME_TYPES.includes(r.report_type) && r.report_hide_names ? "ẩn tên" : ""].filter(Boolean).join(" · ");
 }

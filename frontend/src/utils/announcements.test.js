@@ -1,7 +1,7 @@
 // Chạy: npm test (node --test). Hàm thuần của thông báo/chuông: khoá đã xem, đếm chưa xem, nhãn ngày, gộp tên chưa đóng.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { itemKey, weekdayLabelOfDate, formatWhen, statusChip, unreadCount, mergeSeen, unpaidPreview, groupByDate, shareText, formatHistoryTime, historyResult, PUSH_CHANNEL_LABELS, PUSH_SOURCE_LABELS, KIND_LABELS, REPORT_RANGE_OPTIONS, reportRangeText, reportSummaryText, REPORT_TYPE_LABELS, REPORT_NAME_TYPES, REPORT_FEE_TYPES, REPORT_CHANNEL_LABELS, reportExposureText } from "./announcements.js";
+import { itemKey, weekdayLabelOfDate, formatWhen, statusChip, unreadCount, mergeSeen, unpaidPreview, groupByDate, shareText, formatHistoryTime, historyResult, PUSH_CHANNEL_LABELS, PUSH_SOURCE_LABELS, KIND_LABELS, REPORT_RANGE_OPTIONS, reportRangeText, reportSummaryText, REPORT_TYPE_LABELS, REPORT_NAME_TYPES, REPORT_FEE_TYPES, CHANNEL_LABELS, ALL_CHANNELS, channelsOf, reportExposureText } from "./announcements.js";
 
 test("weekdayLabelOfDate + formatWhen: 2026-10-27 là Thứ 3, có giờ thì nối giờ", () => {
   assert.equal(weekdayLabelOfDate("2026-10-27"), "Thứ 3");
@@ -72,9 +72,9 @@ test("báo cáo định kỳ: nhãn loại, khoảng thời gian, mô tả quy t
   assert.equal(reportRangeText({ report_range: "last_n", report_range_days: 30 }), "30 ngày gần nhất");
   assert.equal(reportRangeText({ report_range: "fixed", report_from: "2026-10-01", report_to: "2026-10-31" }), "01/10/2026 – 31/10/2026");
   assert.equal(reportSummaryText({ report_type: "summary", report_range: "last_week" }), "Tổng hợp thu chi · Tuần trước · Telegram quản trị viên");
-  assert.equal(reportSummaryText({ report_type: "transactions", report_range: "yesterday", report_channels: ["telegram", "zalo"], report_hide_names: true }),
+  assert.equal(reportSummaryText({ report_type: "transactions", report_range: "yesterday", push_channels: ["telegram", "zalo"], report_hide_names: true }),
     "Giao dịch · Hôm qua · Telegram quản trị viên, Nhóm Zalo · ẩn tên");
-  assert.equal(reportSummaryText({ report_type: "summary", report_range: "yesterday", report_channels: ["web"], report_hide_names: true }), "Tổng hợp thu chi · Hôm qua · Trang Public");   // ẩn tên chỉ áp cho báo cáo giao dịch
+  assert.equal(reportSummaryText({ report_type: "summary", report_range: "yesterday", push_channels: ["web"], report_hide_names: true }), "Tổng hợp thu chi · Hôm qua · Trang Public");   // ẩn tên chỉ áp cho báo cáo giao dịch
 });
 
 test("báo cáo đợt 2: nhãn loại, loại dùng khoản thu / ẩn tên, mô tả có tên khoản", () => {
@@ -84,16 +84,23 @@ test("báo cáo đợt 2: nhãn loại, loại dùng khoản thu / ẩn tên, m�
   assert.deepEqual(REPORT_NAME_TYPES, ["transactions", "contributions", "fee_status"]);
   assert.equal(reportSummaryText({ report_type: "fee_status", report_fee_type_id: 3, report_fee_type_name: "Quỹ CLB", report_range: "last_month", report_hide_names: true }),
     "Theo dõi phí · Quỹ CLB · Tháng trước · Telegram quản trị viên · ẩn tên");
-  assert.equal(reportSummaryText({ report_type: "contributions", report_range: "last7", report_channels: ["zalo"] }), "Đóng góp thành viên · 7 ngày gần nhất · Nhóm Zalo");   // không lọc khoản
+  assert.equal(reportSummaryText({ report_type: "contributions", report_range: "last7", push_channels: ["zalo"] }), "Đóng góp thành viên · 7 ngày gần nhất · Nhóm Zalo");   // không lọc khoản
   assert.equal(reportSummaryText({ report_type: "contributions", report_fee_type_id: 9, report_fee_type_name: null, report_range: "yesterday" }), "Đóng góp thành viên · khoản đã xoá · Hôm qua · Telegram quản trị viên");
   assert.equal(reportSummaryText({ report_type: "summary", report_fee_type_id: 3, report_fee_type_name: "X", report_range: "yesterday", report_hide_names: true }), "Tổng hợp thu chi · Hôm qua · Telegram quản trị viên");   // loại khác bỏ qua khoản và ẩn tên
 });
 
 test("cảnh báo lộ số liệu theo đúng kênh đang chọn; kênh web gọi là Trang Public", () => {
-  assert.deepEqual(REPORT_CHANNEL_LABELS, { telegram: "Telegram quản trị viên", zalo: "Nhóm Zalo", web: "Trang Public" });
+  assert.deepEqual(CHANNEL_LABELS, { telegram: "Telegram quản trị viên", zalo: "Nhóm Zalo", web: "Trang Public" });
   assert.equal(reportExposureText(["telegram"]), "");
   assert.equal(reportExposureText(undefined), "");
   assert.equal(reportExposureText(["telegram", "zalo"]), "Nhóm Zalo sẽ thấy số liệu thu chi");                     // chỉ tick thêm Zalo → không nhắc Trang Public
   assert.equal(reportExposureText(["telegram", "web"]), "Người xem Trang Public (đã bật thông báo) sẽ thấy số liệu thu chi");
   assert.equal(reportExposureText(["zalo", "web", "telegram"]), "Nhóm Zalo và người xem Trang Public (đã bật thông báo) sẽ thấy số liệu thu chi");
+});
+
+test("channelsOf: đã lưu thì dùng; chưa có → báo cáo chỉ Telegram, loại khác đủ ba kênh", () => {
+  assert.deepEqual(channelsOf({ kind: "report" }), ["telegram"]);
+  assert.deepEqual(channelsOf({ kind: "schedule" }), ALL_CHANNELS);
+  assert.deepEqual(channelsOf({ kind: "fee", push_channels: [] }), ALL_CHANNELS);
+  assert.deepEqual(channelsOf({ kind: "schedule", push_channels: ["zalo"] }), ["zalo"]);
 });

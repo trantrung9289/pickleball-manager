@@ -64,6 +64,7 @@ def test_join_rename_and_message_flow(client, world, db):
 def test_poll_create_vote_add_option_close_and_push(client, world, db, monkeypatch):
     sent = _fake_push(monkeypatch)
     monkeypatch.setattr(main, "CHAT_MIN_INTERVAL_S", 0)   # test gửi liên tiếp, bỏ giãn 2s
+    monkeypatch.setattr(main, "_now_vn", lambda: datetime.utcnow().replace(hour=5, minute=0) + timedelta(hours=7))   # 12:00 VN: ngoài giờ yên tĩnh mặc định 22h–7h (không phụ thuộc giờ chạy test)
     slug = world.token1.slug
     dev_a, id_a = _join(client, slug, "An")
     dev_b, id_b = _join(client, slug, "Bình")

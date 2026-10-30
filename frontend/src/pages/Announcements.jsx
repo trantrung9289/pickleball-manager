@@ -23,7 +23,7 @@ import { announcementsApi, feeTypesApi } from "../api";
 import useHotkey from "../hooks/useHotkey";
 import usePublicLink from "../hooks/usePublicLink";
 import PushHistoryCard from "../components/PushHistoryCard";
-import { WEEKDAY_LABELS, KIND_LABELS, groupByDate, remindLabel, REPORT_TYPE_LABELS, REPORT_RANGE_OPTIONS, REPORT_CHANNEL_LABELS, reportSummaryText, REPORT_NAME_TYPES, REPORT_FEE_TYPES, reportExposureText } from "../utils/announcements";
+import { WEEKDAY_LABELS, KIND_LABELS, groupByDate, remindLabel, REPORT_TYPE_LABELS, REPORT_RANGE_OPTIONS, CHANNEL_LABELS, ALL_CHANNELS, channelsOf, reportSummaryText, REPORT_NAME_TYPES, REPORT_FEE_TYPES, reportExposureText } from "../utils/announcements";
 
 const { Title, Text } = Typography;
 const { TextArea } = Input;
@@ -43,7 +43,7 @@ const toForm = (r) => ({
   remind_h: r.remind_before_min != null ? Math.floor(r.remind_before_min / 60) : null,
   remind_m: r.remind_before_min != null ? r.remind_before_min % 60 : null,
   report_period: r.report_from && r.report_to ? [dayjs(r.report_from), dayjs(r.report_to)] : null,
-  report_channels: r.report_channels?.length ? r.report_channels : ["telegram"],
+  push_channels: channelsOf(r),
 });
 
 const fromForm = (v) => {
@@ -69,7 +69,7 @@ const fromForm = (v) => {
     report_range_days: isReport && v.report_range === "last_n" ? v.report_range_days ?? null : null,
     report_from: isReport && v.report_range === "fixed" && v.report_period?.[0] ? v.report_period[0].format("YYYY-MM-DD") : null,
     report_to: isReport && v.report_range === "fixed" && v.report_period?.[1] ? v.report_period[1].format("YYYY-MM-DD") : null,
-    report_channels: isReport ? (v.report_channels?.length ? v.report_channels : ["telegram"]) : null,
+    push_channels: v.push_channels?.length ? v.push_channels : isReport ? ["telegram"] : ALL_CHANNELS,
     report_hide_names: isReport && REPORT_NAME_TYPES.includes(v.report_type) ? !!v.report_hide_names : false,
     report_fee_type_id: isReport && REPORT_FEE_TYPES.includes(v.report_type) ? v.report_fee_type_id ?? null : null,
   };
@@ -94,7 +94,7 @@ export default function Announcements({ perms, clubName = "" }) {
   const remindOn = Form.useWatch("remind_enabled", form);
   const reportType = Form.useWatch("report_type", form);
   const reportRange = Form.useWatch("report_range", form);
-  const reportChannels = Form.useWatch("report_channels", form);
+  const reportChannels = Form.useWatch("push_channels", form);
   const isReport = kind === "report";
   const fixedRange = isReport && reportRange === "fixed";
   const canEdit = perms?.canEdit ?? true;
@@ -120,7 +120,7 @@ export default function Announcements({ perms, clubName = "" }) {
   const openCreate = () => {
     setEditing(null);
     form.resetFields();
-    form.setFieldsValue({ kind: "schedule", recurrence: "weekly", weekdays: [], lead_days: 3, repeat_daily: false, is_active: true, show_public: true, push_telegram: false, push_time: null, remind_enabled: false, remind_h: null, remind_m: null, report_channels: ["telegram"], report_hide_names: false });
+    form.setFieldsValue({ kind: "schedule", recurrence: "weekly", weekdays: [], lead_days: 3, repeat_daily: false, is_active: true, show_public: true, push_telegram: false, push_time: null, remind_enabled: false, remind_h: null, remind_m: null, push_channels: ALL_CHANNELS, report_hide_names: false });
     setModalOpen(true);
   };
   const openEdit = (r) => { setEditing(r); form.setFieldsValue(toForm(r)); setModalOpen(true); };
@@ -148,8 +148,8 @@ export default function Announcements({ perms, clubName = "" }) {
     const ok = await confirm({
       title: "Gửi ngay?",
       content: r.kind === "report"
-        ? <div>Gửi báo cáo <b>{r.title}</b> ngay (khoảng thời gian tính theo hôm nay) tới: {(r.report_channels?.length ? r.report_channels : ["telegram"]).map((c) => REPORT_CHANNEL_LABELS[c]).join(", ")}.</div>
-        : <div>Gửi lần xuất hiện gần nhất của <b>{r.title}</b> tới quản trị viên đã liên kết Telegram, người xem Trang Public đã bật thông báo và nhóm Zalo của CLB.</div>,
+        ? <div>Gửi báo cáo <b>{r.title}</b> ngay (khoảng thời gian tính theo hôm nay) tới: {channelsOf(r).map((c) => CHANNEL_LABELS[c]).join(", ")}.</div>
+        : <div>Gửi lần xuất hiện gần nhất của <b>{r.title}</b> tới: {channelsOf(r).map((c) => CHANNEL_LABELS[c]).join(", ")}.</div>,
       okText: "Gửi",
     });
     if (!ok) return;
@@ -251,8 +251,10 @@ export default function Announcements({ perms, clubName = "" }) {
               form.setFieldsValue({
                 report_type: form.getFieldValue("report_type") || "summary", report_range: form.getFieldValue("report_range") || "last_month",
                 recurrence: "monthly", day_of_month: form.getFieldValue("day_of_month") || 1, push_telegram: true,
-                report_channels: form.getFieldValue("report_channels") || ["telegram"],
+                push_channels: ["telegram"],
               });
+            } else if (chg.kind) {
+              form.setFieldsValue({ push_channels: ALL_CHANNELS });   // đổi từ Báo cáo về loại khác → đủ ba kênh như mặc định
             }
           }}>
           <Form.Item name="is_active" label={<Tooltip title="Công tắc tổng của thông báo: tắt thì không hiện trên chuông, trang public và không đẩy tin nào, cấu hình vẫn được giữ.">Bật thông báo</Tooltip>} valuePropName="checked"><Switch /></Form.Item>
@@ -355,12 +357,15 @@ export default function Announcements({ perms, clubName = "" }) {
               valuePropName="checked" style={{ marginBottom: 0 }}><Switch /></Form.Item>
             {!isReport && <Form.Item name="repeat_daily" label={<Tooltip title="Đẩy lại mỗi ngày trong cửa sổ hiện trước (một lần/ngày), thay vì chỉ ngày đầu và đúng ngày. Dùng cho nhắc đóng phí.">Nhắc lại hằng ngày</Tooltip>} valuePropName="checked" style={{ marginBottom: 0 }}><Switch /></Form.Item>}
           </Space>
+          <div style={{ marginTop: 16 }}>
+            <Form.Item name="push_channels" label="Gửi tới" rules={[{ required: true, type: "array", min: 1, message: "Chọn ít nhất một kênh" }]}
+              extra={isReport ? "Mặc định chỉ Telegram quản trị viên. Nhóm Zalo (đã duyệt) và Trang Public (người xem đã bật thông báo) phải bật tay."
+                : "Mặc định gửi cả ba kênh. Nhóm Zalo chỉ gồm nhóm đã duyệt, Trang Public chỉ gồm người xem đã bật thông báo."}>
+              <Checkbox.Group options={Object.entries(CHANNEL_LABELS).map(([value, label]) => ({ value, label }))} />
+            </Form.Item>
+          </div>
           {isReport && (
-            <div style={{ marginTop: 16 }}>
-              <Form.Item name="report_channels" label="Gửi tới" rules={[{ required: true, type: "array", min: 1, message: "Chọn ít nhất một kênh" }]}
-                extra="Mặc định chỉ Telegram quản trị viên. Nhóm Zalo (đã duyệt) và Trang Public (người xem đã bật thông báo) phải bật tay.">
-                <Checkbox.Group options={Object.entries(REPORT_CHANNEL_LABELS).map(([value, label]) => ({ value, label }))} />
-              </Form.Item>
+            <div style={{ marginTop: 0 }}>
               {reportExposureText(reportChannels) && (
                 <Alert type="warning" showIcon style={{ marginBottom: 12 }} message={reportExposureText(reportChannels)} />
               )}

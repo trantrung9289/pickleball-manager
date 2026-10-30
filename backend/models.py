@@ -807,7 +807,8 @@ class Announcement(Base):
     report_range_days = Column(Integer, nullable=True)
     report_from = Column(Date, nullable=True)
     report_to = Column(Date, nullable=True)
-    report_channels = Column(JSON, nullable=True)
+    report_channels = Column(JSON, nullable=True)   # LEGACY: đã thay bằng push_channels (2026-10-30), giữ cột để không phải dựng lại bảng
+    push_channels = Column(JSON, nullable=True)     # kênh gửi mọi loại: ["telegram","zalo","web"]; NULL → báo cáo chỉ telegram, loại khác đủ ba kênh
     report_hide_names = Column(Boolean, nullable=False, default=False)
     # đợt 2: report_type contributions (lọc khoản, tuỳ chọn) | fee_status (bắt buộc). Số nguyên thường, KHÔNG khoá ngoại: xoá khoản bị chặn ở delete_fee_type
     report_fee_type_id = Column(Integer, nullable=True)

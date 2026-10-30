@@ -177,6 +177,9 @@ def _run_migration():
         ("announcements", "report_from", "DATE", None),
         ("announcements", "report_to", "DATE", None),
         ("announcements", "report_channels", "JSON", None),
+        # 2026-10-30: kênh gửi dùng chung mọi loại (thay report_channels); báo cáo cũ giữ kênh đã chọn, loại khác NULL = đủ ba kênh như cũ
+        ("announcements", "push_channels", "JSON",
+            "UPDATE announcements SET push_channels = report_channels WHERE kind = 'report' AND report_channels IS NOT NULL"),
         ("announcements", "report_hide_names", "BOOLEAN DEFAULT 0 NOT NULL", None),
         ("announcements", "report_fee_type_id", "INTEGER", None),
         ("zalo_groups", "added_by_id", "VARCHAR(60)", None),
@@ -6785,8 +6788,8 @@ def update_announcement(aid: int, data: schemas.AnnouncementUpdate, background: 
         # cùng chuẩn hoá như schemas._check_announcement_rule (PUT chỉ kiểm tra rồi áp changes thô)
         changes.update({"lead_days": 0, "repeat_daily": False, "show_public": False, "fee_type_id": None, "start_time": None,
                         "duration_min": None, "remind_before_min": None,
-                        "report_channels": sorted(set(merged.get("report_channels") or ["telegram"])),
                         "report_fee_type_id": merged.get("report_fee_type_id") if merged.get("report_type") in ("contributions", "fee_status") else None})
+    changes["push_channels"] = _rule_channels(merged.get("kind"), merged.get("push_channels"))   # chuẩn hoá thủ công (PUT chỉ kiểm tra rồi áp changes thô)
     for k, v in changes.items():
         setattr(a, k, v)
     db.commit(); db.refresh(a)
@@ -6969,12 +6972,21 @@ def _report_fields(r) -> dict:
     return {"report_type": r.report_type, "report_range": r.report_range, "report_range_days": r.report_range_days,
             "report_from": r.report_from.isoformat() if r.report_from else None, "report_to": r.report_to.isoformat() if r.report_to else None,
             "report_fee_type_id": r.report_fee_type_id,
-            "channels": list(r.report_channels or ["telegram"]), "hide_names": bool(r.report_hide_names)}
+            "hide_names": bool(r.report_hide_names)}
+
+
+ALL_PUSH_CHANNELS = ["telegram", "web", "zalo"]
+
+
+def _rule_channels(kind, chans) -> list:
+    """Kênh gửi của quy tắc (mọi loại): đã chọn thì dùng; chưa có → báo cáo chỉ Telegram, loại khác đủ ba kênh (hành vi cũ)."""
+    out = sorted(set(chans or []))
+    return out or (["telegram"] if str(getattr(kind, "value", kind)) == "report" else list(ALL_PUSH_CHANNELS))
 
 
 def _item_wants(it: dict, channel: str) -> bool:
-    """Báo cáo chỉ đi các kênh đã chọn (mặc định Telegram quản trị viên); các loại thông báo khác đi mọi kênh như cũ."""
-    return it.get("kind") != "report" or channel in (it.get("channels") or ["telegram"])
+    """Quy tắc chỉ đi các kênh đã chọn (it["channels"], gắn từ quy tắc); item không có thì đi đủ ba kênh như cũ."""
+    return channel in (it.get("channels") or ALL_PUSH_CHANNELS)
 
 
 def _ensure_report(db: Session, club_id: int, it: dict) -> None:
@@ -7060,18 +7072,19 @@ def _due_announcement_items(db: Session, club_id: int, now: datetime) -> list:
             continue
         if r.kind == "report":   # báo cáo: chỉ đúng ngày gửi (lead_days = 0), sau giờ đẩy; không nhắc trước giờ bắt đầu
             if it["date"] == today.isoformat() and r.push_time and hhmm >= r.push_time:
-                due.append({**it, **_report_fields(r)})
+                due.append({**it, **_report_fields(r), "channels": _rule_channels(r.kind, r.push_channels)})
             continue
         d = date.fromisoformat(it["date"])
         first_day = d - timedelta(days=max(0, int(r.lead_days or 0)))
         day_due = (first_day <= today <= d) if r.repeat_daily else (today == first_day or today == d)
+        chans = _rule_channels(r.kind, r.push_channels)
         if day_due and r.push_time and hhmm >= r.push_time:
-            due.append(it)
+            due.append({**it, "channels": chans})
         if today == d and r.remind_before_min is not None and it.get("start_time"):
             h, m = (int(x) for x in it["start_time"].split(":"))
             start_dt = datetime.combine(d, datetime.min.time()).replace(hour=h, minute=m)
             if start_dt - timedelta(minutes=int(r.remind_before_min)) <= now <= start_dt + timedelta(minutes=PRE_REMIND_GRACE_MIN):
-                due.append({**it, "pre_minutes": int(r.remind_before_min)})
+                due.append({**it, "pre_minutes": int(r.remind_before_min), "channels": chans})
     return due
 
 
@@ -7565,13 +7578,15 @@ def push_announcement_now(aid: int, db: Session = Depends(get_db), perms: ClubPe
         items = [it for it in _announcement_feed(db, perms.club_id, today, 60, include_later=True) if it["announcement_id"] == aid]
     if not items:
         raise HTTPException(400, "Quy tắc không có lần xuất hiện nào trong 60 ngày tới")
-    chans = set(a.report_channels or ["telegram"]) if is_report else {"telegram", "zalo", "web"}
+    chans = set(_rule_channels(a.kind, a.push_channels))
+    for it in items:
+        it["channels"] = sorted(chans)
     tg_ok = "telegram" in chans and _club_bot_enabled(db, perms.club_id) and bool(_club_admin_chat_ids(db, perms.club_id))
     wp_subs = db.query(models.PushSubscription).filter(models.PushSubscription.club_id == perms.club_id).count() if _wp.enabled() and "web" in chans else 0
     club = _club_or_404(db, perms.club_id)
     zl_ok = "zalo" in chans and bool(_zalo_token(club)) and bool(_zalo_enabled_groups(db, perms.club_id))
     if not tg_ok and not wp_subs and not zl_ok:
-        raise HTTPException(400, "Chưa có kênh nhận: không có quản trị viên liên kết Telegram, chưa ai bật thông báo trên thiết bị và chưa có nhóm Zalo" + (" (hoặc kênh đó chưa được chọn cho báo cáo này)" if is_report else ""))
+        raise HTTPException(400, "Chưa có kênh nhận: không có quản trị viên liên kết Telegram, chưa ai bật thông báo trên thiết bị và chưa có nhóm Zalo" + (" (hoặc kênh đó chưa được chọn cho thông báo này)"))
     res = {"sent": 0, "errors": []}
     if tg_ok:
         res = _push_announcement_items(db, perms.club_id, items[:1], today, _bot_token_or_500(), dedupe=False, source="manual")
