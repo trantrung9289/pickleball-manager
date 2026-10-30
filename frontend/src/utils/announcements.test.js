@@ -1,7 +1,7 @@
 // Chạy: npm test (node --test). Hàm thuần của thông báo/chuông: khoá đã xem, đếm chưa xem, nhãn ngày, gộp tên chưa đóng.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { itemKey, weekdayLabelOfDate, formatWhen, statusChip, unreadCount, mergeSeen, unpaidPreview, groupByDate } from "./announcements.js";
+import { itemKey, weekdayLabelOfDate, formatWhen, statusChip, unreadCount, mergeSeen, unpaidPreview, groupByDate, shareText } from "./announcements.js";
 
 test("weekdayLabelOfDate + formatWhen: 2026-10-27 là Thứ 3, có giờ thì nối giờ", () => {
   assert.equal(weekdayLabelOfDate("2026-10-27"), "Thứ 3");
@@ -37,4 +37,17 @@ test("unpaidPreview + groupByDate", () => {
   assert.equal(p.shown.length, 10); assert.equal(p.more, 2);
   const g = groupByDate([{ date: "a", announcement_id: 1 }, { date: "a", announcement_id: 2 }, { date: "b", announcement_id: 3 }]);
   assert.deepEqual(g.map((x) => [x.date, x.items.length]), [["a", 2], ["b", 1]]);
+});
+
+test("shareText: lịch có CLB + link; phí liệt kê tên; quá 2000 ký tự thì cắt tên và giữ link", () => {
+  const sched = shareText({ kind: "schedule", title: "Đánh tối", date: "2026-10-27", start_time: "19:00", duration_min: 120, body: "Sân 3" },
+    { clubName: "CLB A", publicUrl: "https://x.vn/public/report/abc" });
+  assert.equal(sched, "📅 Đánh tối — CLB A\nThứ 3, 27/10 · 19:00 · 120 phút\n\nSân 3\n\nXem chi tiết: https://x.vn/public/report/abc");
+  const fee = shareText({ kind: "fee", title: "Hội phí", date: "2026-11-05", unpaid_count: 2, unpaid_members: [{ full_name: "An" }, { full_name: "Bình" }] });
+  assert.equal(fee, "🔔 Hội phí\nThứ 5, 05/11\n\nChưa đóng (2 người):\n  • An\n  • Bình");
+  const many = Array.from({ length: 300 }, (_, i) => ({ full_name: `Thành viên số ${i + 1}` }));
+  const long = shareText({ kind: "fee", title: "Hội phí", date: "2026-11-05", unpaid_count: 300, unpaid_members: many }, { publicUrl: "https://x.vn/p" });
+  assert.ok(long.length <= 2000);
+  assert.ok(long.endsWith("Xem chi tiết: https://x.vn/p"));
+  assert.match(long, /… và \d+ người nữa/);
 });

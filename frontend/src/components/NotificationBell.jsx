@@ -14,7 +14,9 @@ import { Badge, Button, Drawer, Empty, Spin, Typography, Space } from "antd";
 import { BellOutlined, CalendarOutlined, DollarOutlined, SettingOutlined } from "@ant-design/icons";
 import { useViewMode } from "../contexts/ViewModeContext";
 import { StatusChip } from "./ui";
-import { formatWhen, statusChip, unreadCount, mergeSeen, loadSeen, saveSeen, unpaidPreview, groupByDate, KIND_LABELS } from "../utils/announcements";
+import { formatWhen, statusChip, unreadCount, mergeSeen, loadSeen, saveSeen, unpaidPreview, groupByDate, KIND_LABELS, shareText } from "../utils/announcements";
+import ShareZaloButton from "./ShareZaloButton";
+import usePublicLink from "../hooks/usePublicLink";
 
 const { Text } = Typography;
 const REFRESH_MS = 60_000;
@@ -36,7 +38,8 @@ function FeeDetail({ it }) {
   );
 }
 
-export function FeedItem({ it }) {
+/** share: { clubName, publicUrl } → hiện nút "Chia sẻ lên Zalo" (chỉ admin truyền vào; public không có). */
+export function FeedItem({ it, share = null }) {
   const chip = statusChip(it);
   const isFee = it.kind === "fee";
   return (
@@ -58,12 +61,16 @@ export function FeedItem({ it }) {
         {it.body && <div style={{ whiteSpace: "pre-wrap", fontSize: 13, marginTop: 4 }}>{it.body}</div>}
         {isFee && <FeeDetail it={it} />}
       </div>
+      {share && <ShareZaloButton text={shareText(it, share)} title={it.title} />}
     </div>
   );
 }
 
-export default function NotificationBell({ fetchFeed, scope, onManage, dark = false, topPanel = null, openSignal = 0 }) {
+export default function NotificationBell({ fetchFeed, scope, onManage, dark = false, topPanel = null, openSignal = 0, shareClubName = null }) {
   const { isMobileView } = useViewMode();
+  // Admin (shareClubName truyền vào): nút chia sẻ lên Zalo kèm link công khai của CLB; public: không
+  const publicUrl = usePublicLink(shareClubName != null);
+  const share = shareClubName != null ? { clubName: shareClubName, publicUrl: publicUrl || "" } : null;
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState(null);          // null = chưa tải lần nào
   const [seen, setSeen] = useState(() => loadSeen(scope));   // đổi scope → caller đặt key={scope} để remount
@@ -135,7 +142,7 @@ export default function NotificationBell({ fetchFeed, scope, onManage, dark = fa
           : !list.length ? <Empty description="Chưa có thông báo nào" style={{ padding: 24 }} />
           : groups.map((g) => (
             <div key={g.date}>
-              {g.items.map((it) => <FeedItem key={`${it.announcement_id}:${it.date}`} it={it} />)}
+              {g.items.map((it) => <FeedItem key={`${it.announcement_id}:${it.date}`} it={it} share={share} />)}
             </div>
           ))}
       </Drawer>

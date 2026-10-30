@@ -19,6 +19,7 @@ import { StatusChip } from "../components/ui";
 import { FeedItem } from "../components/NotificationBell";
 import { announcementsApi, feeTypesApi } from "../api";
 import useHotkey from "../hooks/useHotkey";
+import usePublicLink from "../hooks/usePublicLink";
 import { WEEKDAY_LABELS, KIND_LABELS, groupByDate, remindLabel } from "../utils/announcements";
 
 const { Title, Text } = Typography;
@@ -57,7 +58,9 @@ const fromForm = (v) => ({
   remind_before_min: v.remind_enabled && v.start_time ? (Number(v.remind_h) || 0) * 60 + (Number(v.remind_m) || 0) : null,
 });
 
-export default function Announcements({ perms }) {
+export default function Announcements({ perms, clubName = "" }) {
+  const publicUrl = usePublicLink(true);
+  const share = { clubName, publicUrl: publicUrl || "" };
   const [data, setData] = useState([]);
   const [feeTypes, setFeeTypes] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -184,7 +187,7 @@ export default function Announcements({ perms }) {
             {!preview ? <Spin /> : !preview.items.length ? <Empty description="Không có lần xuất hiện nào trong 28 ngày tới" />
               : previewGroups.map((g) => (
                 <div key={g.date}>
-                  {g.items.map((it) => <FeedItem key={`${it.announcement_id}:${it.date}`} it={it} />)}
+                  {g.items.map((it) => <FeedItem key={`${it.announcement_id}:${it.date}`} it={it} share={share} />)}
                 </div>
               ))}
             <Text type="secondary" style={{ fontSize: 12, display: "block", marginTop: 8 }}>

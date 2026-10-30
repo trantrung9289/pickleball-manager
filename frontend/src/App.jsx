@@ -248,7 +248,7 @@ function AppShell() {
             </Space>
             <Space size={isMobileView ? "small" : "middle"}>
               <Suspense fallback={null}>
-                <NotificationBell key={selectedClub?.id} scope={`club:${selectedClub?.id}`} fetchFeed={announcementsApi.feed} onManage={() => setCurrent("announcements")} />
+                <NotificationBell key={selectedClub?.id} scope={`club:${selectedClub?.id}`} fetchFeed={announcementsApi.feed} onManage={() => setCurrent("announcements")} shareClubName={selectedClub?.name || ""} />
               </Suspense>
               <ViewModeSwitcher />
               {!isMobileView && <ThemeSwitcher />}
@@ -265,7 +265,7 @@ function AppShell() {
           paddingBottom: isMobileView ? "calc(64px + env(safe-area-inset-bottom, 0px))" : 0,
         }}>
           <Suspense fallback={<div style={{ textAlign: "center", padding: 48 }}><Spin size="large" /></div>}>
-            <PageComp perms={perms} />
+            <PageComp perms={perms} clubName={selectedClub?.name || ""} />
           </Suspense>
         </Content>
       </Layout>

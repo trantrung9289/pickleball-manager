@@ -78,3 +78,36 @@ export const remindLabel = (min) => {
   const h = Math.floor(min / 60), m = min % 60;
   return h && m ? `${h} giờ ${m} phút` : h ? `${h} giờ` : `${m} phút`;
 };
+
+/**
+ * Nội dung chia sẻ thủ công lên Zalo (2026-10-30): admin bấm "Chia sẻ lên Zalo" → Web Share API / sao chép → dán vào nhóm.
+ * Không gọi API Zalo, không lưu gì. Văn bản thuần, tối đa 2000 ký tự (giới hạn tin Zalo), cắt danh sách chưa đóng nếu quá dài.
+ */
+export function shareText(it, { clubName = "", publicUrl = "" } = {}) {
+  const head = it.kind === "fee" ? "🔔" : "📅";
+  const lines = [`${head} ${it.title}` + (clubName ? ` — ${clubName}` : "")];
+  lines.push(formatWhen(it) + (it.duration_min ? ` · ${it.duration_min} phút` : ""));
+  if (it.body && String(it.body).trim()) lines.push("", String(it.body).trim());
+  if (it.kind === "fee" && it.unpaid_count) {
+    const names = (it.unpaid_members || []).map((m) => m.full_name);
+    lines.push("", `Chưa đóng (${it.unpaid_count} người):`, ...names.map((n) => `  • ${n}`));
+  }
+  if (publicUrl) lines.push("", `Xem chi tiết: ${publicUrl}`);
+  let text = lines.join("\n");
+  if (text.length > 2000) {
+    // cắt bớt tên: giữ phần đầu, thêm dòng "… và N người nữa"
+    const keep = [];
+    let total = 0;
+    const tail = publicUrl ? `\n\nXem chi tiết: ${publicUrl}` : "";
+    for (const line of lines) {
+      if (publicUrl && line.startsWith("Xem chi tiết: ")) break;
+      if (total + line.length + 1 + tail.length + 40 > 2000) break;
+      keep.push(line); total += line.length + 1;
+    }
+    const shownNames = keep.filter((l) => l.startsWith("  • ")).length;
+    const more = (it.unpaid_count || 0) - shownNames;
+    if (more > 0) keep.push(`  … và ${more} người nữa`);
+    text = keep.join("\n") + tail;
+  }
+  return text;
+}
