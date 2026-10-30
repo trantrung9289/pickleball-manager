@@ -168,6 +168,9 @@ def _run_migration():
         ("clubs", "zalo_webhook_secret", "VARCHAR(64)", None),
         ("clubs", "zalo_webhook_ok", "BOOLEAN DEFAULT 0 NOT NULL", None),
         ("clubs", "zalo_show_unpaid_names", "BOOLEAN DEFAULT 1 NOT NULL", None),
+        # 2026-10-30: duyệt nhóm Zalo (nhóm cũ = approved)
+        ("zalo_groups", "status", "VARCHAR(10) DEFAULT 'approved' NOT NULL", None),
+        ("zalo_groups", "added_by_id", "VARCHAR(60)", None),
         # 2026-10-28: mã PIN cho link công khai
         ("public_report_tokens", "pin_hash", "VARCHAR(64)", None),
         ("public_report_tokens", "pin_length", "INTEGER", None),
@@ -7013,7 +7016,8 @@ def _zalo_token(club) -> Optional[str]:
 
 
 def _zalo_enabled_groups(db: Session, club_id: int) -> list:
-    return db.query(models.ZaloGroup).filter(models.ZaloGroup.club_id == club_id, models.ZaloGroup.enabled.is_(True)).all()
+    return db.query(models.ZaloGroup).filter(models.ZaloGroup.club_id == club_id, models.ZaloGroup.enabled.is_(True),
+                                             models.ZaloGroup.status == "approved").all()
 
 
 def _zalo_text(it: dict, club) -> str:
@@ -7083,11 +7087,29 @@ def _zalo_handle_event(db: Session, club, ev: dict) -> Optional[str]:
     if not chat_id:
         return None
     if chat.get("chat_type") == "GROUP" or _zalo.is_group_chat(chat_id):
+        sender_id = str(sender.get("id") or "") or None
+        trusted = bool(sender_id) and db.query(models.ZaloAllowedSender).filter(
+            models.ZaloAllowedSender.club_id == club.id, models.ZaloAllowedSender.sender_id == sender_id).first() is not None
         g = db.query(models.ZaloGroup).filter(models.ZaloGroup.club_id == club.id, models.ZaloGroup.chat_id == chat_id).first()
+        if g and g.status == "blocked":
+            return "blocked"                       # đã chặn: bỏ qua mọi sự kiện, không làm ồn hàng chờ
+        welcome = False
         if not g:
-            db.add(models.ZaloGroup(club_id=club.id, chat_id=chat_id, added_by=(sender.get("display_name") or "")[:100],
-                                    first_text=(msg.get("text") or "")[:500]))
+            # Mọi thành viên nhóm có bot đều @nhắc được → nhóm mới chỉ tự duyệt khi người nhắc nằm trong danh sách được phép
+            g = models.ZaloGroup(club_id=club.id, chat_id=chat_id, added_by=(sender.get("display_name") or "")[:100], added_by_id=sender_id,
+                                 first_text=(msg.get("text") or "")[:500], status="approved" if trusted else "pending", enabled=trusted)
+            db.add(g); db.commit()
+            welcome = trusted
+        elif g.status == "pending" and trusted:
+            g.status, g.enabled, g.failures, g.last_error = "approved", True, 0, None
             db.commit()
+            welcome = True
+        token = _zalo_token(club)
+        if welcome and token:   # chỉ báo lại khi tự duyệt; nhóm chờ duyệt im lặng (không lộ liên kết CLB cho nhóm lạ)
+            try:
+                _zalo.send_text(token, chat_id, f"✅ Nhóm này đã được thêm vào danh sách nhận thông báo của CLB {club.name}.", markdown=False)
+            except _zalo.ZaloError:
+                pass
         return "group"
     token = _zalo_token(club)
     if token:
@@ -7116,7 +7138,11 @@ def _zalo_status(db: Session, club) -> dict:
         "token_stored": bool(club.zalo_bot_token_enc),      # có token nhưng không giải mã được → yêu cầu nhập lại
         "bot_id": club.zalo_bot_id, "bot_name": club.zalo_bot_name, "token_tail": _zalo.token_tail(token),
         "webhook_ok": bool(club.zalo_webhook_ok), "show_unpaid_names": bool(club.zalo_show_unpaid_names),
-        "groups": [{"id": g.id, "chat_id": g.chat_id, "label": g.label, "added_by": g.added_by, "first_text": g.first_text,
+        "pending_count": sum(1 for g in groups if g.status == "pending"),
+        "allowed": [{"id": a.id, "sender_id": a.sender_id, "display_name": a.display_name}
+                    for a in db.query(models.ZaloAllowedSender).filter(models.ZaloAllowedSender.club_id == club.id).order_by(models.ZaloAllowedSender.id).all()],
+        "groups": [{"id": g.id, "chat_id": g.chat_id, "label": g.label, "added_by": g.added_by, "added_by_id": g.added_by_id,
+                    "status": g.status, "first_text": g.first_text,
                     "enabled": g.enabled, "failures": g.failures, "last_error": g.last_error,
                     "last_sent_at": g.last_sent_at.isoformat() + "Z" if g.last_sent_at else None,
                     "created_at": g.created_at.isoformat() + "Z" if g.created_at else None} for g in groups],
@@ -7180,6 +7206,7 @@ def zalo_disconnect(db: Session = Depends(get_db), perms: ClubPermissions = Depe
         db.query(models.AnnouncementPreRemindLog).filter(models.AnnouncementPreRemindLog.channel == "zl",
                                                           models.AnnouncementPreRemindLog.target_id.in_(gids)).delete(synchronize_session=False)
         db.query(models.ZaloGroup).filter(models.ZaloGroup.id.in_(gids)).delete(synchronize_session=False)
+    db.query(models.ZaloAllowedSender).filter(models.ZaloAllowedSender.club_id == club.id).delete()
     club.zalo_bot_token_enc = club.zalo_bot_id = club.zalo_bot_name = None
     club.zalo_webhook_ok = False
     db.commit()
@@ -7232,6 +7259,8 @@ def zalo_group_patch(gid: int, data: schemas.ZaloGroupPatch, db: Session = Depen
     if data.label is not None:
         g.label = data.label.strip() or None
     if data.enabled is not None:
+        if data.enabled and g.status != "approved":
+            raise HTTPException(400, "Hãy duyệt nhóm trước khi bật nhận thông báo")
         g.enabled = data.enabled
         if data.enabled:
             g.failures, g.last_error = 0, None
@@ -7252,6 +7281,62 @@ def zalo_group_delete(gid: int, db: Session = Depends(get_db), perms: ClubPermis
     return _zalo_status(db, _club_or_404(db, perms.club_id))
 
 
+def _zalo_trust(db: Session, club_id: int, sender_id: Optional[str], name: Optional[str]) -> None:
+    if not sender_id:
+        raise HTTPException(400, "Nhóm này không có mã người gửi để tin cậy")
+    if not db.query(models.ZaloAllowedSender).filter(models.ZaloAllowedSender.club_id == club_id,
+                                                      models.ZaloAllowedSender.sender_id == sender_id).first():
+        db.add(models.ZaloAllowedSender(club_id=club_id, sender_id=sender_id, display_name=(name or "")[:100] or None))
+
+
+def _zalo_group_or_404(db: Session, gid: int, club_id: int):
+    g = db.query(models.ZaloGroup).filter(models.ZaloGroup.id == gid, models.ZaloGroup.club_id == club_id).first()
+    if not g:
+        raise HTTPException(404, "Không tìm thấy nhóm")
+    return g
+
+
+@app.post("/api/club/zalo/groups/{gid}/approve")
+def zalo_group_approve(gid: int, trust: bool = False, db: Session = Depends(get_db), perms: ClubPermissions = Depends(get_club_permission)):
+    """Duyệt nhóm (chờ duyệt hoặc đã chặn) → nhận thông báo ngay. trust=true: đồng thời tin cậy người @nhắc lần đầu (nhóm họ thêm sau tự duyệt)."""
+    perms.require_edit()
+    g = _zalo_group_or_404(db, gid, perms.club_id)
+    if trust:
+        _zalo_trust(db, perms.club_id, g.added_by_id, g.added_by)
+    g.status, g.enabled, g.failures, g.last_error = "approved", True, 0, None
+    db.commit()
+    return _zalo_status(db, _club_or_404(db, perms.club_id))
+
+
+@app.post("/api/club/zalo/groups/{gid}/reject")
+def zalo_group_reject(gid: int, db: Session = Depends(get_db), perms: ClubPermissions = Depends(get_club_permission)):
+    """Từ chối = chặn: giữ dòng để bỏ qua mọi tin sau này của nhóm đó (không lên hàng chờ nữa). Bỏ chặn: xoá dòng."""
+    perms.require_edit()
+    g = _zalo_group_or_404(db, gid, perms.club_id)
+    g.status, g.enabled = "blocked", False
+    db.commit()
+    return _zalo_status(db, _club_or_404(db, perms.club_id))
+
+
+@app.post("/api/club/zalo/groups/{gid}/trust")
+def zalo_group_trust(gid: int, db: Session = Depends(get_db), perms: ClubPermissions = Depends(get_club_permission)):
+    perms.require_edit()
+    g = _zalo_group_or_404(db, gid, perms.club_id)
+    _zalo_trust(db, perms.club_id, g.added_by_id, g.added_by)
+    db.commit()
+    return _zalo_status(db, _club_or_404(db, perms.club_id))
+
+
+@app.delete("/api/club/zalo/allowed/{aid}")
+def zalo_allowed_delete(aid: int, db: Session = Depends(get_db), perms: ClubPermissions = Depends(get_club_permission)):
+    perms.require_edit()
+    a = db.query(models.ZaloAllowedSender).filter(models.ZaloAllowedSender.id == aid, models.ZaloAllowedSender.club_id == perms.club_id).first()
+    if not a:
+        raise HTTPException(404, "Không tìm thấy người được phép")
+    db.delete(a); db.commit()
+    return _zalo_status(db, _club_or_404(db, perms.club_id))
+
+
 @app.post("/api/club/zalo/groups/{gid}/test")
 def zalo_group_test(gid: int, db: Session = Depends(get_db), perms: ClubPermissions = Depends(get_club_permission)):
     perms.require_edit()
@@ -7260,6 +7345,8 @@ def zalo_group_test(gid: int, db: Session = Depends(get_db), perms: ClubPermissi
     token = _zalo_token(club)
     if not g or not token:
         raise HTTPException(404, "Không tìm thấy nhóm hoặc chưa kết nối bot")
+    if g.status != "approved":
+        raise HTTPException(400, "Nhóm chưa được duyệt")
     try:
         _zalo.send_text(token, g.chat_id, f"✅ Tin thử từ hệ thống CLB {club.name}: nhóm này sẽ nhận thông báo nhắc nhở.", markdown=False)
     except _zalo.ZaloError as exc:

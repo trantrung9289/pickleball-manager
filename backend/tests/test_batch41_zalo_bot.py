@@ -53,9 +53,24 @@ def _fake(monkeypatch):
     return fz
 
 
-def _ev(chat_id, text, chat_type="GROUP", name="Trần Trung"):
+def _ev(chat_id, text, chat_type="GROUP", name="Trần Trung", sender_id="u1"):
     return {"event_name": "message.text.received", "message": {"chat": {"id": chat_id, "chat_type": chat_type}, "text": text,
-                                                               "from": {"id": "u1", "display_name": name, "is_bot": False}}}
+                                                               "from": {"id": sender_id, "display_name": name, "is_bot": False}}}
+
+
+def _hook(client, club, chat_id, text="@Bot hi", sender_id="u1", name="Trần Trung", **kw):
+    """Gửi sự kiện webhook đúng secret của CLB; trả JSON."""
+    return client.post(f"/api/zalo/webhook/{club.id}", json=_ev(chat_id, text, sender_id=sender_id, name=name, **kw),
+                       headers={"X-Bot-Api-Secret-Token": club.zalo_webhook_secret}).json()
+
+
+def _groups(client, h):
+    return {g["chat_id"]: g for g in client.get("/api/club/zalo", headers=h).json()["groups"]}
+
+
+def _approve_all(client, h):
+    for g in _groups(client, h).values():
+        client.post(f"/api/club/zalo/groups/{g['id']}/approve", headers=h)
 
 
 def _clock(monkeypatch, d: date, hhmm: str):
@@ -87,8 +102,15 @@ def test_connect_webhook_identify_groups_and_disconnect(client, world, db, monke
     assert fz.sent("u1") and "vào nhóm" in fz.sent("u1")[0]
     st = client.get("/api/club/zalo", headers=h1).json()
     assert len(st["groups"]) == 1 and st["groups"][0]["chat_id"] == "zgr-abc" and st["groups"][0]["added_by"] == "Trần Trung" \
-        and st["groups"][0]["first_text"] == "@Bot CLB hello" and st["groups"][0]["enabled"] is True
+        and st["groups"][0]["first_text"] == "@Bot CLB hello" and st["groups"][0]["added_by_id"] == "u1"
+    # nhóm mới LUÔN chờ duyệt, tắt sẵn, im lặng (không phản hồi vào nhóm lạ); chưa bật/gửi thử được
+    assert st["groups"][0]["status"] == "pending" and st["groups"][0]["enabled"] is False and st["pending_count"] == 1
+    assert fz.sent("zgr-abc") == []
     gid = st["groups"][0]["id"]
+    assert client.patch(f"/api/club/zalo/groups/{gid}", json={"enabled": True}, headers=h1).status_code == 400
+    assert client.post(f"/api/club/zalo/groups/{gid}/test", headers=h1).status_code == 400
+    st = client.post(f"/api/club/zalo/groups/{gid}/approve", headers=h1).json()
+    assert st["groups"][0]["status"] == "approved" and st["groups"][0]["enabled"] is True and st["pending_count"] == 0
     # đặt nhãn, tắt/bật, gửi thử
     r = client.patch(f"/api/club/zalo/groups/{gid}", json={"label": "Nhóm CLB chính", "enabled": False}, headers=h1).json()
     assert r["groups"][0]["label"] == "Nhóm CLB chính" and r["groups"][0]["enabled"] is False
@@ -98,6 +120,8 @@ def test_connect_webhook_identify_groups_and_disconnect(client, world, db, monke
     h2 = World.headers(world.admin2, world.club2)
     assert client.get("/api/club/zalo", headers=h2).json()["groups"] == []
     assert client.patch(f"/api/club/zalo/groups/{gid}", json={"enabled": False}, headers=h2).status_code == 404
+    for path in (f"approve", "reject", "trust"):
+        assert client.post(f"/api/club/zalo/groups/{gid}/{path}", headers=h2).status_code == 404
     # viewer không sửa được
     assert client.put("/api/club/zalo/settings", json={"show_unpaid_names": False}, headers=World.headers(world.viewer1, world.club1)).status_code == 403
     # ngắt kết nối → gỡ webhook, xoá token + nhóm
@@ -113,7 +137,7 @@ def test_poll_fallback_when_webhook_fails(client, world, db, monkeypatch):
     assert r["connected"] and r["webhook_ok"] is False and "webhook" in r["warning"].lower()
     fz.updates = [_ev("zgr-poll", "@Bot CLB Test xin chào")]
     r = client.post("/api/club/zalo/poll", headers=h1).json()
-    assert r["events"] == 1 and r["groups_seen"] == 1 and r["groups"][0]["chat_id"] == "zgr-poll"
+    assert r["events"] == 1 and r["groups_seen"] == 1 and r["groups"][0]["chat_id"] == "zgr-poll" and r["groups"][0]["status"] == "pending"
     assert client.post("/api/club/zalo/poll", headers=h1).json()["events"] == 0   # 408 → không có tin
 
 
@@ -125,6 +149,9 @@ def test_cron_sends_to_groups_with_dedupe_chunks_and_410(client, world, db, monk
     ok = {"X-Bot-Api-Secret-Token": club.zalo_webhook_secret}
     client.post(f"/api/zalo/webhook/{world.club1.id}", json=_ev("zgr-A", "@Bot a"), headers=ok)
     client.post(f"/api/zalo/webhook/{world.club1.id}", json=_ev("zgr-B", "@Bot b"), headers=ok)
+    client.post(f"/api/zalo/webhook/{world.club1.id}", json=_ev("zgr-P", "@Bot p", sender_id="u9"), headers=ok)   # nhóm lạ, KHÔNG duyệt
+    for chat in ("zgr-A", "zgr-B"):
+        client.post(f"/api/club/zalo/groups/{_groups(client, h1)[chat]['id']}/approve", headers=h1)
     d = date(2026, 11, 10)
     _clock(monkeypatch, d, "06:00")
     # khoản thu hôm nay, giờ đẩy 07:00 → 06:00 không gửi; 07:00 gửi 2 nhóm; 07:15 skipped
@@ -135,6 +162,7 @@ def test_cron_sends_to_groups_with_dedupe_chunks_and_410(client, world, db, monk
     assert cron()["sent"] == 0
     _clock(monkeypatch, d, "07:00")
     assert cron() == {"sent": 2, "skipped": 0, "errors": 0, "disabled": 0}
+    assert fz.sent("zgr-P") == []   # nhóm chờ duyệt không nhận thông báo (kể cả tin nhắc phí có tên người chưa đóng)
     txt = fz.sent("zgr-A")[0]
     assert txt.startswith("🔔 *Hội phí*") and "Chưa đóng (8 người):" in txt and "M Member 1" in txt
     assert all("(" not in l for l in txt.splitlines() if l.startswith("  • "))   # không kèm SĐT trong nhóm
@@ -165,3 +193,70 @@ def test_cron_sends_to_groups_with_dedupe_chunks_and_410(client, world, db, monk
     # xoá quy tắc dọn log zalo
     client.delete(f"/api/announcements/{aid}", headers=h1)
     assert db.query(models.ZaloPushLog).filter_by(announcement_id=aid).count() == 0
+
+
+def test_pending_allowlist_block_and_trust(client, world, db, monkeypatch):
+    """Duyệt nhóm: mọi thành viên nhóm nhắc được bot → nhóm mới chờ duyệt; người được phép tự duyệt; từ chối = chặn; ngắt kết nối xoá danh sách."""
+    fz = _fake(monkeypatch)
+    h1 = World.headers(world.admin1, world.club1)
+    client.put("/api/club/zalo/token", json={"token": "123456789:abcdefghijklmnop"}, headers=h1)
+    club = db.query(models.Club).get(world.club1.id); db.refresh(club)
+    # 1) chủ nhiệm (u1) nhắc trong nhóm A → chờ duyệt; "Duyệt và tin cậy" → duyệt + thêm u1 vào danh sách
+    _hook(client, club, "zgr-A", "@Bot a", sender_id="u1", name="Trần Trung")
+    ga = _groups(client, h1)["zgr-A"]
+    assert ga["status"] == "pending" and fz.sent("zgr-A") == []
+    st = client.post(f"/api/club/zalo/groups/{ga['id']}/approve?trust=true", headers=h1).json()
+    assert st["groups"][0]["status"] == "approved" and [(a["sender_id"], a["display_name"]) for a in st["allowed"]] == [("u1", "Trần Trung")]
+    client.post(f"/api/club/zalo/groups/{ga['id']}/trust", headers=h1)   # tin cậy lặp lại không nhân đôi
+    assert len(client.get("/api/club/zalo", headers=h1).json()["allowed"]) == 1
+    # 2) u1 thêm nhóm B → tự duyệt + bot báo trong nhóm; u2 (lạ) thêm nhóm C → chờ duyệt, im lặng
+    _hook(client, club, "zgr-B", "@Bot b", sender_id="u1")
+    gb = _groups(client, h1)["zgr-B"]
+    assert gb["status"] == "approved" and gb["enabled"] is True and "đã được thêm" in fz.sent("zgr-B")[0]
+    _hook(client, club, "zgr-C", "@Bot c", sender_id="u2", name="Người lạ")
+    gc = _groups(client, h1)["zgr-C"]
+    assert gc["status"] == "pending" and gc["enabled"] is False and fz.sent("zgr-C") == []
+    # 3) nhóm C đang chờ: u2 nhắc lại không duyệt; u1 nhắc trong nhóm C thì được duyệt
+    _hook(client, club, "zgr-C", "lại", sender_id="u2")
+    assert _groups(client, h1)["zgr-C"]["status"] == "pending"
+    _hook(client, club, "zgr-C", "mình đây", sender_id="u1")
+    gc = _groups(client, h1)["zgr-C"]
+    assert gc["status"] == "approved" and gc["enabled"] is True
+    # 4) từ chối nhóm D → chặn: sự kiện sau bị bỏ qua (trả blocked, không đổi trạng thái); bỏ chặn = xoá dòng → nhắc lại lên hàng chờ
+    _hook(client, club, "zgr-D", "@Bot d", sender_id="u3")
+    gd = _groups(client, h1)["zgr-D"]
+    st = client.post(f"/api/club/zalo/groups/{gd['id']}/reject", headers=h1).json()
+    assert _groups(client, h1)["zgr-D"]["status"] == "blocked" and st["pending_count"] == 0
+    assert _hook(client, club, "zgr-D", "lại", sender_id="u1")["handled"] == "blocked"   # kể cả người được phép
+    assert _groups(client, h1)["zgr-D"]["status"] == "blocked" and fz.sent("zgr-D") == []
+    assert client.patch(f"/api/club/zalo/groups/{gd['id']}", json={"enabled": True}, headers=h1).status_code == 400
+    client.delete(f"/api/club/zalo/groups/{gd['id']}", headers=h1)
+    _hook(client, club, "zgr-D", "@Bot d", sender_id="u3")
+    assert _groups(client, h1)["zgr-D"]["status"] == "pending"
+    # 5) nhóm không có mã người gửi không tin cậy được; quyền: viewer không thao tác, CLB khác không thấy
+    gid_no_sender = db.query(models.ZaloGroup).filter_by(chat_id="zgr-D").first()
+    gid_no_sender.added_by_id = None; db.commit()
+    assert client.post(f"/api/club/zalo/groups/{gid_no_sender.id}/trust", headers=h1).status_code == 400
+    hv = World.headers(world.viewer1, world.club1)
+    allowed_id = client.get("/api/club/zalo", headers=h1).json()["allowed"][0]["id"]
+    assert client.post(f"/api/club/zalo/groups/{ga['id']}/approve", headers=hv).status_code == 403
+    assert client.delete(f"/api/club/zalo/allowed/{allowed_id}", headers=hv).status_code == 403
+    h2 = World.headers(world.admin2, world.club2)
+    assert client.delete(f"/api/club/zalo/allowed/{allowed_id}", headers=h2).status_code == 404
+    assert client.get("/api/club/zalo", headers=h2).json()["allowed"] == []
+    # 6) xoá người được phép → u1 thêm nhóm mới thì phải chờ duyệt
+    assert client.delete(f"/api/club/zalo/allowed/{allowed_id}", headers=h1).json()["allowed"] == []
+    _hook(client, club, "zgr-E", "@Bot e", sender_id="u1")
+    assert _groups(client, h1)["zgr-E"]["status"] == "pending"
+    # 7) ngắt kết nối xoá cả danh sách người được phép
+    client.post(f"/api/club/zalo/groups/{_groups(client, h1)['zgr-E']['id']}/approve?trust=true", headers=h1)
+    assert len(client.get("/api/club/zalo", headers=h1).json()["allowed"]) == 1
+    client.delete("/api/club/zalo/token", headers=h1)
+    assert db.query(models.ZaloAllowedSender).count() == 0 and db.query(models.ZaloGroup).count() == 0
+
+
+def test_legacy_groups_default_approved(client, world, db):
+    """Nhóm tạo trước đợt duyệt (cột status mới có default 'approved') vẫn nhận thông báo như cũ."""
+    g = models.ZaloGroup(club_id=world.club1.id, chat_id="zgr-old")
+    db.add(g); db.commit(); db.refresh(g)
+    assert g.status == "approved" and g.enabled is True

@@ -972,9 +972,27 @@ class ZaloGroup(Base):
     failures = Column(Integer, default=0, nullable=False)
     last_error = Column(String(300), nullable=True)
     last_sent_at = Column(DateTime, nullable=True)
+    # 2026-10-30: duyệt nhóm — mọi thành viên trong nhóm có bot đều @nhắc được (đã kiểm chứng), nên nhóm mới KHÔNG tự nhận thông báo:
+    # pending (chờ duyệt, tắt) | approved (đã duyệt, enabled do admin) | blocked (đã chặn, bỏ qua sự kiện). Nhóm cũ (trước đợt này) = approved.
+    status = Column(String(10), default="approved", nullable=False, server_default="approved")
+    added_by_id = Column(String(60), nullable=True)    # from.id Zalo của người @nhắc lần đầu (để "tin cậy người này")
     created_at = Column(DateTime, server_default=func.now())
 
     __table_args__ = (UniqueConstraint("club_id", "chat_id", name="uq_zalo_group_per_club"),)
+
+
+class ZaloAllowedSender(Base):
+    """2026-10-30: người được phép tự thêm nhóm — @nhắc bot trong nhóm mới thì nhóm được duyệt luôn (theo from.id Zalo, do Zalo ký qua webhook).
+    Người khác @nhắc → nhóm vào hàng chờ duyệt. Xoá khi ngắt kết nối bot."""
+    __tablename__ = "zalo_allowed_senders"
+
+    id = Column(Integer, primary_key=True, index=True)
+    club_id = Column(Integer, ForeignKey("clubs.id"), nullable=False, index=True)
+    sender_id = Column(String(60), nullable=False)
+    display_name = Column(String(100), nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+    __table_args__ = (UniqueConstraint("club_id", "sender_id", name="uq_zalo_allowed_per_club"),)
 
 
 class ZaloPushLog(Base):

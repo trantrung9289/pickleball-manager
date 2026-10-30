@@ -279,6 +279,10 @@ export const zaloApi = {
   poll: () => api.post("/api/club/zalo/poll", {}, { timeout: 45000 }),   // long-poll 25s phía Zalo
   patchGroup: (id, data) => api.patch(`/api/club/zalo/groups/${id}`, data),
   deleteGroup: (id) => api.delete(`/api/club/zalo/groups/${id}`),
+  approveGroup: (id, trust = false) => api.post(`/api/club/zalo/groups/${id}/approve`, null, { params: { trust } }),   // trust: tin cậy luôn người @nhắc
+  rejectGroup: (id) => api.post(`/api/club/zalo/groups/${id}/reject`),
+  trustGroup: (id) => api.post(`/api/club/zalo/groups/${id}/trust`),
+  deleteAllowed: (id) => api.delete(`/api/club/zalo/allowed/${id}`),
   testGroup: (id) => api.post(`/api/club/zalo/groups/${id}/test`),
   setSettings: (data) => api.put("/api/club/zalo/settings", data),
 };
