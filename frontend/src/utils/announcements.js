@@ -139,6 +139,8 @@ export const REPORT_NAME_TYPES = ["transactions", "contributions", "fee_status"]
 /** Loại báo cáo dùng khoản thu: fee_status bắt buộc, contributions tuỳ chọn (lọc một khoản). */
 export const REPORT_FEE_TYPES = ["contributions", "fee_status"];
 export const CHANNEL_LABELS = { telegram: "Telegram quản trị viên", zalo: "Nhóm Zalo", web: "Trang Public" };
+/** Nhãn ngắn cho cột bảng. */
+export const CHANNEL_SHORT = { telegram: "Telegram", zalo: "Zalo", web: "Trang Public" };
 export const ALL_CHANNELS = ["telegram", "zalo", "web"];
 /** Kênh gửi của quy tắc: đã lưu thì dùng; chưa có → báo cáo mặc định chỉ Telegram, loại khác đủ ba kênh (đúng hành vi cũ). */
 export function channelsOf(r) {

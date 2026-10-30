@@ -23,7 +23,7 @@ import { announcementsApi, feeTypesApi } from "../api";
 import useHotkey from "../hooks/useHotkey";
 import usePublicLink from "../hooks/usePublicLink";
 import PushHistoryCard from "../components/PushHistoryCard";
-import { WEEKDAY_LABELS, KIND_LABELS, groupByDate, remindLabel, REPORT_TYPE_LABELS, REPORT_RANGE_OPTIONS, CHANNEL_LABELS, ALL_CHANNELS, channelsOf, reportSummaryText, REPORT_NAME_TYPES, REPORT_FEE_TYPES, reportExposureText } from "../utils/announcements";
+import { WEEKDAY_LABELS, KIND_LABELS, groupByDate, remindLabel, REPORT_TYPE_LABELS, REPORT_RANGE_OPTIONS, CHANNEL_LABELS, ALL_CHANNELS, CHANNEL_SHORT, channelsOf, reportSummaryText, REPORT_NAME_TYPES, REPORT_FEE_TYPES, reportExposureText } from "../utils/announcements";
 
 const { Title, Text } = Typography;
 const { TextArea } = Input;
@@ -180,9 +180,17 @@ export default function Announcements({ perms, clubName = "" }) {
     { title: "Lặp", dataIndex: "recurrence_label" },
     { title: "Hiện trước", dataIndex: "lead_days", render: (v, r) => (r.kind === "report" ? "—" : `${v} ngày${r.repeat_daily ? " · nhắc hằng ngày" : ""}`) },
     { title: "Hiệu lực", render: (_, r) => (r.start_date || r.end_date) ? `${r.start_date ? dayjs(r.start_date).format("DD/MM/YY") : "…"} → ${r.end_date ? dayjs(r.end_date).format("DD/MM/YY") : "…"}` : "—" },
-    { title: "Public", dataIndex: "show_public", render: (v, r) => (r.kind === "report" ? <Text type="secondary">—</Text> : <Switch size="small" checked={v} disabled={!canEdit} onChange={(c) => toggle(r, "show_public", c)} />) },
+    {
+      title: "Gửi tới", dataIndex: "push_channels",
+      render: (_, r) => (
+        <Tooltip title={r.push_telegram ? null : "Chưa bật Đẩy thông báo: chỉ gửi khi bấm Gửi ngay"}>
+          <Space size={4} wrap style={{ opacity: r.push_telegram ? 1 : 0.55 }}>
+            {channelsOf(r).map((c) => <StatusChip key={c} tone="neutral">{CHANNEL_SHORT[c] || c}</StatusChip>)}
+          </Space>
+        </Tooltip>
+      ),
+    },
     { title: "Bật", dataIndex: "is_active", render: (v, r) => <Switch size="small" checked={v} disabled={!canEdit} onChange={(c) => toggle(r, "is_active", c)} /> },
-    { title: "Đẩy", dataIndex: "push_telegram", render: (v, r) => <Tooltip title="Gửi Telegram cho admin, đẩy tới người xem Trang Public đã bật thông báo và gửi vào các nhóm Zalo đã duyệt, vào ngày đầu cửa sổ hiện trước và đúng ngày, khi tới Giờ đẩy (cron 15 phút); không gửi trùng trong ngày"><Switch size="small" checked={v} disabled={!canEdit} onChange={(c) => toggle(r, "push_telegram", c)} /></Tooltip> },
     {
       title: "Giờ đẩy", dataIndex: "push_time",
       render: (v, r) => (
@@ -353,7 +361,7 @@ export default function Announcements({ perms, clubName = "" }) {
           <Space size="large" wrap>
             {!isReport && <Form.Item name="show_public" label="Hiện trên trang public" valuePropName="checked" style={{ marginBottom: 0 }}><Switch /></Form.Item>}
             <Form.Item name="push_telegram"
-              label={<Tooltip title={isReport ? "Tự động gửi báo cáo vào ngày gửi, khi tới Giờ đẩy bên dưới. Tắt thì chỉ gửi khi bấm Gửi ngay." : "Gửi Telegram cho admin, đẩy tới người xem Trang Public đã bật thông báo và gửi vào các nhóm Zalo đã duyệt, vào ngày đầu cửa sổ hiện trước và đúng ngày, khi tới Giờ đẩy bên dưới"}>{isReport ? "Gửi tự động" : "Đẩy thông báo"}</Tooltip>}
+              label={<Tooltip title={isReport ? "Tự động gửi báo cáo vào ngày gửi, khi tới Giờ đẩy bên dưới. Tắt thì chỉ gửi khi bấm Gửi ngay." : "Gửi Telegram cho admin, đẩy tới người xem Trang Public đã bật thông báo và gửi vào các nhóm Zalo đã duyệt, vào ngày đầu cửa sổ hiện trước và đúng ngày, khi tới Giờ đẩy bên dưới"}>Đẩy thông báo</Tooltip>}
               valuePropName="checked" style={{ marginBottom: 0 }}><Switch /></Form.Item>
             {!isReport && <Form.Item name="repeat_daily" label={<Tooltip title="Đẩy lại mỗi ngày trong cửa sổ hiện trước (một lần/ngày), thay vì chỉ ngày đầu và đúng ngày. Dùng cho nhắc đóng phí.">Nhắc lại hằng ngày</Tooltip>} valuePropName="checked" style={{ marginBottom: 0 }}><Switch /></Form.Item>}
           </Space>
